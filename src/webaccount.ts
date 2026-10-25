@@ -12,6 +12,7 @@ import { createZipImport, zipStatus } from "./zip";
 import { exportStatus, setExportStatusMessage, startExport } from "./export";
 import { accountSummary, CONFIRM, deleteAccount } from "./purge";
 import { billingStatus, ownKey, starsInvoiceLink, type ProductKind } from "./billing";
+import { addChannelUrl, listChannels, removeChannel, updateChannel } from "./channels";
 import { btcpayOn, createBtcpayInvoice, createShkeeperInvoice, getInvoice, productUsd, shkeeperCryptos } from "./crypto";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -84,6 +85,18 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
       if (msg) await setExportStatusMessage(env.DB, res.id, msg.message_id);
       return json(res);
     }
+  }
+
+  if (resource === "channels") {
+    if (m === "GET" && !id) {
+      const me = await botApi(env.BOT_TOKEN).getMe();
+      return json({ channels: await listChannels(env.DB, user.id), addUrl: addChannelUrl(me.username) });
+    }
+    if (m === "PUT" && id) {
+      const body = await req.json<{ enabled?: boolean; caption?: string }>();
+      return (await updateChannel(env.DB, user.id, Number(id), body)) ? json({ ok: true }) : json({ error: "not found" }, 404);
+    }
+    if (m === "DELETE" && id) return (await removeChannel(env, user.id, Number(id))) ? json({ ok: true }) : json({ error: "not found" }, 404);
   }
 
   if (resource === "billing") {

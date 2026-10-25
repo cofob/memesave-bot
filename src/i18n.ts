@@ -42,6 +42,7 @@ Forward a photo, video or GIF to save it. Send text to search: a caption fragmen
 /batch_retry — retry failed memes
 /export — download all your data as a .zip
 /delete_all — delete your account and all data
+/channels — auto-post new memes to your channels
 /subscribe, /balance — plan and AI balance
 /paysupport, /terms — payment support and terms
 /about — what the bot stores`,
@@ -222,6 +223,23 @@ Only this network! I will tell you when the payment is confirmed.`,
   cmd_balance: "Balance and plan",
   cmd_paysupport: "Payment support",
   cmd_terms: "Terms",
+  channels: `${E.settings} <b>Channels</b>
+New memes you send to the bot or upload in the app are posted to these channels after processing. Albums stay albums.
+Tap a channel to turn posting off or on.`,
+  channels_none: `${E.settings} <b>Channels</b>
+Add the bot to your channel as an admin with the right to post: new memes you send here are posted there after processing. Albums stay albums.`,
+  channel_btn_add: "Add to a channel",
+  channel_btn_caption: "Caption",
+  channel_btn_unlink: "Unlink",
+  channel_linked: `${E.done} Channel <b>{title}</b> is linked. New memes are posted there after processing. Settings: /channels`,
+  channel_unlinked: `${E.deleted} Channel <b>{title}</b> is unlinked: the bot is no longer an admin there.`,
+  channel_lost: `${E.error} Cannot post to <b>{title}</b>: the bot has no rights there. Posting to it is off. Check /channels`,
+  channel_gone: "This channel is not linked any more.",
+  channel_caption_prompt: `${E.settings} Reply with the caption template for <b>{title}</b> (<code>{id}</code>).
+Placeholders: {caption} — your caption, {title} — meme title, {tags} — hashtags, {source} — where it was forwarded from.
+Send <code>-</code> for no caption. Now: <code>{current}</code>`,
+  channel_caption_saved: `${E.done} Caption template saved.`,
+  cmd_channels: "Auto-post to channels",
   admin_only: `${E.noAccess} Admins only.`,
   grant_usage: `${E.help} Usage: /grant @username|id [user|admin|paid]`,
   revoke_usage: `${E.help} Usage: /revoke @username|id`,
@@ -276,6 +294,7 @@ const ru: Record<Key, string> = {
 /batch_retry — повторить мемы с ошибкой
 /export — скачать все ваши данные в .zip
 /delete_all — удалить аккаунт и все данные
+/channels — автопостинг новых мемов в ваши каналы
 /subscribe, /balance — тариф и баланс ИИ
 /paysupport, /terms — поддержка по оплате и условия
 /about — что хранит бот`,
@@ -456,6 +475,23 @@ const ru: Record<Key, string> = {
   cmd_balance: "Баланс и тариф",
   cmd_paysupport: "Поддержка по оплате",
   cmd_terms: "Условия",
+  channels: `${E.settings} <b>Каналы</b>
+Новые мемы, которые вы присылаете боту или загружаете в приложении, после обработки публикуются в этих каналах. Альбомы остаются альбомами.
+Нажмите на канал, чтобы выключить или включить публикацию.`,
+  channels_none: `${E.settings} <b>Каналы</b>
+Добавьте бота в свой канал админом с правом публикации: новые мемы, которые вы присылаете сюда, будут публиковаться там после обработки. Альбомы остаются альбомами.`,
+  channel_btn_add: "Добавить в канал",
+  channel_btn_caption: "Подпись",
+  channel_btn_unlink: "Отвязать",
+  channel_linked: `${E.done} Канал <b>{title}</b> привязан. Новые мемы будут публиковаться там после обработки. Настройки: /channels`,
+  channel_unlinked: `${E.deleted} Канал <b>{title}</b> отвязан: бот больше не админ в нём.`,
+  channel_lost: `${E.error} Не получается опубликовать в <b>{title}</b>: у бота нет прав. Публикация туда выключена. Проверьте /channels`,
+  channel_gone: "Этот канал больше не привязан.",
+  channel_caption_prompt: `${E.settings} Ответьте на это сообщение шаблоном подписи для <b>{title}</b> (<code>{id}</code>).
+Подстановки: {caption} — ваша подпись, {title} — название мема, {tags} — хештеги, {source} — откуда переслано.
+Отправьте <code>-</code>, чтобы публиковать без подписи. Сейчас: <code>{current}</code>`,
+  channel_caption_saved: `${E.done} Шаблон подписи сохранён.`,
+  cmd_channels: "Автопостинг в каналы",
   admin_only: `${E.noAccess} Только для админов.`,
   grant_usage: `${E.help} Использование: /grant @username|id [user|admin|paid]`,
   revoke_usage: `${E.help} Использование: /revoke @username|id`,

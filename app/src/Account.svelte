@@ -6,6 +6,7 @@
   import { confirm, openExternal, tg } from "./telegram";
   import { addFiles } from "./uploads.svelte";
   import Billing from "./Billing.svelte";
+  import Channels from "./Channels.svelte";
 
   interface Props {
     me: Me;
@@ -177,6 +178,7 @@
                 act(() => api.setSettings({ describe_tier: tier }), s.stateReady).then(() => onMeChange({ ...me, describe_tier: tier }));
               }}
             />
+            <Channels />
             <Heading as="h3" size="sm">{s.keyTitle}</Heading>
             <Text tone="muted">{me.key ? s.keyOwn : s.keyShared}</Text>
             <Inline gap="sm" wrap>

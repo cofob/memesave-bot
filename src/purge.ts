@@ -31,8 +31,11 @@ export async function deleteAccount(env: Env, user: User) {
   ]);
   const archives = [...zips.results.map((r) => tmpKey(`zip/${r.id}.zip`)), ...exports.results.map((r) => tmpKey(`export/${r.id}.zip`))];
   for (let i = 0; i < archives.length; i += 1000) await env.MEDIA.delete(archives.slice(i, i + 1000));
-  const tables = ["transactions", "imports", "zip_imports", "exports", "payments", "crypto_invoices", "notices", "oauth_states"];
+  const { results: channels } = await db.prepare("SELECT chat_id FROM channels WHERE user_id = ?").bind(user.id).all<{ chat_id: number }>();
+  for (const ch of channels) await botApi(env.BOT_TOKEN).leaveChat(ch.chat_id).catch(() => {});
+  const tables = ["transactions", "imports", "zip_imports", "exports", "payments", "crypto_invoices", "notices", "oauth_states", "channels", "posts"];
   await db.batch([
+    db.prepare("DELETE FROM post_items WHERE post_id IN (SELECT id FROM posts WHERE user_id = ?)").bind(user.id),
     db.prepare("UPDATE memes SET user_id = -user_id, status = 'failed', error = 'deleted', import_id = NULL WHERE user_id = ?").bind(user.id),
     ...tables.map((table) => db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(user.id)),
     db.prepare("DELETE FROM users WHERE id = ?").bind(user.id),

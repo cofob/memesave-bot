@@ -10,6 +10,7 @@ import { langOf, t, type Lang } from "./i18n";
 import { receiveMedia } from "./ingest/receive";
 import { handleInline } from "./search/inline";
 import { allowAi, registerBilling, registerPayments } from "./billingbot";
+import { captionReply, onBotMembership, registerChannels } from "./channels";
 
 export type Ctx = Context & { user: User; lang: Lang };
 
@@ -42,15 +43,18 @@ export function createBot(env: Env) {
 
   bot.on("inline_query", (ctx) => handleInline(ctx, env));
   registerPayments(bot, env);
+  bot.on("my_chat_member", (ctx) => onBotMembership(env, ctx.myChatMember));
 
   const pm = bot.chatType("private");
   registerCommands(pm, env);
   registerAdmin(pm, env);
   registerBilling(pm, env);
+  registerChannels(pm, env);
   pm.on(["message:photo", "message:video", "message:animation"], async (ctx) => (await allowAi(env, ctx)) && receiveMedia(ctx, env));
   pm.on("message:text", async (ctx) => {
     const text = ctx.msg.text.trim();
     if (text.startsWith("/")) return ctx.reply(t(ctx.lang, "unknown_cmd"), html);
+    if (await captionReply(env, ctx)) return;
     if (!(await allowAi(env, ctx))) return;
     const placeholder = await ctx.reply(t(ctx.lang, "searching"), html);
     await env.JOBS.send({

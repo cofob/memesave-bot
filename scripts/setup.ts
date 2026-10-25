@@ -9,7 +9,7 @@ const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`, {
   body: JSON.stringify({
     url: `${WORKER_URL.replace(/\/$/, "")}/webhook`,
     secret_token: WEBHOOK_SECRET,
-    allowed_updates: ["message", "inline_query", "callback_query", "pre_checkout_query", "subscription"],
+    allowed_updates: ["message", "inline_query", "callback_query", "pre_checkout_query", "subscription", "my_chat_member"],
     drop_pending_updates: true,
   }),
 });

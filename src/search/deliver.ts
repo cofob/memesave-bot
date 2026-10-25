@@ -87,11 +87,22 @@ export async function sendResults(env: Env, api: Api, chatId: number, replyTo: n
   const reply = { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } };
   if (!memes.length) return api.sendMessage(chatId, t(lang, "nothing_found"), { ...reply, parse_mode: "HTML" });
 
+  await sendAlbum(env, api, chatId, memes, reply);
+}
+
+/**
+ * Sends memes in order: photos and videos as albums of up to 10, then GIFs one by one (albums cannot hold GIFs).
+ * `caption` goes on the first message.
+ */
+export async function sendAlbum(env: Env, api: Api, chatId: number, memes: Meme[], other: object = {}, caption?: string) {
   const album = memes.filter((m) => m.kind !== "animation");
+  let first = caption ? { caption } : {};
   for (let i = 0; i < album.length; i += 10) {
     const chunk = album.slice(i, i + 10);
+    const extra = first;
+    first = {};
     if (chunk.length === 1) {
-      await sendMeme(env, api, chatId, chunk[0], reply);
+      await sendMeme(env, api, chatId, chunk[0], { ...other, ...extra });
       continue;
     }
     await withUploadFallback(
@@ -99,12 +110,17 @@ export async function sendResults(env: Env, api: Api, chatId: number, replyTo: n
       chunk,
       async (upload) => {
         const media = await Promise.all(
-          chunk.map(async (m) => ({ type: m.kind === "photo" ? "photo" : "video", media: await input(env, m, upload && !!m.r2_file) }) as const),
+          chunk.map(
+            async (m, j) => ({ type: m.kind === "photo" ? "photo" : "video", media: await input(env, m, upload && !!m.r2_file), ...(j ? {} : extra) }) as const,
+          ),
         );
-        return api.sendMediaGroup(chatId, media, reply);
+        return api.sendMediaGroup(chatId, media, other);
       },
       (msgs) => msgs,
     );
   }
-  for (const m of memes.filter((m) => m.kind === "animation")) await sendMeme(env, api, chatId, m, reply);
+  for (const m of memes.filter((m) => m.kind === "animation")) {
+    await sendMeme(env, api, chatId, m, { ...other, ...first });
+    first = {};
+  }
 }

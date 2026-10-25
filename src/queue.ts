@@ -6,6 +6,7 @@ import { describeStage, failIngest, finishStage } from "./ingest/describe";
 import { embedStage, hashStage } from "./ingest/embed";
 import { purgeStage } from "./purge";
 import { rekeyStage } from "./rekey";
+import { postJob } from "./channels";
 import { failSearch, searchJob } from "./search/chat";
 
 export type SearchJob = { type: "search"; userId: number; messageId: number; placeholderId: number; query: string; lang: Lang };
@@ -14,6 +15,7 @@ export type Job =
   | { type: "describe"; memeId: string; from?: number } // from: index in describeModels (1 after a blocked batch request)
   | { type: "batch_submit"; importId: string }
   | { type: "batch_poll" }
+  | { type: "post"; postId: string }
   | { type: "purge"; userId: number; before: number }
   | SearchJob;
 
@@ -25,6 +27,8 @@ async function run(env: Env, job: Job) {
       return submitImport(env, job.importId);
     case "batch_poll":
       return pollImports(env);
+    case "post":
+      return postJob(env, job.postId);
     case "embed":
       return embedStage(env, job.memeId);
     case "describe":
@@ -44,7 +48,7 @@ async function fail(env: Env, job: Job, error: unknown) {
   if (job.type === "search") return failSearch(env, job);
   if (job.type === "batch_submit") return failImport(env, job.importId, error);
   if (job.type === "batch_poll" || job.type === "hash" || job.type === "rekey") return; // cron runs them again
-  if (job.type === "purge") return; // idempotent: the dead letter queue keeps it for a manual re-run
+  if (job.type === "purge" || job.type === "post") return; // idempotent: the dead letter queue keeps it for a manual re-run
   return failIngest(env, job.memeId, error);
 }
 

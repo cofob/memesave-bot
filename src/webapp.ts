@@ -6,6 +6,7 @@ import { insertMeme } from "./ingest/receive";
 import { collectingImport } from "./batch";
 import { MODELS } from "./config";
 import { handleAccount } from "./webaccount";
+import { addToPost } from "./channels";
 import { billingStatus, canUseAi } from "./billing";
 import { facets, filterSql } from "./filters";
 import { getCookie, readSession } from "./session";
@@ -176,6 +177,7 @@ async function upload(env: Env, user: User, req: Request) {
     sha256,
   });
   if (!id) return json({ error: "already saved" }, 409);
+  if (!importId) await addToPost(env.DB, user.id, { memeId: id });
   await env.JOBS.send({ type: "embed", memeId: id });
   return json({ id, duplicate: false, batched: importId !== null });
 }

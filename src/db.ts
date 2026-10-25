@@ -94,6 +94,7 @@ export async function deleteMemes(env: MemeStores, ids: string[]) {
   const { results } = await env.DB.prepare(`DELETE FROM memes WHERE id IN (${ids.map(() => "?").join(",")}) RETURNING r2_file, r2_preview`)
     .bind(...ids)
     .all<{ r2_file: string | null; r2_preview: string | null }>();
+  await env.DB.prepare(`DELETE FROM post_items WHERE meme_id IN (${ids.map(() => "?").join(",")})`).bind(...ids).run();
   const keys = results.flatMap((r) => [r.r2_file, r.r2_preview]).filter((k): k is string => !!k);
   if (keys.length) await env.MEDIA.delete(keys);
 }

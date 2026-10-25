@@ -1,6 +1,7 @@
 import { botApi } from "../botapi";
 import { DESCRIBE_FALLBACKS, DESCRIBE_MODELS, MODELS, VIDEO_INLINE_MAX_BYTES } from "../config";
 import { getMeme, getUser, setStatus, userLang, type Meme } from "../db";
+import { queuePosts } from "../channels";
 import type { Env } from "../env";
 import { esc, t } from "../i18n";
 import { memeMedia, toDataUrl, variantOf } from "../media";
@@ -224,6 +225,7 @@ export async function finishStage(env: Env, memeId: string) {
 
   const tags = d.tags.slice(0, 8).map((x) => "#" + esc(x.replace(/[^\p{L}\p{N}_]+/gu, "_"))).join(" ");
   await editStatus(env, m, t(await userLang(env.DB, m.user_id), "saved", { title: esc(d.title), tags }));
+  await queuePosts(env, memeId);
 }
 
 export async function editStatus(env: Env, m: Meme, text: string) {
@@ -237,4 +239,5 @@ export async function failIngest(env: Env, memeId: string, error: unknown) {
   if (!m) return;
   await setStatus(env.DB, memeId, "failed", String(error).slice(0, 1000));
   await editStatus(env, m, t(await userLang(env.DB, m.user_id), "index_failed"));
+  await queuePosts(env, memeId); // the media is fine: post it anyway
 }

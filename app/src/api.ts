@@ -78,6 +78,14 @@ export interface Me {
   billing: Billing;
 }
 
+export interface Channel {
+  chat_id: number;
+  title: string | null;
+  username: string | null;
+  enabled: number;
+  caption: string;
+}
+
 export type ProductKind = "monthly" | "yearly" | "topup";
 
 export interface Billing {
@@ -198,6 +206,9 @@ export const api = {
   stats: () => call<Stats>("stats"),
   allStats: () => call<AllStats>("stats?all=1"),
   setSettings: (settings: Partial<Pick<Me, "search_mode" | "describe_tier">>) => call("settings", { method: "PUT", body: JSON.stringify(settings) }),
+  channels: () => call<{ channels: Channel[]; addUrl: string }>("channels"),
+  setChannel: (id: number, body: { enabled?: boolean; caption?: string }) => call(`channels/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  removeChannel: (id: number) => call(`channels/${id}`, { method: "DELETE" }),
   billing: () => call<Billing>("billing"),
   starsInvoice: (kind: ProductKind, stars?: number) => post<{ url: string }>("billing/invoice", { kind, stars }),
   cryptoInvoice: (body: { provider: "btcpay" | "shkeeper"; kind: ProductKind; usd?: number; crypto?: string }) => post<CryptoInvoice>("billing/crypto", body),

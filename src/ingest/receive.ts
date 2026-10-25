@@ -4,6 +4,7 @@ import type { Kind } from "../db";
 import type { Env } from "../env";
 import { t } from "../i18n";
 import { collectingImport } from "../batch";
+import { addToPost } from "../channels";
 
 export interface NewMeme {
   kind: Kind;
@@ -142,6 +143,7 @@ export async function receiveMedia(ctx: Ctx, env: Env) {
     memeId = old!.id;
   }
 
+  await addToPost(db, ctx.user.id, { memeId, mediaGroupId: msg.media_group_id, caption: msg.caption, position: msg.message_id });
   const status = await ctx.reply(t(ctx.lang, "saving"), { ...html, reply_parameters: { message_id: msg.message_id } });
   await db
     .prepare("UPDATE memes SET status = 'embedding', error = NULL, status_msg_id = ?, updated_at = unixepoch() WHERE id = ?")
