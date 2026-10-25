@@ -6,13 +6,13 @@ import { insertMeme } from "./ingest/receive";
 import { collectingImport } from "./batch";
 import { MODELS } from "./config";
 import { handleAccount } from "./webaccount";
-import { addToPost } from "./channels";
+import { addToPost, albumMemes } from "./channels";
 import { billingStatus, canUseAi } from "./billing";
 import { facets, filterSql } from "./filters";
 import { getCookie, readSession } from "./session";
 import type { Env } from "./env";
 import { cachedMedia, extOf, fileKey, memeMedia, previewKey, signedQuery, verifyQuery } from "./media";
-import { sendMeme, toInlineResult } from "./search/deliver";
+import { sendAlbum, sendMeme, toInlineResult } from "./search/deliver";
 import { agentSearch } from "./search/agent";
 import { keywordSearch } from "./search/hybrid";
 import { cachedFastSearch } from "./search/inline";
@@ -67,6 +67,7 @@ export async function brief(env: Env, m: Meme) {
 }
 
 export async function detail(env: Env, m: Meme) {
+  const album = await albumMemes(env.DB, m.id);
   return {
     ...(await brief(env, m)),
     caption: m.caption,
@@ -77,6 +78,7 @@ export async function detail(env: Env, m: Meme) {
     meme_context: m.meme_context,
     cultural_meaning: m.cultural_meaning,
     file: fileFits(m) ? `${base(env)}/app/file/${m.id}${await signedQuery(env, `file|${m.id}`, URL_TTL)}` : null,
+    album: album.length > 1 ? await Promise.all(album.map((a) => brief(env, a))) : [],
   };
 }
 
@@ -100,14 +102,30 @@ export async function listMemes(env: Env, user: User, url: URL) {
   const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
   const filters = filterSql(url);
   const where = ["user_id = ?", ...(tag ? ["instr(char(10) || tags || char(10), char(10) || ? || char(10)) > 0"] : []), ...filters.where];
+  // Plain browsing shows an album as its first meme; a tag or filters show every matching meme.
+  if (where.length === 1) where.push(`NOT EXISTS (SELECT 1 ${ALBUM_JOIN} AND j.position < i.position WHERE i.meme_id = memes.id)`);
   const { results } = await env.DB.prepare(`SELECT * FROM memes WHERE ${where.join(" AND ")} ORDER BY ${sort ?? "created_at DESC"} LIMIT ? OFFSET ?`)
     .bind(user.id, ...(tag ? [tag] : []), ...filters.params, PAGE + 1, offset)
     .all<Meme>();
+  const page = results.slice(0, PAGE);
+  const sizes = new Map(
+    page.length
+      ? (
+          await env.DB.prepare(`SELECT i.meme_id AS id, COUNT(*) AS n ${ALBUM_JOIN} WHERE i.meme_id IN (${page.map(() => "?").join(",")}) GROUP BY i.meme_id`)
+            .bind(...page.map((m) => m.id))
+            .all<{ id: string; n: number }>()
+        ).results.map((r) => [r.id, r.n])
+      : [],
+  );
   return {
-    items: await Promise.all(results.slice(0, PAGE).map((m) => brief(env, m))),
+    items: await Promise.all(page.map(async (m) => ({ ...(await brief(env, m)), album: (sizes.get(m.id) ?? 0) > 1 ? sizes.get(m.id) : undefined }))),
     next_offset: results.length > PAGE ? offset + PAGE : null,
   };
 }
+
+/** Joins a meme (i) to the other memes (f, at j) of its media group. */
+const ALBUM_JOIN = `FROM post_items i JOIN posts p ON p.id = i.post_id AND p.media_group_id IS NOT NULL
+  JOIN post_items j ON j.post_id = i.post_id JOIN memes f ON f.id = j.meme_id`;
 
 export async function tagCounts(env: Env, user: User) {
   const { results } = await env.DB.prepare("SELECT tags FROM memes WHERE user_id = ? AND tags IS NOT NULL").bind(user.id).all<{ tags: string }>();
@@ -329,6 +347,11 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   }
   if (action === "send" && req.method === "POST") {
     await sendMeme(env, api, user.id, meme);
+    return json({ ok: true });
+  }
+  if (action === "send_album" && req.method === "POST") {
+    const album = await albumMemes(env.DB, meme.id);
+    await sendAlbum(env, api, user.id, album.length ? album : [meme]);
     return json({ ok: true });
   }
   return json({ error: "not found" }, 404);

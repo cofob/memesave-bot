@@ -281,8 +281,23 @@ async function firstMemeTip(env: Env, m: Meme, lang: Lang) {
   return t(lang, "first_meme", { bot: username });
 }
 
+/** Edits the meme's status message; a message shared by an album shows the progress of all its memes instead. */
 export async function editStatus(env: Env, m: Meme, text: string) {
   if (!m.status_msg_id) return;
+  const { results } = await env.DB.prepare(
+    "SELECT m.status, m.title FROM memes m LEFT JOIN post_items i ON i.meme_id = m.id WHERE m.user_id = ? AND m.status_msg_id = ? ORDER BY i.position",
+  )
+    .bind(m.user_id, m.status_msg_id)
+    .all<Pick<Meme, "status" | "title">>();
+  if (results.length > 1) {
+    const lang = await userLang(env.DB, m.user_id);
+    const ready = results.filter((r) => r.status === "ready");
+    const done = ready.length + results.filter((r) => r.status === "failed").length;
+    const titles = ready.slice(0, 50).map((r) => `• <b>${esc(r.title ?? "")}</b>`).join("\n");
+    text = done < results.length
+      ? t(lang, "album_progress", { done, total: results.length })
+      : t(lang, "album_saved", { ready: ready.length, total: results.length, titles });
+  }
   await botApi(env.BOT_TOKEN).editMessageText(m.user_id, m.status_msg_id, text, { parse_mode: "HTML" }).catch(console.error);
 }
 

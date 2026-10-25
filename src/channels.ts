@@ -43,20 +43,24 @@ export async function addToPost(db: D1Database, userId: number, p: { memeId: str
   await db.prepare("INSERT INTO post_items (post_id, meme_id, position) VALUES (?, ?, ?) ON CONFLICT DO NOTHING")
     .bind(postId, p.memeId, p.position ?? 0)
     .run();
+  return postId!;
 }
 
 /** Photos of the meme's media group in album order (with the album's last change); empty without a group. */
-export async function albumPhotos(db: D1Database, memeId: string) {
+/** All memes of the media group of `memeId` in album order; empty when it did not come in an album. */
+export async function albumMemes(db: D1Database, memeId: string) {
   const { results } = await db
     .prepare(
       `SELECT m.*, p.updated_at AS album_updated FROM post_items i JOIN posts p ON p.id = i.post_id
        JOIN post_items a ON a.post_id = p.id JOIN memes m ON m.id = a.meme_id
-       WHERE i.meme_id = ? AND p.media_group_id IS NOT NULL AND m.kind = 'photo' ORDER BY a.position`,
+       WHERE i.meme_id = ? AND p.media_group_id IS NOT NULL ORDER BY a.position`,
     )
     .bind(memeId)
     .all<Meme & { album_updated: number }>();
   return results;
 }
+
+export const albumPhotos = async (db: D1Database, memeId: string) => (await albumMemes(db, memeId)).filter((m) => m.kind === "photo");
 
 /** After a meme is processed (ready or failed): check its pending posts. */
 export async function queuePosts(env: Env, memeId: string) {

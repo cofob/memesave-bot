@@ -113,6 +113,21 @@ export const insertMeme = (db: D1Database, userId: number, m: MemeRow) =>
     )
     .first<string>("id");
 
+/**
+ * The shared status message of a media group: the first item claims the post and sends it, then sets it on every
+ * item added so far. Later items get it, or null while it is being sent (the first item then sets it on them).
+ */
+async function albumStatus(db: D1Database, postId: string, send: () => Promise<number>) {
+  const claimed = await db.prepare("UPDATE posts SET status_msg_id = 0 WHERE id = ? AND status_msg_id IS NULL RETURNING id").bind(postId).first();
+  if (!claimed) return (await db.prepare("SELECT status_msg_id FROM posts WHERE id = ?").bind(postId).first<number>("status_msg_id")) || null;
+  const id = await send();
+  await db.batch([
+    db.prepare("UPDATE posts SET status_msg_id = ? WHERE id = ?").bind(id, postId),
+    db.prepare("UPDATE memes SET status_msg_id = ? WHERE id IN (SELECT meme_id FROM post_items WHERE post_id = ?)").bind(id, postId),
+  ]);
+  return id;
+}
+
 /** Saves a forwarded meme row and starts stage 1. */
 export async function receiveMedia(ctx: Ctx, env: Env, msg: Message = ctx.msg!, link?: { source: string; mediaGroupId?: string; position?: number }) {
   const media = extractMedia(msg);
@@ -122,6 +137,7 @@ export async function receiveMedia(ctx: Ctx, env: Env, msg: Message = ctx.msg!, 
   // Batch mode collects photos only; videos and GIFs always use the normal pipeline.
   const importId = media.kind === "photo" ? await collectingImport(db, ctx.user.id) : null;
   const { photo, video, animation, ...meta } = msg;
+  const group = link?.mediaGroupId ?? msg.media_group_id;
 
   let memeId = await insertMeme(db, ctx.user.id, {
     ...media,
@@ -142,20 +158,17 @@ export async function receiveMedia(ctx: Ctx, env: Env, msg: Message = ctx.msg!, 
       .prepare("SELECT id, status FROM memes WHERE user_id = ? AND file_unique_id = ?")
       .bind(ctx.user.id, media.file_unique_id)
       .first<{ id: string; status: string }>();
+    if (group) return; // one status message per album: no reply for each item
     if (old!.status !== "failed") return ctx.reply(t(ctx.lang, old!.status === "ready" ? "already_saved" : "processing"), html);
     memeId = old!.id;
   }
 
-  await addToPost(db, ctx.user.id, {
-    memeId,
-    mediaGroupId: link?.mediaGroupId ?? msg.media_group_id,
-    caption: msg.caption,
-    position: link?.position ?? msg.message_id,
-  });
-  const status = await ctx.reply(t(ctx.lang, "saving"), { ...html, reply_parameters: { message_id: msg.message_id } });
+  const postId = await addToPost(db, ctx.user.id, { memeId, mediaGroupId: group, caption: msg.caption, position: link?.position ?? msg.message_id });
+  const sendStatus = async () => (await ctx.reply(t(ctx.lang, "saving"), { ...html, reply_parameters: { message_id: msg.message_id } })).message_id;
+  const statusId = group ? await albumStatus(db, postId, sendStatus) : await sendStatus();
   await db
-    .prepare("UPDATE memes SET status = 'embedding', error = NULL, status_msg_id = ?, updated_at = unixepoch() WHERE id = ?")
-    .bind(status.message_id, memeId)
+    .prepare("UPDATE memes SET status = 'embedding', error = NULL, status_msg_id = COALESCE(?, status_msg_id), updated_at = unixepoch() WHERE id = ?")
+    .bind(statusId, memeId)
     .run();
   await env.JOBS.send({ type: "embed", memeId });
 }

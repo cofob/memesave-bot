@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Button, Dialog, Drawer, Heading, Inline, Spinner, Stack, Tag, Text, VideoPlayer } from "@cofob2/design-system-svelte";
-  import { RefreshCw, Send, Share2, Trash2 } from "@lucide/svelte";
-  import { onMount } from "svelte";
+  import { Layers, RefreshCw, Send, Share2, Trash2 } from "@lucide/svelte";
+  import { onMount, untrack } from "svelte";
   import { api, type MemeDetail } from "./api";
   import { s } from "./strings";
   import { confirm, tg } from "./telegram";
@@ -13,9 +13,14 @@
     onDeleted: (id: string) => void;
     onRetried: (id: string) => void;
   }
-  let { id, onClose, onTag, onDeleted, onRetried }: Props = $props();
+  let { id: initial, onClose, onTag, onDeleted, onRetried }: Props = $props();
 
+  let id = $state(untrack(() => initial)); // the shown meme: album thumbnails switch it
   let meme = $state<MemeDetail | null>(null);
+  $effect(() => {
+    const want = id;
+    api.get(want).then((m) => want === id && (meme = m), () => (failed = true));
+  });
 
   // Desktop: a wide dialog with the media next to the details; phones: a tall bottom sheet.
   const query = matchMedia("(min-width: 900px)");
@@ -27,7 +32,7 @@
   });
   const kindLabel = $derived(meme ? (meme.kind === "photo" ? s.f_kind_photo : meme.kind === "video" ? s.video : s.gif) : "");
   const title = $derived(meme?.title ?? kindLabel);
-  let busy = $state<"share" | "send" | "delete" | "retry" | null>(null);
+  let busy = $state<"share" | "send" | "album" | "delete" | "retry" | null>(null);
   let failed = $state(false);
 
   const sections = $derived(
@@ -43,7 +48,7 @@
       : [],
   );
 
-  async function run(action: "share" | "send" | "delete" | "retry", fn: () => Promise<void>) {
+  async function run(action: NonNullable<typeof busy>, fn: () => Promise<void>) {
     busy = action;
     try {
       await fn();
@@ -69,6 +74,12 @@
       tg?.showAlert(s.sent);
     });
 
+  const sendAlbum = () =>
+    run("album", async () => {
+      await api.sendAlbum(id);
+      tg?.showAlert(s.sent);
+    });
+
   const retry = () =>
     run("retry", async () => {
       await api.retry(id);
@@ -84,7 +95,6 @@
   };
 
   onMount(() => {
-    api.get(id).then((m) => (meme = m), () => (failed = true));
     tg?.BackButton.show();
     tg?.BackButton.onClick(onClose);
     return () => {
@@ -110,6 +120,15 @@
 
 {#snippet info(m: MemeDetail)}
   <Stack gap="md">
+    {#if m.album.length}
+      <div class="album">
+        {#each m.album as a (a.id)}
+          <button class="album-item" class:current={a.id === id} onclick={() => (id = a.id)} aria-label={a.title ?? a.id} aria-current={a.id === id}>
+            <img src={a.thumb} alt="" loading="lazy" />
+          </button>
+        {/each}
+      </div>
+    {/if}
     {#if m.status !== "ready"}<Text tone="muted" size="sm">{m.status === "failed" ? s.stateError : s.processing}</Text>{/if}
     {#if m.tags.length}
       <Inline gap="xs" wrap>
@@ -163,6 +182,12 @@
       {#snippet leading()}<Send size={16} aria-hidden="true" />{/snippet}
       {s.send}
     </Button>
+    {#if meme?.album.length}
+      <Button variant="secondary" onclick={sendAlbum} loading={busy === "album"}>
+        {#snippet leading()}<Layers size={16} aria-hidden="true" />{/snippet}
+        {s.sendAlbum}
+      </Button>
+    {/if}
     <Button variant="danger" onclick={remove} loading={busy === "delete"} disabled={!meme}>
       {#snippet leading()}<Trash2 size={16} aria-hidden="true" />{/snippet}
       {s.delete}
@@ -244,6 +269,30 @@
     display: grid;
     place-items: center;
     min-block-size: 12rem;
+  }
+  /* Album thumbnails: a scrolling row, the shown meme outlined. */
+  .album {
+    display: flex;
+    gap: var(--cf-space-1-5);
+    overflow-x: auto;
+  }
+  .album-item {
+    all: unset;
+    cursor: pointer;
+    flex: none;
+    inline-size: 3.5rem;
+    aspect-ratio: 1;
+    border-radius: var(--cf-radius-md);
+    overflow: hidden;
+  }
+  .album-item img {
+    inline-size: 100%;
+    block-size: 100%;
+    object-fit: cover;
+  }
+  .album-item.current {
+    outline: 2px solid var(--cf-color-accent);
+    outline-offset: -2px;
   }
   .tag-button {
     all: unset;

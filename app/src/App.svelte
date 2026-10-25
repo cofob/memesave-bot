@@ -16,7 +16,7 @@
     Tag,
     TextField,
   } from "@cofob2/design-system-svelte";
-  import { Bot, CircleCheck, CircleUser, Download, ListChecks, LogOut, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Upload, X } from "@lucide/svelte";
+  import { Bot, CircleCheck, CircleUser, Download, Layers, ListChecks, LogOut, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Upload, X } from "@lucide/svelte";
   import { onMount, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { api, ApiError, type Me, type MemeBrief, type Sort } from "./api";
@@ -421,6 +421,7 @@
           >
             <img src={meme.thumb} alt={meme.title ?? ""} loading="lazy" />
             {#if picked.has(meme.id)}<span class="check"><CircleCheck size={22} aria-hidden="true" /></span>{/if}
+            {#if meme.album}<Badge class="album" size="sm" variant="solid"><Layers size={12} aria-hidden="true" /> {meme.album}</Badge>{/if}
             {#if meme.status === "failed"}
               <Badge class="kind" size="sm" variant="solid" tone="danger">{s.stateError}</Badge>
             {:else if meme.status !== "ready"}
@@ -529,6 +530,11 @@
   .tile :global(.kind) {
     position: absolute;
     inset-block-end: var(--cf-space-1);
+    inset-inline-start: var(--cf-space-1);
+  }
+  .tile :global(.album) {
+    position: absolute;
+    inset-block-start: var(--cf-space-1);
     inset-inline-start: var(--cf-space-1);
   }
   .tile.picked img {

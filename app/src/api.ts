@@ -16,6 +16,7 @@ export interface MemeBrief {
   language: string | null;
   has_text: boolean;
   created_at: number;
+  album?: number; // memes in its media group (browsing shows an album as its first meme)
 }
 
 export interface MemeDetail extends MemeBrief {
@@ -27,6 +28,7 @@ export interface MemeDetail extends MemeBrief {
   meme_context: string | null;
   cultural_meaning: string | null;
   file: string | null;
+  album: MemeBrief[]; // the media group in order, empty for a single meme
 }
 
 export interface IndexItem extends MemeBrief {
@@ -250,6 +252,7 @@ export const api = {
   get: (id: string) => call<MemeDetail>(`memes/${id}`),
   share: (id: string) => call<{ id: string }>(`memes/${id}/share`, { method: "POST" }),
   send: (id: string) => call<{ ok: true }>(`memes/${id}/send`, { method: "POST" }),
+  sendAlbum: (id: string) => call<{ ok: true }>(`memes/${id}/send_album`, { method: "POST" }),
   remove: (id: string) => call<{ ok: true }>(`memes/${id}`, { method: "DELETE" }),
   removeMany: (ids: string[]) => post<{ deleted: string[] }>("delete", { ids }),
   files: (ids: string[]) => call<{ id: string; name: string; url: string }[]>(`files?ids=${ids.join(",")}`),
