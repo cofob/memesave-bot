@@ -112,8 +112,13 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
     if (id === "crypto" && kind) {
       const amount = productUsd(kind, ownKey(user), body.usd);
       if (amount === null) return json({ error: "bad product" }, 400);
-      if (body.provider === "btcpay" && btcpayOn(env)) return json(await createBtcpayInvoice(env, user, kind, amount));
-      if (body.provider === "shkeeper" && body.crypto) return json(await createShkeeperInvoice(env, user, kind, amount, body.crypto));
+      try {
+        if (body.provider === "btcpay" && btcpayOn(env)) return json(await createBtcpayInvoice(env, user, kind, amount));
+        if (body.provider === "shkeeper" && body.crypto) return json(await createShkeeperInvoice(env, user, kind, amount, body.crypto));
+      } catch (e) {
+        console.error("crypto checkout", e); // e.g. the processor's node is not synced
+        return json({ error: "payment method unavailable" }, 503);
+      }
       return json({ error: "method not available" }, 400);
     }
     if (id === "autorenew" && user.sub_charge_id) {
