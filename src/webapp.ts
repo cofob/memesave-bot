@@ -9,7 +9,7 @@ import { handleAccount } from "./webaccount";
 import { facets, filterSql } from "./filters";
 import { getCookie, readSession } from "./session";
 import type { Env } from "./env";
-import { cachedMedia, getMedia, previewOf, signedQuery, verifyQuery } from "./media";
+import { cachedMedia, memeMedia, signedQuery, verifyQuery } from "./media";
 import { sendMeme, toInlineResult } from "./search/deliver";
 import { agentSearch } from "./search/agent";
 import { keywordSearch } from "./search/hybrid";
@@ -43,7 +43,8 @@ export async function checkInitData(botToken: string, initData: string, maxAgeSe
 }
 
 const base = (env: Env) => env.PUBLIC_URL.replace(/\/$/, "");
-const fileFits = (m: Meme) => m.kind === "photo" || (m.file_size ?? Infinity) <= FILE_MAX;
+// Telegram-only files over 20 MB cannot be downloaded by the bot; R2 copies always can be served.
+const fileFits = (m: Meme) => !!m.r2_file || m.kind === "photo" || (m.file_size ?? Infinity) <= FILE_MAX;
 
 async function brief(env: Env, m: Meme) {
   return {
@@ -134,10 +135,11 @@ async function upload(env: Env, user: User, req: Request) {
   const existing = await env.DB.prepare("SELECT id FROM memes WHERE user_id = ? AND sha256 = ?").bind(user.id, sha256).first<string>("id");
   if (existing) return json({ id: existing, duplicate: true });
 
-  await env.MEDIA.put(`r2/${sha256}`, bytes, { httpMetadata: { contentType: file.type } });
+  const key = `u/${user.id}/${sha256}`;
+  await env.MEDIA.put(key, bytes, { httpMetadata: { contentType: file.type } });
   const thumb = form.get("thumb");
   const hasThumb = kind !== "photo" && thumb instanceof File && thumb.size > 0 && thumb.size < 1 << 20;
-  if (hasThumb) await env.MEDIA.put(`r2p/${sha256}`, await thumb.arrayBuffer(), { httpMetadata: { contentType: "image/jpeg" } });
+  if (hasThumb) await env.MEDIA.put(`${key}.preview`, await thumb.arrayBuffer(), { httpMetadata: { contentType: "image/jpeg" } });
 
   // Photos join an open batch import (/batch), like forwards in the bot.
   const importId = kind === "photo" ? await collectingImport(env.DB, user.id) : null;
@@ -146,7 +148,9 @@ async function upload(env: Env, user: User, req: Request) {
     file_id: "",
     file_unique_id: `r2:${sha256}`,
     preview_file_id: null,
-    preview_unique_id: hasThumb ? `r2p:${sha256}` : null,
+    preview_unique_id: null,
+    r2_file: key,
+    r2_preview: hasThumb ? `${key}.preview` : null,
     mime: file.type,
     file_size: file.size,
     width: num(form.get("width")),
@@ -267,12 +271,9 @@ async function handleMedia(req: Request, env: Env, ctx: ExecutionContext, url: U
   return cachedMedia(req, ctx, async () => {
     const meme = await getMeme(env.DB, id);
     if (!meme || (kind === "file" && !fileFits(meme))) return null;
-    const [fileId, uniqueId, mime] =
-      kind === "thumb" && meme.preview_unique_id
-        ? [...previewOf(meme), "image/jpeg"]
-        : [meme.file_id, meme.file_unique_id, meme.mime ?? (meme.kind === "photo" ? "image/jpeg" : "video/mp4")];
-    const media = await getMedia(env, fileId, uniqueId, mime);
-    return new Response(media.bytes, { headers: { "Content-Type": media.mime } });
+    // Reading from R2 back-fills Telegram-only memes, so each file is downloaded from Telegram once.
+    const media = await memeMedia(env, meme, kind === "thumb" ? "preview" : "file").catch(() => null);
+    return media && new Response(media.bytes, { headers: { "Content-Type": media.mime } });
   });
 }
 

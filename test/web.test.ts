@@ -92,10 +92,11 @@ describe("web upload", () => {
     const first = await (await send()).json<{ id: string; duplicate: boolean }>();
     expect(first.duplicate).toBe(false);
     const sha = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("PNGDATA"))).toString("hex");
-    expect(await (await e.MEDIA.get(`r2/${sha}`))!.text()).toBe("PNGDATA");
-    expect(await e.DB.prepare("SELECT kind, file_unique_id, width, sha256 FROM memes WHERE id = ?").bind(first.id).first()).toEqual({
+    expect(await (await e.MEDIA.get(`u/62/${sha}`))!.text()).toBe("PNGDATA");
+    expect(await e.DB.prepare("SELECT kind, file_unique_id, r2_file, width, sha256 FROM memes WHERE id = ?").bind(first.id).first()).toEqual({
       kind: "photo",
       file_unique_id: `r2:${sha}`,
+      r2_file: `u/62/${sha}`,
       width: 10,
       sha256: sha,
     });

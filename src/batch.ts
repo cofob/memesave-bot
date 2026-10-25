@@ -207,7 +207,7 @@ export async function submitImport(env: Env, importId: string) {
   const requests = await Promise.all(
     inBatch.map(async (m) => ({
       custom_id: m.id,
-      body: describeRequest(m, tags, [{ type: "image_url", image_url: { url: await signedMediaUrl(env, m.file_unique_id, MEDIA_TTL, m.mime ?? "image/jpeg", env.MEDIA_URL ?? env.PUBLIC_URL) } }]),
+      body: describeRequest(m, tags, [{ type: "image_url", image_url: { url: await signedMediaUrl(env, m, "file", MEDIA_TTL, env.MEDIA_URL ?? env.PUBLIC_URL) } }]),
     })),
   );
   const { batch, source } = await createBatch(

@@ -3,7 +3,7 @@ import { MODELS, VIDEO_INLINE_MAX_BYTES } from "../config";
 import { getMeme, setStatus, userLang, type Meme } from "../db";
 import type { Env } from "../env";
 import { esc, t } from "../i18n";
-import { getMedia, toDataUrl } from "../media";
+import { memeMedia, toDataUrl, variantOf } from "../media";
 import { chat, embed, type Part } from "../openrouter";
 import { namespace, upsertVectors } from "./embed";
 
@@ -105,14 +105,14 @@ export async function topTags(db: D1Database, userId: number, n = 30): Promise<s
 
 async function mediaPart(env: Env, m: Meme): Promise<Part[]> {
   if (m.kind === "photo") {
-    return [{ type: "image_url", image_url: { url: toDataUrl(await getMedia(env, m.file_id, m.file_unique_id, "image/jpeg")) } }];
+    return [{ type: "image_url", image_url: { url: toDataUrl(await memeMedia(env, m, "file")) } }];
   }
   if ((m.file_size ?? Infinity) <= VIDEO_INLINE_MAX_BYTES) {
-    const media = await getMedia(env, m.file_id, m.file_unique_id, m.mime ?? "video/mp4");
+    const media = await memeMedia(env, m, "file");
     return [{ type: "video_url", video_url: { url: toDataUrl(media) } }];
   }
-  if (!m.preview_unique_id) throw new Error("Video too large and has no thumbnail");
-  const thumb = await getMedia(env, m.preview_file_id ?? "", m.preview_unique_id, "image/jpeg");
+  if (variantOf(m, "preview") !== "preview") throw new Error("Video too large and has no thumbnail");
+  const thumb = await memeMedia(env, m, "preview");
   return [
     { type: "text", text: `Only a preview frame is available; the video is ${m.duration ?? "?"} s long.` },
     { type: "image_url", image_url: { url: toDataUrl(thumb) } },

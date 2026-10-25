@@ -4,22 +4,22 @@ import type { Meme } from "../db";
 import type { Env } from "../env";
 import { t, type Lang } from "../i18n";
 import { extractMedia } from "../ingest/receive";
-import { getMedia, isStored, signedMediaUrl, storedKey } from "../media";
+import { memeMedia, signedMediaUrl, variantOf } from "../media";
 
 const URL_TTL = 86400;
 const EXT: Record<string, string> = { "image/png": "png", "image/webp": "webp", "image/gif": "gif", "video/webm": "webm", "video/quicktime": "mov" };
 
-/** Inline result: by file_id, or by signed URL for imported memes not yet in Telegram (null when impossible). */
+/** Inline result: by Telegram file_id first; memes not yet in Telegram use signed R2 URLs (null when impossible). */
 export async function toInlineResult(env: Env, m: Meme): Promise<InlineQueryResult | null> {
-  if (!isStored(m.file_unique_id)) {
+  if (m.file_id) {
     if (m.kind === "photo") return { type: "photo", id: m.id, photo_file_id: m.file_id };
     if (m.kind === "video") {
       return { type: "video", id: m.id, video_file_id: m.file_id, title: m.title ?? "Video", description: m.tags?.split("\n").slice(0, 5).join(", ") };
     }
     return m.mime === "video/mp4" ? { type: "mpeg4_gif", id: m.id, mpeg4_file_id: m.file_id } : { type: "gif", id: m.id, gif_file_id: m.file_id };
   }
-  const url = await signedMediaUrl(env, m.file_unique_id, URL_TTL, m.mime ?? (m.kind === "photo" ? "image/jpeg" : "video/mp4"));
-  const thumb = m.preview_unique_id ? await signedMediaUrl(env, m.preview_unique_id, URL_TTL) : null;
+  const url = await signedMediaUrl(env, m, "file", URL_TTL);
+  const thumb = variantOf(m, "preview") === "preview" ? await signedMediaUrl(env, m, "preview", URL_TTL) : null;
   if (m.kind === "photo") return { type: "photo", id: m.id, photo_url: url, thumbnail_url: thumb ?? url };
   if (m.kind === "video") {
     // Telegram needs a JPEG thumbnail for URL videos.
@@ -30,38 +30,56 @@ export async function toInlineResult(env: Env, m: Meme): Promise<InlineQueryResu
     : { type: "mpeg4_gif", id: m.id, mpeg4_url: url, thumbnail_url: url, thumbnail_mime_type: "video/mp4" };
 }
 
-/** Telegram input for a meme: its file_id, or the stored bytes for the first send. */
-async function input(env: Env, m: Meme) {
-  if (!isStored(m.file_unique_id)) return m.file_id;
-  const media = await getMedia(env, "", m.file_unique_id, m.mime ?? "application/octet-stream");
+/** Telegram input: the file_id first; the R2 copy when there is none or `upload` is set. */
+async function input(env: Env, m: Meme, upload = false) {
+  if (m.file_id && !upload) return m.file_id;
+  const media = await memeMedia(env, m, "file");
   const ext = EXT[media.mime] ?? (m.kind === "photo" ? "jpg" : "mp4");
   return new InputFile(new Uint8Array(media.bytes), `${m.id}.${ext}`);
 }
 
-/** After the first send of an imported meme: keep Telegram's file ids and drop the R2 copy. */
+/** After an upload from R2: keep Telegram's file ids for the next sends. The R2 copy stays. */
 async function adopt(env: Env, m: Meme, msg: Message) {
-  const sent = isStored(m.file_unique_id) ? extractMedia(msg) : null;
+  const sent = extractMedia(msg);
   if (!sent) return;
   try {
     await env.DB.prepare("UPDATE memes SET file_id = ?, file_unique_id = ?, preview_file_id = ?, preview_unique_id = ? WHERE id = ?")
       .bind(sent.file_id, sent.file_unique_id, sent.preview_file_id, sent.preview_unique_id, m.id)
       .run();
   } catch (e) {
-    return console.warn("keeping stored copy, file ids not saved", m.id, e); // e.g. the user already has this Telegram file
+    console.warn("file ids not saved", m.id, e); // e.g. the user already has this Telegram file
   }
-  await env.MEDIA.delete([m.file_unique_id, m.preview_unique_id].filter(isStored).map((u) => storedKey(u!)));
 }
 
-/** Sends one meme to a chat, uploading imported bytes on first use. */
+/** Sends with file ids; if Telegram rejects one (or there is none), uploads the R2 copies and keeps the new ids. */
+async function withUploadFallback<T>(env: Env, memes: Meme[], send: (upload: boolean) => Promise<T>, sent: (result: T) => Message[]) {
+  const needsUpload = memes.some((m) => !m.file_id);
+  try {
+    const result = await send(needsUpload);
+    if (needsUpload) await Promise.all(sent(result).map((msg, i) => adopt(env, memes[i], msg)));
+  } catch (e) {
+    if (needsUpload || !memes.every((m) => m.r2_file)) throw e;
+    console.warn("file_id send failed, uploading from R2", e);
+    const result = await send(true);
+    await Promise.all(sent(result).map((msg, i) => adopt(env, memes[i], msg)));
+  }
+}
+
+/** Sends one meme to a chat. */
 export async function sendMeme(env: Env, api: Api, chatId: number, m: Meme, other: object = {}) {
-  const file = await input(env, m);
-  const msg =
-    m.kind === "photo"
-      ? await api.sendPhoto(chatId, file, other)
-      : m.kind === "video"
-        ? await api.sendVideo(chatId, file, other)
-        : await api.sendAnimation(chatId, file, other);
-  await adopt(env, m, msg);
+  await withUploadFallback(
+    env,
+    [m],
+    async (upload) => {
+      const file = await input(env, m, upload);
+      return m.kind === "photo"
+        ? api.sendPhoto(chatId, file, other)
+        : m.kind === "video"
+          ? api.sendVideo(chatId, file, other)
+          : api.sendAnimation(chatId, file, other);
+    },
+    (msg) => [msg],
+  );
 }
 
 /** Sends search results as replies to the query: photo/video albums, then GIFs one by one. */
@@ -76,9 +94,17 @@ export async function sendResults(env: Env, api: Api, chatId: number, replyTo: n
       await sendMeme(env, api, chatId, chunk[0], reply);
       continue;
     }
-    const media = await Promise.all(chunk.map(async (m) => ({ type: m.kind === "photo" ? "photo" : "video", media: await input(env, m) }) as const));
-    const sent = await api.sendMediaGroup(chatId, media, reply);
-    await Promise.all(sent.map((msg, j) => adopt(env, chunk[j], msg)));
+    await withUploadFallback(
+      env,
+      chunk,
+      async (upload) => {
+        const media = await Promise.all(
+          chunk.map(async (m) => ({ type: m.kind === "photo" ? "photo" : "video", media: await input(env, m, upload && !!m.r2_file) }) as const),
+        );
+        return api.sendMediaGroup(chatId, media, reply);
+      },
+      (msgs) => msgs,
+    );
   }
   for (const m of memes.filter((m) => m.kind === "animation")) await sendMeme(env, api, chatId, m, reply);
 }

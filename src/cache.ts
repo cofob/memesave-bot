@@ -1,5 +1,6 @@
 import { EMBED_DIMS, MODELS } from "./config";
 import type { Env } from "./env";
+import { tmpKey } from "./media";
 import { embed } from "./openrouter";
 import type { Spend } from "./spend";
 
@@ -10,12 +11,12 @@ export async function sha256hex(s: string) {
 
 export const normQuery = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
 
-/** Embeds search queries; cached in R2 so a repeated query costs nothing. */
+/** Embeds search queries; cached in R2 (tmp/, 7 days) so a repeated query costs nothing. */
 export async function cachedQueryEmbeddings(env: Env, texts: string[], spend: Spend): Promise<number[][]> {
   const keys = await Promise.all(texts.map((t) => sha256hex(`${MODELS.embed}|${EMBED_DIMS}|${normQuery(t)}`)));
   const out = await Promise.all(
     keys.map(async (k) => {
-      const hit = await env.CACHE.get(`q/${k}`);
+      const hit = await env.MEDIA.get(tmpKey(`q/${k}`));
       return hit ? Array.from(new Float32Array(await hit.arrayBuffer())) : undefined;
     }),
   );
@@ -25,7 +26,7 @@ export async function cachedQueryEmbeddings(env: Env, texts: string[], spend: Sp
     await Promise.all(
       miss.map((i, j) => {
         out[i] = vecs[j];
-        return env.CACHE.put(`q/${keys[i]}`, new Float32Array(vecs[j]).buffer);
+        return env.MEDIA.put(tmpKey(`q/${keys[i]}`), new Float32Array(vecs[j]).buffer);
       }),
     );
   }

@@ -70,15 +70,22 @@ export function describeOrigin(o: MessageOrigin | undefined): string | null {
   }
 }
 
-export type MemeRow = NewMeme & { caption: string | null; source: string | null; import_id: string | null; sha256?: string | null };
+export type MemeRow = NewMeme & {
+  caption: string | null;
+  source: string | null;
+  import_id: string | null;
+  sha256?: string | null;
+  r2_file?: string | null;
+  r2_preview?: string | null;
+};
 
 /** Inserts a meme; returns its id, or null when the user already has this file. */
 export const insertMeme = (db: D1Database, userId: number, m: MemeRow) =>
   db
     .prepare(
       `INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, preview_file_id, preview_unique_id, mime, file_size,
-        width, height, duration, caption, source, import_id, sha256)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        width, height, duration, caption, source, import_id, sha256, r2_file, r2_preview)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(user_id, file_unique_id) DO NOTHING RETURNING id`,
     )
     .bind(
@@ -98,6 +105,8 @@ export const insertMeme = (db: D1Database, userId: number, m: MemeRow) =>
       m.source,
       m.import_id,
       m.sha256 ?? null,
+      m.r2_file ?? null,
+      m.r2_preview ?? null,
     )
     .first<string>("id");
 

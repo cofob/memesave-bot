@@ -20,10 +20,7 @@
     { "binding": "DB", "database_name": "memesave", "database_id": "f5a303a3-e2ed-4e35-9e6f-0cf8abead35a", "migrations_dir": "migrations" }
   ],
   "vectorize": [{ "binding": "VECTORS", "index_name": "memesave-memes" }],
-  "r2_buckets": [
-    { "binding": "CACHE", "bucket_name": "memesave-tmp" },
-    { "binding": "MEDIA", "bucket_name": "memesave-media" }
-  ],
+  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "memesave-media" }],
   "containers": [
     { "class_name": "ZipImporter", "image": "./container/Dockerfile", "instance_type": "standard-1", "max_instances": 5 }
   ],

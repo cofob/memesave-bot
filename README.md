@@ -9,12 +9,13 @@ bunx wrangler d1 create memesave            # put database_id into wrangler.json
 bunx wrangler vectorize create memesave-memes --dimensions=1536 --metric=cosine
 bunx wrangler queues create memesave-jobs
 bunx wrangler queues create memesave-dlq
-bunx wrangler r2 bucket create memesave-tmp
-bunx wrangler r2 bucket lifecycle add memesave-tmp expire-7d --expire-days 7
+bunx wrangler r2 bucket create memesave-media   # permanent copies of all media
+bunx wrangler r2 bucket lifecycle add memesave-media tmp-7d tmp/ --expire-days 7
 bunx wrangler secret put BOT_TOKEN
 bunx wrangler secret put WEBHOOK_SECRET
 bunx wrangler secret put OPENROUTER_API_KEY
 bunx wrangler secret put ENCRYPTION_KEY     # random string, encrypts users' OpenRouter keys
+bunx wrangler secret put TG_CLIENT_SECRET   # BotFather → Login Widget → Client Secret (web login)
 bun run migrate:remote
 bun run deploy
 BOT_TOKEN=... WEBHOOK_SECRET=... WORKER_URL=https://memereserve.cfb.wtf bun run setup

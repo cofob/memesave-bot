@@ -1,7 +1,7 @@
 import { deleteMeme, getMeme, setStatus, userLang, type Meme } from "../db";
 import type { Env } from "../env";
 import { t } from "../i18n";
-import { getMedia, toDataUrl } from "../media";
+import { memeMedia, toDataUrl, variantOf } from "../media";
 import { embed } from "../openrouter";
 import { editStatus } from "./describe";
 
@@ -10,13 +10,13 @@ const DOWNLOAD_MAX = 20 * 1024 * 1024; // Bot API getFile limit
 const hex = (b: ArrayBuffer) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
 
 /**
- * sha256 of the meme file for dedupe. "" when the file cannot be downloaded (videos over 20 MB).
- * Downloads are cached in R2, so stage 2 reuses them.
+ * sha256 of the meme file for dedupe; reading it also saves the permanent R2 copy (back-fill).
+ * "" when the file cannot be downloaded (Telegram videos over 20 MB).
  */
 async function fileHash(env: Env, m: Meme): Promise<string> {
-  if (m.kind !== "photo" && (m.file_size ?? 0) > DOWNLOAD_MAX) return "";
+  if (!m.r2_file && m.kind !== "photo" && (m.file_size ?? 0) > DOWNLOAD_MAX) return "";
   try {
-    const media = await getMedia(env, m.file_id, m.file_unique_id, m.mime ?? "application/octet-stream");
+    const media = await memeMedia(env, m, "file");
     return hex(await crypto.subtle.digest("SHA-256", media.bytes));
   } catch (e) {
     console.warn("hash failed", m.id, e);
@@ -39,15 +39,21 @@ async function dedupe(env: Env, m: Meme): Promise<boolean> {
   return true;
 }
 
-/** Backfill job: hash an existing meme without dedupe. */
+/** Back-fill job for older memes: permanent R2 copies of the file and preview, and the sha256 (without dedupe). */
 export async function hashStage(env: Env, memeId: string) {
   const m = await getMeme(env.DB, memeId);
-  if (m && m.sha256 === null) await env.DB.prepare("UPDATE memes SET sha256 = ? WHERE id = ?").bind(await fileHash(env, m), m.id).run();
+  if (!m) return;
+  const sha256 = m.sha256 === null || !m.r2_file ? await fileHash(env, m) : m.sha256;
+  // r2_file "" marks a file Telegram does not let us download, so the cron does not retry it.
+  await env.DB.prepare("UPDATE memes SET sha256 = COALESCE(sha256, ?), r2_file = COALESCE(r2_file, '') WHERE id = ?").bind(sha256, m.id).run();
+  if (m.preview_file_id && !m.r2_preview) await memeMedia(env, m, "preview").catch((e) => console.warn("preview back-fill failed", m.id, e));
 }
 
-/** Cron: queue hash jobs for memes saved before hashing existed. */
+/** Cron: back-fill R2 copies and hashes of memes saved before they were stored in R2. */
 export async function queueHashBackfill(env: Env) {
-  const { results } = await env.DB.prepare("SELECT id FROM memes WHERE sha256 IS NULL AND status IN ('ready', 'failed') LIMIT 100").all<{ id: string }>();
+  const { results } = await env.DB.prepare(
+    "SELECT id FROM memes WHERE file_id != '' AND status IN ('ready', 'failed') AND (sha256 IS NULL OR r2_file IS NULL) LIMIT 100",
+  ).all<{ id: string }>();
   if (results.length) await env.JOBS.sendBatch(results.map((r) => ({ body: { type: "hash" as const, memeId: r.id } })));
 }
 
@@ -74,9 +80,10 @@ export async function embedStage(env: Env, memeId: string) {
   if (!m || m.status === "ready" || m.status === "failed") return;
   if (m.status === "embedding") {
     if (m.sha256 === null && (await dedupe(env, m))) return;
-    const [fileId, uniqueId] = m.kind === "photo" ? [m.file_id, m.file_unique_id] : [m.preview_file_id ?? "", m.preview_unique_id];
-    if (uniqueId) {
-      const media = await getMedia(env, fileId, uniqueId, "image/jpeg");
+    // Photos embed the image itself; videos and GIFs their preview frame, if there is one.
+    const variant = m.kind === "photo" ? "file" : variantOf(m, "preview") === "preview" ? "preview" : null;
+    if (variant) {
+      const media = await memeMedia(env, m, variant);
       const [values] = await embed(
         env,
         [{ content: [{ type: "image_url", image_url: { url: toDataUrl(media) } }] }],

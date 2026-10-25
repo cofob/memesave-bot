@@ -2,7 +2,7 @@ import { cachedQueryEmbeddings } from "../cache";
 import { AGENT_INITIAL, AGENT_MAX_STEPS, AGENT_MAX_VIEWS, CHAT_LIMIT, MODELS } from "../config";
 import { loadMemes, type Meme } from "../db";
 import type { Env } from "../env";
-import { getMedia, previewOf, toDataUrl } from "../media";
+import { memeMedia, toDataUrl } from "../media";
 import { chat, type ChatMessage, type Part } from "../openrouter";
 import { hybridSearch } from "./hybrid";
 
@@ -126,9 +126,8 @@ export async function agentSearch(env: Env, userId: number, query: string): Prom
         const ids = (Array.isArray(a.ids) ? a.ids : []).filter((id: string) => known.has(id));
         const memes = (await own(ids)).slice(0, Math.min(4, AGENT_MAX_VIEWS - views));
         for (const m of memes) {
-          const [fileId, uniqueId] = previewOf(m);
           images.push({ type: "text", text: `id: ${m.id}` });
-          images.push({ type: "image_url", image_url: { url: toDataUrl(await getMedia(env, fileId, uniqueId, "image/jpeg")) } });
+          images.push({ type: "image_url", image_url: { url: toDataUrl(await memeMedia(env, m, "preview")) } });
         }
         views += memes.length;
         result = memes.length ? `Attached ${memes.length} images: ${memes.map((m) => m.id).join(", ")}` : "No images: unknown ids or view limit reached";

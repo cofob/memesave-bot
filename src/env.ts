@@ -4,8 +4,7 @@ import type { ZipImporter } from "./zip";
 export interface Env {
   DB: D1Database;
   VECTORS: Vectorize;
-  CACHE: R2Bucket; // temporary, 7-day lifecycle
-  MEDIA: R2Bucket; // persistent: imported files until their first send to Telegram
+  MEDIA: R2Bucket; // permanent copies of all media; "tmp/" expires after 7 days
   JOBS: Queue<Job>;
   ZIP: DurableObjectNamespace<ZipImporter>;
   ADMIN_ID: string;

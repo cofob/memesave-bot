@@ -4,12 +4,13 @@ import { userLang, type Kind } from "./db";
 import type { Env } from "./env";
 import { t, type Key, type Lang } from "./i18n";
 import { insertMeme } from "./ingest/receive";
-import { sign, signedQuery, verify, verifyQuery } from "./media";
+import { sign, signedQuery, tmpKey, verify, verifyQuery } from "./media";
 import type { Job } from "./queue";
 import { uploadPage } from "./uploadpage";
 
 const LINK_TTL = 86400;
-const zipKey = (id: string) => `z/${id}.zip`;
+const blobKey = (userId: number, sha256: string) => `u/${userId}/${sha256}`;
+const zipKey = (id: string) => tmpKey(`zip/${id}.zip`);
 
 interface ZipImport {
   id: string;
@@ -120,7 +121,7 @@ export async function failZip(env: Env, id: string, error: string) {
     .bind(error.slice(0, 1000), id)
     .first<ZipImport>();
   if (!zip) return;
-  await env.CACHE.delete(zipKey(id));
+  await env.MEDIA.delete(zipKey(id));
   await say(env, zip, "zip_failed", { error: error.slice(0, 300).replace(/[<>&]/g, "") }, false);
   await submitZipPhotos(env, zip); // photos saved before the failure still get described
 }
@@ -138,12 +139,12 @@ export async function handleUpload(req: Request, env: Env, ctx: ExecutionContext
   if (zip.status !== "uploading") return json({ error: "already uploaded" }, 409);
 
   if (action === "start" && req.method === "POST") {
-    const upload = await env.CACHE.createMultipartUpload(zipKey(id), { httpMetadata: { contentType: "application/zip" } });
+    const upload = await env.MEDIA.createMultipartUpload(zipKey(id), { httpMetadata: { contentType: "application/zip" } });
     await env.DB.prepare("UPDATE zip_imports SET upload_id = ?, updated_at = unixepoch() WHERE id = ?").bind(upload.uploadId, id).run();
     return json({ ok: true });
   }
   if (!zip.upload_id) return json({ error: "upload not started" }, 409);
-  const upload = env.CACHE.resumeMultipartUpload(zipKey(id), zip.upload_id);
+  const upload = env.MEDIA.resumeMultipartUpload(zipKey(id), zip.upload_id);
 
   if (action === "part" && req.method === "PUT" && req.body) {
     const part = await upload.uploadPart(Number(url.searchParams.get("n")), req.body);
@@ -171,15 +172,15 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
   const db = env.DB;
 
   if (action === "file") {
-    const obj = await env.CACHE.get(zipKey(id));
+    const obj = await env.MEDIA.get(zipKey(id));
     return obj ? new Response(obj.body, { headers: { "Content-Length": String(obj.size) } }) : json({ error: "no file" }, 404);
   }
   if (action === "blob" && req.method === "PUT" && req.body) {
-    // PUT /zip/<id>/blob/<sha256>[?thumb=1]: stores a file until its first send to Telegram.
+    // PUT /zip/<id>/blob/<sha256>[?thumb=1]: the permanent copy of a file (or its preview) in R2.
     const sha = new URL(req.url).pathname.split("/")[4] ?? "";
     if (!/^[0-9a-f]{64}$/.test(sha)) return json({ error: "bad sha256" }, 400);
-    const prefix = new URL(req.url).searchParams.has("thumb") ? "r2p" : "r2";
-    await env.MEDIA.put(`${prefix}/${sha}`, req.body, {
+    const thumb = new URL(req.url).searchParams.has("thumb");
+    await env.MEDIA.put(`${blobKey(zip.user_id, sha)}${thumb ? ".preview" : ""}`, req.body, {
       httpMetadata: { contentType: req.headers.get("Content-Type") ?? "application/octet-stream" },
     });
     return json({ ok: true });
@@ -214,13 +215,15 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
     const jobs: { body: Job }[] = [];
     for (const item of body.items as ZipItem[]) {
       if (!/^[0-9a-f]{64}$/.test(item.sha256) || !KINDS.includes(item.kind)) continue;
-      // Imported files stay in MEDIA ("r2:<sha256>") until their first send to Telegram.
+      // Imported files live in R2; they get Telegram file ids on their first send ("r2:<sha256>" until then).
       const memeId = await insertMeme(db, zip.user_id, {
         kind: item.kind,
         file_id: "",
         file_unique_id: `r2:${item.sha256}`,
         preview_file_id: null,
-        preview_unique_id: item.thumb ? `r2p:${item.sha256}` : null,
+        preview_unique_id: null,
+        r2_file: blobKey(zip.user_id, item.sha256),
+        r2_preview: item.thumb ? `${blobKey(zip.user_id, item.sha256)}.preview` : null,
         mime: item.mime ?? null,
         file_size: item.file_size ?? null,
         width: item.width ?? null,
@@ -244,7 +247,7 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
 
   if (action === "done") {
     await db.prepare("UPDATE zip_imports SET status = 'done', updated_at = unixepoch() WHERE id = ?").bind(id).run();
-    await env.CACHE.delete(zipKey(id));
+    await env.MEDIA.delete(zipKey(id));
     await say(env, zip, "zip_done", { imported: zip.imported, skipped: zip.skipped, failed: Number(body.failed ?? 0) }, false);
     await submitZipPhotos(env, zip);
     return json({ ok: true });

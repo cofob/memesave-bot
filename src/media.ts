@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import type { Meme } from "./db";
 import type { Env } from "./env";
 
 export interface Media {
@@ -17,38 +18,48 @@ const EXT_MIME: Record<string, string> = {
   webm: "video/webm",
 };
 
-/**
- * Imported memes not yet sent to Telegram have file_unique_id "r2:<sha256>" (preview "r2p:<sha256>")
- * and keep their bytes in the persistent MEDIA bucket under "r2/<sha256>" ("r2p/<sha256>").
- */
-export const isStored = (uniqueId: string | null | undefined) => !!uniqueId && /^r2p?:/.test(uniqueId);
-export const storedKey = (uniqueId: string) => uniqueId.replace(":", "/");
+/** The meme fields media access needs. */
+export type MediaMeme = Pick<Meme, "id" | "kind" | "mime" | "file_id" | "preview_file_id" | "r2_file" | "r2_preview">;
+export type Variant = "file" | "preview";
 
-/** File and unique id of the preview (thumbnail or 640 px photo), or of the file itself. */
-export const previewOf = (m: { file_id: string; file_unique_id: string; preview_file_id: string | null; preview_unique_id: string | null }) =>
-  m.preview_unique_id ? ([m.preview_file_id ?? "", m.preview_unique_id] as const) : ([m.file_id, m.file_unique_id] as const);
+/** Temporary objects (query embeddings, inline cache, zip uploads): the bucket expires "tmp/" after 7 days. */
+export const tmpKey = (name: string) => `tmp/${name}`;
 
-/** Returns file bytes: stored imports from MEDIA, Telegram files from the 7-day cache or Telegram. */
-export async function getMedia(env: Env, fileId: string, uniqueId: string, fallbackMime: string): Promise<Media> {
-  if (isStored(uniqueId)) {
-    const obj = await env.MEDIA.get(storedKey(uniqueId));
-    if (!obj) throw new Error(`Stored media missing: ${uniqueId}`);
-    return { bytes: await obj.arrayBuffer(), mime: obj.httpMetadata?.contentType ?? fallbackMime };
-  }
-  const key = `m/${uniqueId}`;
-  const hit = await env.CACHE.get(key);
-  if (hit) return { bytes: await hit.arrayBuffer(), mime: hit.httpMetadata?.contentType ?? fallbackMime };
+/** "preview" when the meme has its own preview (Telegram thumbnail / 640 px size, uploaded thumbnail), else "file". */
+export const variantOf = (m: MediaMeme, v: Variant): Variant => (v === "preview" && (m.r2_preview || m.preview_file_id) ? "preview" : "file");
 
+const fallbackMime = (m: MediaMeme, v: Variant) => (v === "preview" ? "image/jpeg" : (m.mime ?? (m.kind === "photo" ? "image/jpeg" : "video/mp4")));
+
+async function downloadTelegram(env: Env, fileId: string, fallback: string): Promise<Media> {
   const info = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/getFile?file_id=${encodeURIComponent(fileId)}`);
   const { ok, result } = await info.json<{ ok: boolean; result?: { file_path?: string } }>();
-  if (!ok || !result?.file_path) throw new Error(`getFile failed for ${uniqueId}`);
+  if (!ok || !result?.file_path) throw new Error(`getFile failed for ${fileId}`);
   const res = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${result.file_path}`);
-  if (!res.ok) throw new Error(`Telegram download ${res.status} for ${uniqueId}`);
+  if (!res.ok) throw new Error(`Telegram download ${res.status} for ${fileId}`);
+  return { bytes: await res.arrayBuffer(), mime: EXT_MIME[result.file_path.split(".").pop()!.toLowerCase()] ?? fallback };
+}
 
-  const bytes = await res.arrayBuffer();
-  const mime = EXT_MIME[result.file_path.split(".").pop()!.toLowerCase()] ?? fallbackMime;
-  await env.CACHE.put(key, bytes, { httpMetadata: { contentType: mime } });
-  return { bytes, mime };
+/**
+ * Bytes of a meme's file or preview. Every meme keeps a permanent copy in R2 (MEDIA); a meme that is only
+ * in Telegram is downloaded once and saved there (back-fill). Bot API downloads are limited to 20 MB.
+ */
+export async function memeMedia(env: Env, m: MediaMeme, variant: Variant): Promise<Media> {
+  const v = variantOf(m, variant);
+  const key = v === "preview" ? m.r2_preview : m.r2_file;
+  const fallback = fallbackMime(m, v);
+  if (key) {
+    const obj = await env.MEDIA.get(key);
+    if (obj) return { bytes: await obj.arrayBuffer(), mime: obj.httpMetadata?.contentType ?? fallback };
+  }
+  const fileId = v === "preview" ? m.preview_file_id : m.file_id;
+  if (!fileId) throw new Error(`No ${v} for meme ${m.id}`);
+  const media = await downloadTelegram(env, fileId, fallback);
+  const newKey = `memes/${m.id}/${v}`;
+  await env.MEDIA.put(newKey, media.bytes, { httpMetadata: { contentType: media.mime } });
+  await env.DB.prepare(`UPDATE memes SET ${v === "preview" ? "r2_preview" : "r2_file"} = ? WHERE id = ?`).bind(newKey, m.id).run();
+  if (v === "preview") m.r2_preview = newKey;
+  else m.r2_file = newKey;
+  return media;
 }
 
 export const toDataUrl = ({ bytes, mime }: Media) => `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`;
@@ -94,25 +105,29 @@ export async function verifyQuery(env: Env, scope: string, url: URL) {
   return exp > Date.now() / 1000 && verify(env, `${scope}|${exp}`, url.searchParams.get("s") ?? "");
 }
 
-/** Public URL of a cached file for providers that only accept https images (OpenRouter Batch). */
 const MIME_EXT: Record<string, string> = Object.fromEntries(Object.entries(EXT_MIME).map(([ext, mime]) => [mime, ext]));
 
 /**
- * Public URL of a file for providers that only accept https media (OpenRouter Batch, inline results).
- * The path ends with a file extension: Vertex batch rejects image URLs without one.
+ * Public URL of a meme's file or preview for providers that only accept https media (OpenRouter Batch,
+ * inline results). The path ends with a file extension: Vertex batch rejects image URLs without one.
  */
-export async function signedMediaUrl(env: Env, uniqueId: string, ttlSeconds: number, mime = "image/jpeg", base = env.PUBLIC_URL) {
-  const ext = MIME_EXT[mime] ?? "jpg";
-  return `${base.replace(/\/$/, "")}/media/${uniqueId}.${ext}${await signedQuery(env, uniqueId, ttlSeconds)}`;
+export async function signedMediaUrl(env: Env, m: MediaMeme, variant: Variant, ttlSeconds: number, base = env.PUBLIC_URL) {
+  const v = variantOf(m, variant);
+  const ext = MIME_EXT[fallbackMime(m, v)] ?? "jpg";
+  return `${base.replace(/\/$/, "")}/media/${m.id}.${v}.${ext}${await signedQuery(env, `media|${m.id}|${v}`, ttlSeconds)}`;
 }
 
-/** GET /media/<uniqueId>.<ext>?e=&s= — serves a file from R2 when the signature is valid and not expired. */
+/** GET /media/<memeId>.<file|preview>.<ext>?e=&s= — the meme's media from R2 (back-filled from Telegram when needed). */
 export async function serveMedia(req: Request, env: Env, ctx: ExecutionContext) {
   const url = new URL(req.url);
-  const uniqueId = decodeURIComponent(url.pathname.split("/")[2] ?? "").replace(/\.[a-z0-9]+$/i, "");
-  if (!(await verifyQuery(env, uniqueId, url))) return new Response("Not found", { status: 404 });
+  const [id = "", variant = ""] = (url.pathname.split("/")[2] ?? "").split(".");
+  if ((variant !== "file" && variant !== "preview") || !(await verifyQuery(env, `media|${id}|${variant}`, url))) {
+    return new Response("Not found", { status: 404 });
+  }
   return cachedMedia(req, ctx, async () => {
-    const obj = await (isStored(uniqueId) ? env.MEDIA.get(storedKey(uniqueId)) : env.CACHE.get(`m/${uniqueId}`));
-    return obj && new Response(obj.body, { headers: { "Content-Type": obj.httpMetadata?.contentType ?? "application/octet-stream" } });
+    const m = await env.DB.prepare("SELECT * FROM memes WHERE id = ?").bind(id).first<Meme>();
+    if (!m) return null;
+    const media = await memeMedia(env, m, variant).catch(() => null);
+    return media && new Response(media.bytes, { headers: { "Content-Type": media.mime } });
   });
 }

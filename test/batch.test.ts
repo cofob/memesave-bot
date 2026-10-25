@@ -27,16 +27,18 @@ afterEach(() => vi.restoreAllMocks());
 describe("signed media URLs", () => {
   it("serves only valid, unexpired signatures", async () => {
     const e = fakeEnv().env;
-    await env.CACHE.put("m/abc", "IMG", { httpMetadata: { contentType: "image/jpeg" } });
-    const url = await signedMediaUrl(e, "abc", 60);
-    expect(url).toMatch(/^https:\/\/m\.example\/media\/abc\.jpg\?e=\d+&s=/);
-    expect(await signedMediaUrl(e, "abc", 60)).toBe(url); // stable within the day: browsers and Telegram reuse their cache
+    await env.MEDIA.put("u/1/abc", "IMG", { httpMetadata: { contentType: "image/jpeg" } });
+    await e.DB.prepare("INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, mime, r2_file) VALUES ('abc', 1, 'photo', '', 'r2:abc', 'image/jpeg', 'u/1/abc')").run();
+    const meme = (await e.DB.prepare("SELECT * FROM memes WHERE id = 'abc'").first<any>())!;
+    const url = await signedMediaUrl(e, meme, "file", 60);
+    expect(url).toMatch(/^https:\/\/m\.example\/media\/abc\.file\.jpg\?e=\d+&s=/);
+    expect(await signedMediaUrl(e, meme, "file", 60)).toBe(url); // stable within the day: browsers and Telegram reuse their cache
     const ok = await serveMedia(new Request(url), e, ctx);
     expect([ok.status, await ok.text(), ok.headers.get("Content-Type")]).toEqual([200, "IMG", "image/jpeg"]);
     expect(ok.headers.get("Cache-Control")).toMatch(/^public, max-age=\d+, immutable$/);
-    expect((await serveMedia(new Request(url.replace("/abc.jpg?", "/abd.jpg?")), e, ctx)).status).toBe(404);
+    expect((await serveMedia(new Request(url.replace("/abc.file.jpg?", "/abd.file.jpg?")), e, ctx)).status).toBe(404);
     const past = Math.floor(Date.now() / 1000) - 10;
-    const expired = `https://m.example/media/abc.jpg?e=${past}&s=${await sign(e, `abc|${past}`)}`;
+    const expired = `https://m.example/media/abc.file.jpg?e=${past}&s=${await sign(e, `media|abc|file|${past}`)}`;
     expect((await serveMedia(new Request(expired), e, ctx)).status).toBe(404);
   });
 });
@@ -93,7 +95,7 @@ describe("batch import", () => {
     expect(submitted.callback_url).toBe("https://m.example/batch/webhook");
     expect(submitted.requests).toHaveLength(2);
     expect(submitted.requests[0].body.tools).toBeUndefined();
-    expect(submitted.requests[0].body.messages[1].content[1].image_url.url).toMatch(/^https:\/\/media\.example\/media\/u_p1\.jpg\?/); // MEDIA_URL host; Vertex needs a file extension
+    expect(submitted.requests[0].body.messages[1].content[1].image_url.url).toMatch(/^https:\/\/media\.example\/media\/p1\.file\.jpg\?/); // MEDIA_URL host; Vertex needs a file extension
 
     // Round 1: p1 succeeds, p2 fails and is resubmitted in a new batch.
     await pollImports(e);

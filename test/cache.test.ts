@@ -1,23 +1,34 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cachedQueryEmbeddings } from "../src/cache";
-import { getMedia } from "../src/media";
+import type { Meme } from "../src/db";
+import { memeMedia } from "../src/media";
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("getMedia", () => {
-  it("downloads once, then serves from R2", async () => {
+describe("memeMedia", () => {
+  it("back-fills a Telegram-only meme into R2 once, then reads R2", async () => {
+    await env.DB.prepare(
+      "INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, preview_file_id) VALUES ('tg1', 1, 'photo', 'fid', 'u-tg1', 'pid')",
+    ).run();
     const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
       String(input).includes("getFile") ? json({ ok: true, result: { file_path: "photos/a.jpg" } }) : new Response("IMG"),
     );
-    const a = await getMedia(env, "fid", "uid1", "application/octet-stream");
+    const meme = (await env.DB.prepare("SELECT * FROM memes WHERE id = 'tg1'").first<Meme>())!;
+    const a = await memeMedia(env, meme, "file");
     expect(a.mime).toBe("image/jpeg");
     expect(fetch).toHaveBeenCalledTimes(2);
-    const b = await getMedia(env, "fid", "uid1", "application/octet-stream");
-    expect(new TextDecoder().decode(b.bytes)).toBe("IMG");
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(await env.DB.prepare("SELECT r2_file FROM memes WHERE id = 'tg1'").first<string>("r2_file")).toBe("memes/tg1/file");
+    expect(await (await env.MEDIA.get("memes/tg1/file"))!.text()).toBe("IMG");
+
+    const again = (await env.DB.prepare("SELECT * FROM memes WHERE id = 'tg1'").first<Meme>())!;
+    expect(new TextDecoder().decode((await memeMedia(env, again, "file")).bytes)).toBe("IMG");
+    expect(fetch).toHaveBeenCalledTimes(2); // no new Telegram download
+
+    await memeMedia(env, again, "preview"); // the preview is a separate Telegram file
+    expect(await env.DB.prepare("SELECT r2_preview FROM memes WHERE id = 'tg1'").first<string>("r2_preview")).toBe("memes/tg1/preview");
   });
 });
 

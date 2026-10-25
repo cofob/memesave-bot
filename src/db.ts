@@ -41,6 +41,8 @@ export interface Meme {
   search_phrases: string | null;
   import_id: string | null;
   sha256: string | null;
+  r2_file: string | null; // permanent copy in MEDIA ("" = cannot be downloaded from Telegram)
+  r2_preview: string | null;
   created_at: number;
 }
 
@@ -77,10 +79,9 @@ export const recentMemes = async (db: D1Database, userId: number, limit: number)
 
 export async function deleteMeme(env: { DB: D1Database; VECTORS: Vectorize; MEDIA: R2Bucket }, id: string) {
   await env.VECTORS.deleteByIds([`${id}:i`, `${id}:t`]);
-  const row = await env.DB.prepare("DELETE FROM memes WHERE id = ? RETURNING file_unique_id, preview_unique_id")
+  const row = await env.DB.prepare("DELETE FROM memes WHERE id = ? RETURNING r2_file, r2_preview")
     .bind(id)
-    .first<{ file_unique_id: string; preview_unique_id: string | null }>();
-  // Imported memes that were never sent keep their bytes in MEDIA.
-  const stored = [row?.file_unique_id, row?.preview_unique_id].filter((u): u is string => !!u && /^r2p?:/.test(u));
-  if (stored.length) await env.MEDIA.delete(stored.map((u) => u.replace(":", "/")));
+    .first<{ r2_file: string | null; r2_preview: string | null }>();
+  const keys = [row?.r2_file, row?.r2_preview].filter((k): k is string => !!k);
+  if (keys.length) await env.MEDIA.delete(keys);
 }
