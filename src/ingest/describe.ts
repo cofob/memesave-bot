@@ -1,7 +1,7 @@
 import { botApi } from "../botapi";
 import { DEFAULT_TIER, DESCRIBE_FALLBACKS, DESCRIBE_MODELS, MODELS, VIDEO_INLINE_MAX_BYTES } from "../config";
 import { getMeme, getUser, setStatus, userLang, type Meme } from "../db";
-import { queuePosts } from "../channels";
+import { ALBUM_WAIT, albumPhotos, queuePosts } from "../channels";
 import type { Env } from "../env";
 import { esc, t, type Lang } from "../i18n";
 import { memeMedia, toDataUrl, variantOf } from "../media";
@@ -38,6 +38,7 @@ const SCHEMA = {
     search_phrases: { ...strs, description: "5-15 phrases people would type to find it, English and meme language" },
   },
 };
+const ALBUM_SCHEMA = { type: "object", additionalProperties: false, required: ["items"], properties: { items: { type: "array", items: SCHEMA } } };
 
 const PROMPT = `You index memes for a private meme search engine. Look at the attached image or video carefully.
 1. Transcribe ALL visible text verbatim in its original language and script, keep line breaks. Do not translate, fix or censor it.
@@ -88,7 +89,14 @@ export function toDescription(raw: unknown, content: string): Description {
   };
 }
 
-export const docText = (d: Description) =>
+/** Album answer: {"items": [...]} (or a bare array) with one description per photo, in order. */
+export function toDescriptions(raw: any, content: string, n: number): Description[] {
+  const items = Array.isArray(raw) ? raw : raw?.items;
+  if (!Array.isArray(items) || items.length !== n) throw new Error(`Expected ${n} descriptions: ${content.slice(0, 500)}`);
+  return items.map((o) => toDescription(o, content));
+}
+
+export const docText =(d: Description) =>
   [d.title, d.ocr_text, d.speech_text, d.description, d.meme_context, d.cultural_meaning, d.tags.join(", "), d.search_phrases.join("\n")]
     .filter(Boolean)
     .join("\n");
@@ -192,26 +200,61 @@ const fromRow = (m: Meme): Description => ({
  * Stage 2: describes the meme with web tools, then finishes it. A retry skips the paid call when the description is saved.
  * When a provider blocks the photo, the next model in describeModels tries it; `from` skips models that already refused.
  */
-export async function describeStage(env: Env, memeId: string, from = 0) {
+export async function describeStage(env: Env, memeId: string, from = 0, single = false) {
   const m = await getMeme(env.DB, memeId);
   if (!m || m.status !== "describing") return;
   if (m.title === null) {
-    const tier = await userTier(env.DB, m.user_id);
-    const body = { ...describeRequest(m, await topTags(env.DB, m.user_id), await mediaPart(env, m), tier), tools: WEB_TOOLS };
-    const models = describeModels(m, tier);
-    for (let i = Math.min(from, models.length - 1); ; i++) {
-      try {
-        const msg = await chat(env, { ...body, model: models[i] }, { userId: m.user_id, memeId, kind: "describe" });
-        if (!msg.content?.trim()) throw new Error(`${models[i]}: empty answer`);
-        await saveDescription(env.DB, memeId, toDescription(parseJson(msg.content), msg.content)).run();
-        break;
-      } catch (e) {
-        if (i + 1 >= models.length || !isBlocked(e)) throw e;
-        console.warn("describe blocked, next model", memeId, models[i], String(e).slice(0, 200));
-      }
+    // Photos of a media group are described in one request: wait until the album is complete and embedded.
+    const album = m.kind === "photo" && !single ? await albumPhotos(env.DB, memeId) : [];
+    if (album.some((a) => a.status === "embedding") || (album.length && Date.now() / 1000 - album[0].album_updated < ALBUM_WAIT)) {
+      await env.JOBS.send({ type: "describe", memeId, from }, { delaySeconds: ALBUM_WAIT });
+      return;
+    }
+    const pending = album.filter((a) => a.status === "describing" && a.title === null);
+    if (pending.length > 1 && pending[0].id !== memeId) return; // the first pending photo describes the album
+    const group = pending.length > 1 ? pending : [m];
+    try {
+      await describeGroup(env, m, group, from);
+    } catch (e) {
+      if (group.length === 1) throw e;
+      // The album request failed: each photo is described alone.
+      console.warn("album describe failed, one by one", memeId, String(e).slice(0, 200));
+      await Promise.all(group.map((g) => env.JOBS.send({ type: "describe", memeId: g.id, single: true })));
+      return;
     }
   }
   await finishStage(env, memeId);
+}
+
+/** Describes the memes in one request (the first one is `m`) and saves the descriptions; the others get finish jobs. */
+async function describeGroup(env: Env, m: Meme, group: Meme[], from: number) {
+  const memeId = m.id;
+  const tier = await userTier(env.DB, m.user_id);
+  const media = group.length > 1
+    ? (await Promise.all(group.map(async (g, i) => [{ type: "text" as const, text: `Image ${i + 1}. User caption: ${JSON.stringify(g.caption ?? "")}.` }, ...(await mediaPart(env, g))]))).flat()
+    : await mediaPart(env, m);
+  const albumText = `This is an album of ${group.length} images sent together; use them as context for each other. Reply {"items": [...]} with one object per image, in order.`;
+  const req = describeRequest(m, await topTags(env.DB, m.user_id), group.length > 1 ? [{ type: "text", text: albumText }, ...media] : media, tier);
+  const body = {
+    ...req,
+    tools: WEB_TOOLS,
+    ...(group.length > 1 && { response_format: { type: "json_schema", json_schema: { name: "album", strict: true, schema: ALBUM_SCHEMA } } }),
+  };
+  const models = describeModels(m, tier);
+  for (let i = Math.min(from, models.length - 1); ; i++) {
+    try {
+      const msg = await chat(env, { ...body, model: models[i] }, { userId: m.user_id, memeId, kind: "describe" });
+      if (!msg.content?.trim()) throw new Error(`${models[i]}: empty answer`);
+      const raw = parseJson(msg.content);
+      const ds = group.length > 1 ? toDescriptions(raw, msg.content, group.length) : [toDescription(raw, msg.content)];
+      await env.DB.batch(group.map((g, j) => saveDescription(env.DB, g.id, ds[j])));
+      await Promise.all(group.slice(1).map((g) => env.JOBS.send({ type: "finish", memeId: g.id })));
+      break;
+    } catch (e) {
+      if (i + 1 >= models.length || !isBlocked(e)) throw e;
+      console.warn("describe blocked, next model", memeId, models[i], String(e).slice(0, 200));
+    }
+  }
 }
 
 /** Stage 3: embeds the saved description, marks the meme ready and updates the status message. */

@@ -28,7 +28,7 @@ interface Post {
   updated_at: number;
 }
 
-const ALBUM_WAIT = 5; // seconds without new album items before posting
+export const ALBUM_WAIT = 5; // seconds without new album items before posting
 
 /** Adds a meme to its post: one post per media group, a new post for a single message. */
 export async function addToPost(db: D1Database, userId: number, p: { memeId: string; mediaGroupId?: string | null; caption?: string | null; position?: number }) {
@@ -43,6 +43,19 @@ export async function addToPost(db: D1Database, userId: number, p: { memeId: str
   await db.prepare("INSERT INTO post_items (post_id, meme_id, position) VALUES (?, ?, ?) ON CONFLICT DO NOTHING")
     .bind(postId, p.memeId, p.position ?? 0)
     .run();
+}
+
+/** Photos of the meme's media group in album order (with the album's last change); empty without a group. */
+export async function albumPhotos(db: D1Database, memeId: string) {
+  const { results } = await db
+    .prepare(
+      `SELECT m.*, p.updated_at AS album_updated FROM post_items i JOIN posts p ON p.id = i.post_id
+       JOIN post_items a ON a.post_id = p.id JOIN memes m ON m.id = a.meme_id
+       WHERE i.meme_id = ? AND p.media_group_id IS NOT NULL AND m.kind = 'photo' ORDER BY a.position`,
+    )
+    .bind(memeId)
+    .all<Meme & { album_updated: number }>();
+  return results;
 }
 
 /** After a meme is processed (ready or failed): check its pending posts. */

@@ -27,6 +27,6 @@ export interface Env {
   BTCPAY_API_KEY?: string; // secret: Greenfield API key with invoice create/view/modify rights
   BTCPAY_WEBHOOK_SECRET?: string; // secret: webhook to PUBLIC_URL/pay/btcpay
   BTCPAY_USDT?: string; // USDt plugin networks, e.g. "Ethereum,Polygon,Plasma" (payment methods USDT-ETHEREUM, …)
-  COBALT_URL?: string; // cobalt API for TikTok links the Worker cannot download itself; https://api.cobalt.tools/ by default
+  COBALT_URL?: string; // cobalt API: media of links sent to the bot; https://api.cobalt.tools/ by default
   COBALT_API_KEY?: string; // secret
 }

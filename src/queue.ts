@@ -12,7 +12,7 @@ import { failSearch, searchJob } from "./search/chat";
 export type SearchJob = { type: "search"; userId: number; messageId: number; placeholderId: number; query: string; lang: Lang };
 export type Job =
   | { type: "embed" | "finish" | "hash" | "rekey"; memeId: string }
-  | { type: "describe"; memeId: string; from?: number } // from: index in describeModels (1 after a blocked batch request)
+  | { type: "describe"; memeId: string; from?: number; single?: boolean } // from: index in describeModels (1 after a blocked batch request); single: not with its album
   | { type: "batch_submit"; importId: string }
   | { type: "batch_poll" }
   | { type: "post"; postId: string }
@@ -32,7 +32,7 @@ async function run(env: Env, job: Job) {
     case "embed":
       return embedStage(env, job.memeId);
     case "describe":
-      return describeStage(env, job.memeId, job.from);
+      return describeStage(env, job.memeId, job.from, job.single);
     case "finish":
       return finishStage(env, job.memeId);
     case "hash":
