@@ -3,6 +3,7 @@ interface WebApp {
   initData: string;
   initDataUnsafe: { user?: { language_code?: string } };
   colorScheme: "light" | "dark";
+  themeParams: Record<string, string | undefined>;
   ready(): void;
   expand(): void;
   close(): void;
@@ -22,10 +23,39 @@ const webApp = (window as unknown as { Telegram?: { WebApp: WebApp } }).Telegram
 /** The Mini App bridge, only when opened inside Telegram (the script also loads in a normal browser). */
 export const tg: WebApp | undefined = webApp?.initData ? webApp : undefined;
 
-/** Follows Telegram's light or dark theme; in a browser the design system follows the OS. */
+/** Design system color tokens taken from Telegram's theme params. */
+const themeColors: Record<string, string> = {
+  canvas: "bg_color",
+  surface: "secondary_bg_color",
+  "surface-muted": "secondary_bg_color",
+  "surface-raised": "section_bg_color",
+  text: "text_color",
+  "text-strong": "text_color",
+  "text-muted": "subtitle_text_color",
+  "text-subtle": "hint_color",
+  border: "section_separator_color",
+  focus: "button_color",
+  accent: "button_color",
+  "accent-hover": "button_color",
+  "accent-active": "button_color",
+  "accent-contrast": "button_text_color",
+  danger: "destructive_text_color",
+};
+
+/** Follows Telegram's theme and colors; in a browser the design system follows the OS. */
 export function syncTheme() {
   if (!tg) return;
-  const apply = () => (document.documentElement.dataset.theme = tg!.colorScheme);
+  const root = document.documentElement;
+  const apply = () => {
+    root.dataset.theme = tg!.colorScheme;
+    for (const [token, param] of Object.entries(themeColors)) {
+      const color = tg!.themeParams[param];
+      if (color) root.style.setProperty(`--cf-color-${token}`, color);
+      else root.style.removeProperty(`--cf-color-${token}`);
+    }
+    for (const [token, mix] of [["accent-soft", 15], ["accent-soft-hover", 25]])
+      root.style.setProperty(`--cf-color-${token}`, `color-mix(in srgb, var(--cf-color-accent) ${mix}%, var(--cf-color-canvas))`);
+  };
   apply();
   tg.onEvent("themeChanged", apply);
 }

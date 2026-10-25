@@ -7,6 +7,7 @@ export interface Env {
   VECTORS: Vectorize;
   MEDIA: R2Bucket; // permanent copies of all media; "tmp/" expires after 7 days
   JOBS: Queue<Job>;
+  OAUTH_KV: KVNamespace; // MCP OAuth grants and tokens
   ZIP: DurableObjectNamespace<ZipImporter>;
   EXPORT: DurableObjectNamespace<DataExporter>;
   ADMIN_ID: string;
@@ -21,9 +22,9 @@ export interface Env {
   OPENROUTER_API_KEY: string;
   ENCRYPTION_KEY: string;
   TG_CLIENT_SECRET: string; // BotFather → Login Widget → Client Secret
-  BTCPAY_URL?: string; // BTCPay Server (BTC, Lightning, XMR, USDT); payments are off without it
+  BTCPAY_URL?: string; // BTCPay Server (BTC, XMR, USDT); payments are off without it
   BTCPAY_STORE_ID?: string;
-  BTCPAY_API_KEY?: string; // secret: Greenfield API key with invoice create/view rights
+  BTCPAY_API_KEY?: string; // secret: Greenfield API key with invoice create/view/modify rights
   BTCPAY_WEBHOOK_SECRET?: string; // secret: webhook to PUBLIC_URL/pay/btcpay
   BTCPAY_USDT?: string; // USDt plugin networks, e.g. "Ethereum,Polygon,Plasma" (payment methods USDT-ETHEREUM, …)
 }

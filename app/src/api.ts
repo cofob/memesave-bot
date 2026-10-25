@@ -86,6 +86,14 @@ export interface Channel {
   caption: string;
 }
 
+export interface Connection {
+  id: string;
+  client: string;
+  domain: string | null;
+  scope: string[];
+  created_at: number;
+}
+
 export type ProductKind = "monthly" | "yearly" | "topup";
 
 export interface Billing {
@@ -206,6 +214,8 @@ export const api = {
   channels: () => call<{ channels: Channel[]; addUrl: string }>("channels"),
   setChannel: (id: number, body: { enabled?: boolean; caption?: string }) => call(`channels/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   removeChannel: (id: number) => call(`channels/${id}`, { method: "DELETE" }),
+  connections: () => call<{ mcp_url: string; items: Connection[] }>("connections"),
+  revokeConnection: (id: string) => call(`connections/${encodeURIComponent(id)}`, { method: "DELETE" }),
   billing: () => call<Billing>("billing"),
   starsInvoice: (kind: ProductKind, stars?: number) => post<{ url: string }>("billing/invoice", { kind, stars }),
   cryptoInvoice: (body: { provider: "btcpay"; kind: ProductKind; usd?: number; crypto?: string }) => post<CryptoInvoice>("billing/crypto", body),

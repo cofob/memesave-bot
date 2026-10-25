@@ -26,8 +26,13 @@ export const PLANS = {
 export const MONTHLY_ALLOWANCE = 0.5; // USD of AI spend per 30-day month on standard (not own-key) plans
 export const STAR_TOPUPS = [100, 250, 500, 1000];
 export const CRYPTO_TOPUPS = [5, 10, 25, 50]; // USD: on-chain fees make small amounts pointless
+export const CRYPTO_INVOICES_PER_HOUR = 5; // per user: each USDT invoice holds an address of the BTCPay pool
 export const LOW_BALANCE = 0.1;
 export const DESCRIBE_MODELS = { max: "google/gemini-4-argon", medium: "openai/gpt-6-luna" } as const; // photos
 // Tier of new accounts. The DB column default stays "max" (SQLite cannot change it), so inserts set it.
 export const DEFAULT_TIER = "medium";
 export const DESCRIBE_FALLBACKS = ["openai/gpt-6-luna", "deepseek/deepseek-v4.1-flash-1017"]; // photos a provider blocks
+
+// MCP: OAuth scopes and the request body limit (base64 of a 10 MB photo).
+export const MCP_SCOPES = { read: "memes:read", write: "memes:write" } as const;
+export const MCP_BODY_MAX = 16 << 20;

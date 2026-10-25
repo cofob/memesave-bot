@@ -31,8 +31,8 @@ beforeEach(() => {
       return Response.json({ ok: true, result: { message_id: 1 } });
     }
     if (url.startsWith("https://pay.example/")) {
-      if (init?.body) btcpayBodies.push(String(init.body));
-      return Response.json({ id: "inv1", status: btcpayStatus, checkoutLink: "https://pay.example/i/inv1" });
+      if (init?.body) btcpayBodies.push(`${url} ${init.body}`);
+      return Response.json({ id: "inv1", status: btcpayStatus, additionalStatus: "None", checkoutLink: "https://pay.example/i/inv1" });
     }
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -153,11 +153,28 @@ describe("BTCPay", () => {
 
   it("limits a USDT invoice to the chosen network", async () => {
     const u = await user(402);
-    await createBtcpayInvoice(e, u, "monthly", 1, "Plasma");
-    expect(JSON.parse(btcpayBodies[0]).checkout.paymentMethods).toEqual(["USDT-PLASMA"]);
+    const body = (i: number) => JSON.parse(btcpayBodies[i].split(" ")[1]);
+    const inv = await createBtcpayInvoice(e, u, "monthly", 1, "Plasma");
+    expect(body(0).checkout.paymentMethods).toEqual(["USDT-PLASMA"]);
+    expect(inv!.usd).toBeGreaterThanOrEqual(0.91);
+    expect(body(0).amount).toBe(inv!.usd.toFixed(2));
     await expect(createBtcpayInvoice(e, u, "monthly", 1, "Tron")).rejects.toThrow();
     await createBtcpayInvoice(e, u, "monthly", 1);
-    expect(JSON.parse(btcpayBodies[1]).checkout.paymentMethods).toBeUndefined();
+    expect(body(1).checkout.paymentMethods).toBeUndefined();
+    expect(body(1).amount).toBe("1.00");
+  });
+
+  it("cancels unpaid invoices and limits invoices per hour", async () => {
+    const u = await user(403);
+    btcpayStatus = "New";
+    await createBtcpayInvoice(e, u, "monthly", 1, "Ethereum");
+    await createBtcpayInvoice(e, u, "monthly", 1, "Ethereum");
+    btcpayStatus = "Settled";
+    expect(btcpayBodies[1]).toBe('https://pay.example/api/v1/stores/st/invoices/inv1/status {"status":"Invalid"}');
+    const statuses = await e.DB.prepare("SELECT status FROM crypto_invoices WHERE user_id = 403 ORDER BY created_at, rowid").all<{ status: string }>();
+    expect(statuses.results.map((r) => r.status)).toEqual(["invalid", "pending"]);
+    for (let i = 0; i < 3; i++) expect(await createBtcpayInvoice(e, u, "monthly", 1)).not.toBeNull();
+    expect(await createBtcpayInvoice(e, u, "monthly", 1)).toBeNull();
   });
 });
 

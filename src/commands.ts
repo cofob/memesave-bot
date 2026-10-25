@@ -1,7 +1,7 @@
 import type { Composer } from "grammy";
 import type { Message } from "grammy/types";
 import type { Ctx } from "./bot";
-import { MODELS } from "./config";
+import { DESCRIBE_MODELS, MODELS } from "./config";
 import { deleteMeme, type User } from "./db";
 import type { Env } from "./env";
 import { EMOJI, esc, t, usd, type Lang } from "./i18n";
@@ -91,9 +91,14 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
     ctx.reply(t(ctx.lang, "help") + (ctx.user.role === "admin" ? t(ctx.lang, "help_admin") : ""), html),
   );
 
+  bot.command("mcp", (ctx) => {
+    const app = { text: t(ctx.lang, "app_button"), web_app: { url: `${env.PUBLIC_URL.replace(/\/$/, "")}/` } };
+    return ctx.reply(t(ctx.lang, "mcp", { url: `${env.PUBLIC_URL.replace(/\/$/, "")}/mcp` }), { ...html, reply_markup: { inline_keyboard: [[app]] } });
+  });
+
   bot.command("about", (ctx) =>
     ctx.reply(
-      t(ctx.lang, "about", { embed: MODELS.embed, image: MODELS.describeImage, video: MODELS.describeVideo, search: MODELS.search }),
+      t(ctx.lang, "about", { embed: MODELS.embed, image: DESCRIBE_MODELS[ctx.user.describe_tier], video: MODELS.describeVideo, search: MODELS.search }),
       html,
     ),
   );

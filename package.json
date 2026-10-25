@@ -15,9 +15,12 @@
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",
+    "@cloudflare/workers-oauth-provider": "^1.2.4",
     "@grammyjs/auto-retry": "^2.0.2",
+    "@modelcontextprotocol/server": "^2.4.0",
     "aws4fetch": "^1.0.20",
-    "grammy": "^1.46.0"
+    "grammy": "^1.46.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.7",

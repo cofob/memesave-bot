@@ -1,3 +1,4 @@
+import OAuthProvider from "@cloudflare/workers-oauth-provider";
 import { botApi } from "./botapi";
 import { webhookCallback } from "grammy";
 import { createBot } from "./bot";
@@ -7,9 +8,10 @@ import { expireExports, handleExport } from "./export";
 import { queueHashBackfill } from "./ingest/embed";
 import { queueRekey } from "./rekey";
 import { handleBatch, type Job } from "./queue";
-import { oauthCallback } from "./userkey";
+import { backToBot, oauthCallback } from "./userkey";
 import { serveMedia } from "./media";
 import { handleLogin } from "./login";
+import { handleAuthorize, oauthOptions } from "./oauth";
 import { handleApp } from "./webapp";
 import { billingNotices } from "./billing";
 import { handleBtcpay } from "./crypto";
@@ -20,11 +22,15 @@ export { DataExporter } from "./export";
 
 let handler: ((req: Request) => Promise<Response>) | undefined;
 let synced: Promise<unknown> | undefined;
+let oauth: OAuthProvider<Env> | undefined;
 
-export default {
+/** All routes except the ones OAuthProvider serves itself (/mcp, /oauth/token, /oauth/register, /.well-known/*). */
+const app = {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
+    if (req.method === "GET" && url.pathname === "/bot") return backToBot(env);
     if (req.method === "GET" && url.pathname === "/oauth/callback") return oauthCallback(req, env);
+    if (url.pathname === "/oauth/authorize") return handleAuthorize(req, env);
     if (req.method === "GET" && url.pathname.startsWith("/media/")) return serveMedia(req, env, ctx);
     if (url.pathname.startsWith("/upload/")) return handleUpload(req, env, ctx);
     if (url.pathname.startsWith("/app")) return (await handleApp(req, env, ctx)) ?? new Response("Not found", { status: 404 });
@@ -49,6 +55,10 @@ export default {
     handler ??= webhookCallback(createBot(env), "cloudflare-mod", { timeoutMilliseconds: 55_000, onTimeout: "return" });
     return handler(req);
   },
+} satisfies ExportedHandler<Env>;
+
+export default {
+  fetch: (req, env, ctx) => (oauth ??= new OAuthProvider(oauthOptions(env, app))).fetch(req, env, ctx),
   queue: handleBatch,
   async scheduled(_, env) {
     await expireZipUploads(env.DB);

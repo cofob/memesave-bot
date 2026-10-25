@@ -48,7 +48,7 @@ const base = (env: Env) => env.PUBLIC_URL.replace(/\/$/, "");
 // Telegram-only files over 20 MB cannot be downloaded by the bot; R2 copies always can be served.
 const fileFits = (m: Meme) => !!m.r2_file || m.kind === "photo" || (m.file_size ?? Infinity) <= FILE_MAX;
 
-async function brief(env: Env, m: Meme) {
+export async function brief(env: Env, m: Meme) {
   return {
     id: m.id,
     kind: m.kind,
@@ -66,7 +66,7 @@ async function brief(env: Env, m: Meme) {
   };
 }
 
-async function detail(env: Env, m: Meme) {
+export async function detail(env: Env, m: Meme) {
   return {
     ...(await brief(env, m)),
     caption: m.caption,
@@ -85,7 +85,7 @@ const fileName = (m: Meme) =>
   `${(m.title ?? "").replace(/[^\p{L}\p{N}]+/gu, "_").replace(/^_+|_+$/g, "").slice(0, 60) || m.id}.${extOf(m.mime ?? (m.kind === "photo" ? "image/jpeg" : "video/mp4"))}`;
 
 /** The user's memes among `ids` (max 100). */
-async function ownMemes(env: Env, userId: number, ids: string[]) {
+export async function ownMemes(env: Env, userId: number, ids: string[]) {
   ids = ids.filter((id) => typeof id === "string").slice(0, 100);
   if (!ids.length) return [];
   const q = ids.map(() => "?").join(",");
@@ -94,7 +94,7 @@ async function ownMemes(env: Env, userId: number, ids: string[]) {
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 
-async function listMemes(env: Env, user: User, url: URL) {
+export async function listMemes(env: Env, user: User, url: URL) {
   const sort = { new: "created_at DESC", old: "created_at ASC", title: "title IS NULL, title COLLATE NOCASE" }[url.searchParams.get("sort") ?? "new"];
   const tag = url.searchParams.get("tag");
   const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
@@ -109,7 +109,7 @@ async function listMemes(env: Env, user: User, url: URL) {
   };
 }
 
-async function tagCounts(env: Env, user: User) {
+export async function tagCounts(env: Env, user: User) {
   const { results } = await env.DB.prepare("SELECT tags FROM memes WHERE user_id = ? AND tags IS NOT NULL").bind(user.id).all<{ tags: string }>();
   const count = new Map<string, number>();
   for (const r of results) for (const tag of r.tags.split("\n")) if (tag) count.set(tag, (count.get(tag) ?? 0) + 1);
@@ -130,8 +130,8 @@ async function authUser(req: Request, env: Env): Promise<User | null> {
   return userId ? getUser(env.DB, userId) : null;
 }
 
-const LIMITS: Record<Kind, number> = { photo: 10 << 20, video: 50 << 20, animation: 50 << 20 }; // Bot API send limits
-const kindOf = (mime: string): Kind | null =>
+export const LIMITS: Record<Kind, number> = { photo: 10 << 20, video: 50 << 20, animation: 50 << 20 }; // Bot API send limits
+export const kindOf = (mime: string): Kind | null =>
   mime === "image/gif" ? "animation" : mime.startsWith("image/") ? "photo" : mime.startsWith("video/") ? "video" : null;
 const num = (v: File | string | null) => (typeof v === "string" && v ? Math.round(Number(v)) || null : null);
 
@@ -140,19 +140,33 @@ async function upload(env: Env, user: User, req: Request) {
   const form = await req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) return json({ error: "file required" }, 400);
+  const res = await saveUpload(env, user, file, {
+    thumb: form.get("thumb"),
+    width: num(form.get("width")),
+    height: num(form.get("height")),
+    duration: num(form.get("duration")),
+  });
+  return "error" in res ? json({ error: res.error }, res.status) : json(res);
+}
+
+type UploadMeta = { thumb?: File | string | null; width?: number | null; height?: number | null; duration?: number | null };
+
+/** Saves an uploaded file as a new meme (the app and MCP). */
+export async function saveUpload(env: Env, user: User, file: File, meta: UploadMeta = {}) {
+  const fail = (error: string, status: number) => ({ error, status });
   const kind = kindOf(file.type);
-  if (!kind) return json({ error: "only photos, videos and GIFs" }, 415);
-  if (file.size > LIMITS[kind]) return json({ error: "file too large" }, 413);
+  if (!kind) return fail("only photos, videos and GIFs", 415);
+  if (file.size > LIMITS[kind]) return fail("file too large", 413);
 
   const bytes = await file.arrayBuffer();
   const sha256 = hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
   const existing = await env.DB.prepare("SELECT id FROM memes WHERE user_id = ? AND sha256 = ?").bind(user.id, sha256).first<string>("id");
-  if (existing) return json({ id: existing, duplicate: true });
+  if (existing) return { id: existing, duplicate: true };
 
   const base = `u/${user.id}/${sha256}`;
   const key = fileKey(base, file.type);
   await env.MEDIA.put(key, bytes, { httpMetadata: { contentType: file.type } });
-  const thumb = form.get("thumb");
+  const thumb = meta.thumb;
   const hasThumb = kind !== "photo" && thumb instanceof File && thumb.size > 0 && thumb.size < 1 << 20;
   if (hasThumb) await env.MEDIA.put(previewKey(base), await thumb.arrayBuffer(), { httpMetadata: { contentType: "image/jpeg" } });
 
@@ -168,18 +182,37 @@ async function upload(env: Env, user: User, req: Request) {
     r2_preview: hasThumb ? previewKey(base) : null,
     mime: file.type,
     file_size: file.size,
-    width: num(form.get("width")),
-    height: num(form.get("height")),
-    duration: num(form.get("duration")),
+    width: meta.width ?? null,
+    height: meta.height ?? null,
+    duration: meta.duration ?? null,
     caption: null,
     source: null,
     import_id: importId,
     sha256,
   });
-  if (!id) return json({ error: "already saved" }, 409);
+  if (!id) return fail("already saved", 409);
   if (!importId) await addToPost(env.DB, user.id, { memeId: id });
   await env.JOBS.send({ type: "embed", memeId: id });
-  return json({ id, duplicate: false, batched: importId !== null });
+  return { id, duplicate: false, batched: importId !== null };
+}
+
+/** Signed download links (saved as attachments) for the user's memes among `ids`. */
+export async function downloadLinks(env: Env, userId: number, ids: string[]) {
+  const memes = (await ownMemes(env, userId, ids)).filter(fileFits);
+  return Promise.all(
+    memes.map(async (m) => {
+      const name = fileName(m);
+      return { id: m.id, name, url: `${base(env)}/app/file/${m.id}${await signedQuery(env, `file|${m.id}`, URL_TTL)}&dl=${encodeURIComponent(name)}` };
+    }),
+  );
+}
+
+/** Same as forwarding a failed meme again in the bot; false when the meme has not failed. */
+export async function retryMeme(env: Env, meme: Meme) {
+  if (meme.status !== "failed") return false;
+  await env.DB.prepare("UPDATE memes SET status = 'embedding', error = NULL, updated_at = unixepoch() WHERE id = ?").bind(meme.id).run();
+  await env.JOBS.send({ type: "embed", memeId: meme.id });
+  return true;
 }
 
 /** /app/api/* — Mini App and web API. */
@@ -235,15 +268,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   }
   if (resource === "files" && req.method === "GET") {
     // Batch download: signed links that the browser saves as attachments.
-    const memes = (await ownMemes(env, user.id, (url.searchParams.get("ids") ?? "").split(","))).filter(fileFits);
-    return json(
-      await Promise.all(
-        memes.map(async (m) => {
-          const name = fileName(m);
-          return { id: m.id, name, url: `${base(env)}/app/file/${m.id}${await signedQuery(env, `file|${m.id}`, URL_TTL)}&dl=${encodeURIComponent(name)}` };
-        }),
-      ),
-    );
+    return json(await downloadLinks(env, user.id, (url.searchParams.get("ids") ?? "").split(",")));
   }
   if (resource === "tags" && req.method === "GET") return json(await tagCounts(env, user));
   if (resource === "facets" && req.method === "GET") return json(await facets(env.DB, user.id));
@@ -287,11 +312,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
     return json({ ok: true });
   }
   if (action === "retry" && req.method === "POST") {
-    // Same as forwarding a failed meme again in the bot.
-    if (meme.status !== "failed") return json({ error: "not failed" }, 409);
-    await env.DB.prepare("UPDATE memes SET status = 'embedding', error = NULL, updated_at = unixepoch() WHERE id = ?").bind(meme.id).run();
-    await env.JOBS.send({ type: "embed", memeId: meme.id });
-    return json({ ok: true });
+    return (await retryMeme(env, meme)) ? json({ ok: true }) : json({ error: "not failed" }, 409);
   }
   const api = botApi(env.BOT_TOKEN);
   if (action === "share" && req.method === "POST") {

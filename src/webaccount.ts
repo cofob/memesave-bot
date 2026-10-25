@@ -11,6 +11,7 @@ import { oauthUrl, setUserKey } from "./userkey";
 import { createZipImport, zipStatus } from "./zip";
 import { exportStatus, setExportStatusMessage, startExport } from "./export";
 import { accountSummary, CONFIRM, deleteAccount } from "./purge";
+import { oauthApi } from "./oauth";
 import { billingStatus, ownKey, starsInvoiceLink, type ProductKind } from "./billing";
 import { addChannelUrl, listChannels, removeChannel, updateChannel } from "./channels";
 import { btcpayOn, createBtcpayInvoice, getInvoice, productUsd, usdtNetworks } from "./crypto";
@@ -99,6 +100,22 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
     if (m === "DELETE" && id) return (await removeChannel(env, user.id, Number(id))) ? json({ ok: true }) : json({ error: "not found" }, 404);
   }
 
+  if (resource === "connections") {
+    // MCP clients connected with OAuth (src/oauth.ts).
+    const api = oauthApi(env);
+    if (m === "GET" && !id) {
+      const { items } = await api.listUserGrants(String(user.id), { limit: 100 });
+      return json({
+        mcp_url: `${env.PUBLIC_URL.replace(/\/$/, "")}/mcp`,
+        items: items.map((g) => ({ id: g.id, client: g.metadata?.client ?? g.clientId, domain: g.metadata?.domain ?? null, scope: g.scope, created_at: g.createdAt })),
+      });
+    }
+    if (m === "DELETE" && id) {
+      await api.revokeGrant(id, String(user.id));
+      return json({ ok: true });
+    }
+  }
+
   if (resource === "billing") {
     if (m === "GET" && !id) return json({ ...(await billingStatus(env, user)), methods: { btcpay: btcpayOn(env), usdt: usdtNetworks(env) } });
     if (m === "GET" && id === "crypto") {
@@ -113,7 +130,10 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
       const amount = productUsd(kind, ownKey(user), body.usd);
       if (amount === null) return json({ error: "bad product" }, 400);
       try {
-        if (body.provider === "btcpay" && btcpayOn(env)) return json(await createBtcpayInvoice(env, user, kind, amount, body.crypto));
+        if (body.provider === "btcpay" && btcpayOn(env)) {
+          const inv = await createBtcpayInvoice(env, user, kind, amount, body.crypto);
+          return inv ? json(inv) : json({ error: "too many invoices" }, 429);
+        }
       } catch (e) {
         console.error("crypto checkout", e); // e.g. the processor's node is not synced
         return json({ error: "payment method unavailable" }, 503);

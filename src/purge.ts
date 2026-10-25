@@ -2,6 +2,7 @@ import { botApi } from "./botapi";
 import type { User } from "./db";
 import type { Env } from "./env";
 import { tmpKey } from "./media";
+import { oauthApi } from "./oauth";
 
 export const CONFIRM = "DELETE";
 const CHUNK = 200;
@@ -20,6 +21,17 @@ export async function accountSummary(db: D1Database, userId: number) {
  * so pipeline jobs stop and a returning user starts clean; the purge job then removes them with their
  * vectors and R2 files in the background.
  */
+/** Revokes all MCP connections (OAuth grants) of the user. */
+export async function revokeConnections(env: Env, userId: number) {
+  const api = oauthApi(env);
+  let cursor: string | undefined;
+  do {
+    const page = await api.listUserGrants(String(userId), { cursor });
+    for (const g of page.items) await api.revokeGrant(g.id, String(userId));
+    cursor = page.cursor;
+  } while (cursor);
+}
+
 export async function deleteAccount(env: Env, user: User) {
   const db = env.DB;
   if (user.sub_charge_id && user.sub_state === "active") {
@@ -33,6 +45,7 @@ export async function deleteAccount(env: Env, user: User) {
   for (let i = 0; i < archives.length; i += 1000) await env.MEDIA.delete(archives.slice(i, i + 1000));
   const { results: channels } = await db.prepare("SELECT chat_id FROM channels WHERE user_id = ?").bind(user.id).all<{ chat_id: number }>();
   for (const ch of channels) await botApi(env.BOT_TOKEN).leaveChat(ch.chat_id).catch(() => {});
+  await revokeConnections(env, user.id).catch(console.error);
   const tables = ["transactions", "imports", "zip_imports", "exports", "payments", "crypto_invoices", "notices", "oauth_states", "channels", "posts"];
   await db.batch([
     db.prepare("DELETE FROM post_items WHERE post_id IN (SELECT id FROM posts WHERE user_id = ?)").bind(user.id),

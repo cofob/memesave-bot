@@ -12,6 +12,9 @@ const random = (n: number) => b64url(crypto.getRandomValues(new Uint8Array(n)));
 const botId = (env: Env) => env.BOT_TOKEN.split(":")[0];
 const redirectUri = (env: Env) => `${env.PUBLIC_URL.replace(/\/$/, "")}/auth/telegram/callback`;
 
+// After login the user returns only to the MCP consent page; anything else goes to "/" (no open redirect).
+const nextPath = (next: string | null | undefined) => (next?.startsWith("/oauth/authorize?") ? next : "/");
+
 function redirect(location: string, cookies: string[] = []) {
   const headers = new Headers({ Location: location });
   for (const c of cookies) headers.append("Set-Cookie", c);
@@ -63,12 +66,13 @@ export async function handleLogin(req: Request, env: Env): Promise<Response | nu
       code_challenge: b64url(await crypto.subtle.digest("SHA-256", enc(verifier))),
       code_challenge_method: "S256",
     });
-    return redirect(`${ISSUER}/auth?${params}`, [cookie("tg_login", `${state}.${verifier}`, 600)]);
+    const next = b64url(enc(nextPath(url.searchParams.get("next"))));
+    return redirect(`${ISSUER}/auth?${params}`, [cookie("tg_login", `${state}.${verifier}.${next}`, 600)]);
   }
 
   if (url.pathname === "/auth/telegram/callback") {
     const fail = (error: string) => redirect(`/?error=${error}`, [cookie("tg_login", "", 0)]);
-    const [state, verifier] = (getCookie(req, "tg_login") ?? "").split(".");
+    const [state, verifier, next] = (getCookie(req, "tg_login") ?? "").split(".");
     const code = url.searchParams.get("code");
     if (!state || !verifier || !code || state !== url.searchParams.get("state")) return fail("login_failed");
 
@@ -93,7 +97,7 @@ export async function handleLogin(req: Request, env: Env): Promise<Response | nu
       language_code: lang,
     });
     if (!access) return fail("no_access");
-    return redirect("/", [cookie("session", await createSession(env, access.user.id), SESSION_TTL), cookie("tg_login", "", 0)]);
+    return redirect(nextPath(Buffer.from(next ?? "", "base64url").toString()), [cookie("session", await createSession(env, access.user.id), SESSION_TTL), cookie("tg_login", "", 0)]);
   }
 
   if (url.pathname === "/auth/logout" && req.method === "POST") {

@@ -1,10 +1,10 @@
 import { applyPayment, langOfUser, paymentText, planUsd, type ProductKind } from "./billing";
 import { botApi } from "./botapi";
-import { CRYPTO_TOPUPS } from "./config";
+import { CRYPTO_INVOICES_PER_HOUR, CRYPTO_TOPUPS } from "./config";
 import type { User } from "./db";
 import type { Env } from "./env";
 
-// Crypto payments via BTCPay Server: BTC, Lightning, XMR and USDT (USDt plugin). One-time, no auto-renewal.
+// Crypto payments via BTCPay Server: BTC, XMR and USDT (USDt plugin). One-time, no auto-renewal.
 
 export type Provider = "btcpay";
 
@@ -53,15 +53,42 @@ const btcpayApi = (env: Env, path: string, init: RequestInit = {}) =>
     headers: { Authorization: `token ${env.BTCPAY_API_KEY}`, "Content-Type": "application/json" },
   });
 
-/** BTCPay invoice: the user pays on BTCPay's checkout page; with a network, only in USDT on that network. */
+/** Marks the user's recent invoices without payments invalid: BTCPay then frees their USDT addresses. */
+async function cancelUnpaid(env: Env, userId: number) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, provider_ref FROM crypto_invoices WHERE user_id = ? AND status IN ('pending', 'expired') AND created_at > unixepoch() - 2 * 86400",
+  )
+    .bind(userId)
+    .all<Pick<CryptoInvoice, "id" | "provider_ref">>();
+  for (const inv of results) {
+    const path = `/${encodeURIComponent(inv.provider_ref ?? "")}`;
+    const res = await btcpayApi(env, path);
+    const live = res.ok ? await res.json<{ status: string; additionalStatus: string }>() : null;
+    if (!live || live.additionalStatus !== "None" || !["New", "Expired"].includes(live.status)) continue;
+    const marked = await btcpayApi(env, `${path}/status`, { method: "POST", body: JSON.stringify({ status: "Invalid" }) });
+    if (marked.ok) await env.DB.prepare("UPDATE crypto_invoices SET status = 'invalid' WHERE id = ?").bind(inv.id).run();
+  }
+}
+
+/**
+ * BTCPay invoice: the user pays on BTCPay's checkout page; with a network, only in USDT on that network.
+ * Null when the user made too many invoices in the last hour. A USDT price is 1-9 cents lower at random
+ * (BTCPay rounds USD to cents), so payments to a reused address differ; the full price is credited.
+ */
 export async function createBtcpayInvoice(env: Env, u: User, kind: ProductKind, usdAmount: number, network?: string) {
   if (network && !usdtNetworks(env).includes(network)) throw new Error("unknown network");
+  const recent = await env.DB.prepare("SELECT COUNT(*) AS n FROM crypto_invoices WHERE user_id = ? AND created_at > unixepoch() - 3600")
+    .bind(u.id)
+    .first<number>("n");
+  if ((recent ?? 0) >= CRYPTO_INVOICES_PER_HOUR) return null;
+  await cancelUnpaid(env, u.id);
   const id = crypto.randomUUID();
   const byok = u.openrouter_key !== null ? 1 : 0;
+  const price = network ? usdAmount - (1 + Math.floor(Math.random() * 9)) / 100 : usdAmount;
   const res = await btcpayApi(env, "", {
     method: "POST",
     body: JSON.stringify({
-      amount: String(usdAmount),
+      amount: price.toFixed(2),
       currency: "USD",
       metadata: { orderId: id, userId: u.id, kind, byok },
       checkout: {
@@ -74,7 +101,7 @@ export async function createBtcpayInvoice(env: Env, u: User, kind: ProductKind, 
   if (!res.ok) throw new Error(`btcpay ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const inv = await res.json<{ id: string; checkoutLink: string }>();
   await insertInvoice(env.DB, { id, user_id: u.id, provider: "btcpay", kind, byok, usd: usdAmount, provider_ref: inv.id, crypto: network });
-  return { id, url: inv.checkoutLink };
+  return { id, url: inv.checkoutLink, usd: price };
 }
 
 export const getInvoice = (db: D1Database, id: string) => db.prepare("SELECT * FROM crypto_invoices WHERE id = ?").bind(id).first<CryptoInvoice>();

@@ -43,6 +43,7 @@ Forward a photo, video or GIF to save it. Send text to search: a caption fragmen
 /export — download all your data as a .zip
 /delete_all — delete your account and all data
 /channels — auto-post new memes to your channels
+/mcp — connect Claude, ChatGPT and other AI apps
 /subscribe, /balance — plan and AI balance
 /paysupport, /terms — payment support and terms
 /about — what the bot stores`,
@@ -53,9 +54,10 @@ Forward a photo, video or GIF to save it. Send text to search: a caption fragmen
 /users — list users
 /stats all — spend of all users`,
   about: `${E.help} <b>memesave</b>
-Media stays in Telegram: I keep only file ids and text metadata. Downloaded copies for AI requests live in a temporary cache for max 7 days.
-Each meme is embedded ({embed}) and described ({image} / {video}) with web search. Search uses {search}.
-Every AI request cost is saved to your /stats.`,
+<b>Storage.</b> Each meme has a permanent copy in Cloudflare R2, with its text metadata and embeddings. Temporary files (search cache, .zip uploads, export archives) are deleted after max 7 days. Your own OpenRouter key is stored encrypted.
+<b>AI.</b> Each meme gets an embedding ({embed}) and a description: photos by {image} (quality in /settings), videos and GIFs by {video}. Single memes are checked with web search; /batch does not use it. When a provider refuses a photo, a fallback model describes it. Search uses {search}.
+<b>Access.</b> Only you see your memes. An AI app connected with /mcp gets access only after your approval; you can revoke it in the app.
+Every AI request cost is saved to your /stats. /export downloads all your data, /delete_all deletes it.`,
   unknown_cmd: `${E.help} Unknown command. See /help`,
   unsupported: `${E.error} Only photos, videos and GIFs are supported.`,
   saving: `${E.indexing} Saved, indexing…`,
@@ -139,6 +141,18 @@ To confirm, send <code>/delete_all {confirm}</code>`,
   page_done: "Upload complete. You can return to Telegram: the bot shows the progress.",
   page_error: "Upload failed. Open the link from the bot again and retry.",
   page_used: "This link was already used. Send /batch_zip to the bot for a new one.",
+  consent_title: "Connect an AI app",
+  consent_lead: "{client} wants access to your meme library.",
+  consent_domain: "Verified domain: {domain}",
+  consent_unverified: "The app name is not verified.",
+  consent_redirect: "After you allow it, access goes to {host}.",
+  consent_loopback: "Access goes to an app on this computer. Allow it only if you started the connection yourself.",
+  consent_as: "Logged in as {user}",
+  consent_read: "View, search and download your memes, see your stats and balance, send memes to your chat",
+  consent_write: "Upload, delete and reprocess memes",
+  consent_allow: "Allow",
+  consent_deny: "Deny",
+  consent_error: "This connection request is not valid. Start the connection again in the app.",
   bill_btn_subscribe: "Subscribe",
   bill_btn_topup: "Top up",
   bill_btn_balance: "Balance",
@@ -180,10 +194,11 @@ Own OpenRouter key: {own}`,
   bill_no: "not connected",
   bill_topup_choose: `${E.help} Choose a top-up. Stars are added at {rate} per ⭐.`,
   bill_pay_link: `${E.help} {title}: {stars}⭐`,
-  bill_crypto_checkout: `${E.help} Pay <b>{usd}</b> in Bitcoin, Lightning or Monero on the payment page (valid 60 min). I will tell you when the payment is confirmed.`,
+  bill_crypto_checkout: `${E.help} Pay <b>{usd}</b> in Bitcoin or Monero on the payment page (valid 60 min). I will tell you when the payment is confirmed.`,
   bill_usdt_choose: `${E.help} Choose the USDT network:`,
   bill_usdt_checkout: `${E.help} Pay <b>{usd}</b> in USDT ({network}) on the payment page (valid 60 min). Only this network! I will tell you when the payment is confirmed.`,
   bill_crypto_unavailable: `${E.error} This payment method is not available right now. Try another one.`,
+  bill_crypto_limit: `${E.error} Too many payment attempts. Try again in an hour, or pay with Stars.`,
   bill_title_monthly: "memesave · 1 month",
   bill_title_yearly: "memesave · 12 months",
   bill_title_topup: "memesave · AI balance",
@@ -253,6 +268,18 @@ Send <code>-</code> for no caption. Now: <code>{current}</code>`,
   cmd_settings: "Search mode",
   cmd_delete: "Reply to a meme to delete it",
   cmd_about: "About the bot",
+  cmd_mcp: "Connect AI apps (MCP)",
+  mcp: `${E.help} <b>Connect AI apps (MCP)</b>
+Give Claude, ChatGPT, Cursor or another AI app access to your meme library. The app can search, view, download and upload memes and see your balance.
+
+Server URL: <code>{url}</code>
+
+• <b>Claude</b>: Settings → Connectors → Add custom connector, paste the URL.
+• <b>Claude Code</b>: run <code>claude mcp add --transport http memesave {url}</code>, then <code>/mcp</code> in Claude Code.
+• <b>Cursor and other apps</b>: add the URL as a remote MCP server in the app's MCP settings.
+
+The app opens a login page: log in with Telegram and allow access. For read-only access, clear the option "Upload, delete and reprocess memes". AI search and uploads use your AI balance, as in the bot.
+To see or revoke connections, open the app: Account → Settings.`,
   cmd_key: "Own OpenRouter key",
   cmd_batch: "Start a cheap batch import",
   cmd_batch_finish: "Submit the batch import",
@@ -292,6 +319,7 @@ const ru: Record<Key, string> = {
 /export — скачать все ваши данные в .zip
 /delete_all — удалить аккаунт и все данные
 /channels — автопостинг новых мемов в ваши каналы
+/mcp — подключить Claude, ChatGPT и другие ИИ-приложения
 /subscribe, /balance — тариф и баланс ИИ
 /paysupport, /terms — поддержка по оплате и условия
 /about — что хранит бот`,
@@ -302,9 +330,10 @@ const ru: Record<Key, string> = {
 /users — список пользователей
 /stats all — расходы всех пользователей`,
   about: `${E.help} <b>memesave</b>
-Медиа остаются в Telegram: я храню только file id и текстовые метаданные. Копии для запросов к ИИ лежат во временном кэше максимум 7 дней.
-Каждый мем получает эмбеддинг ({embed}) и описание ({image} / {video}) с веб-поиском. Поиск использует {search}.
-Стоимость каждого запроса к ИИ сохраняется в /stats.`,
+<b>Хранение.</b> У каждого мема есть постоянная копия в Cloudflare R2, вместе с текстовыми метаданными и эмбеддингами. Временные файлы (кэш поиска, загрузки .zip, архивы экспорта) удаляются максимум через 7 дней. Ваш собственный ключ OpenRouter хранится в зашифрованном виде.
+<b>ИИ.</b> Каждый мем получает эмбеддинг ({embed}) и описание: фото — {image} (качество в /settings), видео и GIF — {video}. Одиночные мемы проверяются веб-поиском; /batch его не использует. Если провайдер отказывается обрабатывать фото, его описывает резервная модель. Поиск использует {search}.
+<b>Доступ.</b> Ваши мемы видите только вы. ИИ-приложение, подключённое через /mcp, получает доступ только после вашего разрешения; отозвать его можно в приложении.
+Стоимость каждого запроса к ИИ сохраняется в /stats. /export скачивает все ваши данные, /delete_all удаляет их.`,
   unknown_cmd: `${E.help} Неизвестная команда. См. /help`,
   unsupported: `${E.error} Поддерживаются только фото, видео и GIF.`,
   saving: `${E.indexing} Сохранено, индексирую…`,
@@ -388,6 +417,18 @@ const ru: Record<Key, string> = {
   page_done: "Загрузка завершена. Можно вернуться в Telegram: бот покажет прогресс.",
   page_error: "Загрузка не удалась. Откройте ссылку из бота ещё раз и повторите.",
   page_used: "Эта ссылка уже использована. Отправьте боту /batch_zip, чтобы получить новую.",
+  consent_title: "Подключение ИИ-приложения",
+  consent_lead: "{client} запрашивает доступ к вашей коллекции мемов.",
+  consent_domain: "Проверенный домен: {domain}",
+  consent_unverified: "Название приложения не проверено.",
+  consent_redirect: "После разрешения доступ получит {host}.",
+  consent_loopback: "Доступ получит приложение на этом компьютере. Разрешайте, только если вы сами начали подключение.",
+  consent_as: "Вы вошли как {user}",
+  consent_read: "Просмотр, поиск и скачивание мемов, статистика и баланс, отправка мемов в ваш чат",
+  consent_write: "Загрузка, удаление и повторная обработка мемов",
+  consent_allow: "Разрешить",
+  consent_deny: "Отклонить",
+  consent_error: "Запрос на подключение недействителен. Начните подключение в приложении заново.",
   bill_btn_subscribe: "Подписаться",
   bill_btn_topup: "Пополнить",
   bill_btn_balance: "Баланс",
@@ -429,10 +470,11 @@ const ru: Record<Key, string> = {
   bill_no: "не подключён",
   bill_topup_choose: `${E.help} Выберите пополнение. Звёзды зачисляются по {rate} за ⭐.`,
   bill_pay_link: `${E.help} {title}: {stars}⭐`,
-  bill_crypto_checkout: `${E.help} Оплатите <b>{usd}</b> в Bitcoin, Lightning или Monero на странице оплаты (действует 60 мин). Я напишу, когда платёж подтвердится.`,
+  bill_crypto_checkout: `${E.help} Оплатите <b>{usd}</b> в Bitcoin или Monero на странице оплаты (действует 60 мин). Я напишу, когда платёж подтвердится.`,
   bill_usdt_choose: `${E.help} Выберите сеть USDT:`,
   bill_usdt_checkout: `${E.help} Оплатите <b>{usd}</b> в USDT ({network}) на странице оплаты (действует 60 мин). Только эта сеть! Я напишу, когда платёж подтвердится.`,
   bill_crypto_unavailable: `${E.error} Этот способ оплаты сейчас недоступен. Попробуйте другой.`,
+  bill_crypto_limit: `${E.error} Слишком много попыток оплаты. Попробуйте через час или оплатите звёздами.`,
   bill_title_monthly: "memesave · 1 месяц",
   bill_title_yearly: "memesave · 12 месяцев",
   bill_title_topup: "memesave · баланс ИИ",
@@ -502,6 +544,18 @@ const ru: Record<Key, string> = {
   cmd_settings: "Режим поиска",
   cmd_delete: "Ответьте на мем, чтобы удалить",
   cmd_about: "О боте",
+  cmd_mcp: "Подключить ИИ-приложения (MCP)",
+  mcp: `${E.help} <b>Подключение ИИ-приложений (MCP)</b>
+Дайте Claude, ChatGPT, Cursor или другому ИИ-приложению доступ к коллекции мемов. Приложение сможет искать, смотреть, скачивать и загружать мемы и видеть ваш баланс.
+
+Адрес сервера: <code>{url}</code>
+
+• <b>Claude</b>: Настройки → Коннекторы → Добавить свой коннектор, вставьте адрес.
+• <b>Claude Code</b>: выполните <code>claude mcp add --transport http memesave {url}</code>, затем <code>/mcp</code> в Claude Code.
+• <b>Cursor и другие приложения</b>: добавьте адрес как удалённый MCP-сервер в настройках MCP приложения.
+
+Приложение откроет страницу входа: войдите через Telegram и разрешите доступ. Для доступа только на чтение снимите галочку «Загрузка, удаление и повторная обработка мемов». ИИ-поиск и загрузки тратят ваш баланс ИИ, как в боте.
+Подключения можно посмотреть и отозвать в приложении: Аккаунт → Настройки.`,
   cmd_key: "Свой ключ OpenRouter",
   cmd_batch: "Начать дешёвый пакетный импорт",
   cmd_batch_finish: "Отправить пакетный импорт",

@@ -68,7 +68,7 @@ export async function oauthUrl(env: Env, userId: number, returnTo: "telegram" | 
 }
 
 /** Redirects back to the bot chat; `start` makes Telegram send /start <start>. */
-async function backToBot(env: Env, start?: string) {
+export async function backToBot(env: Env, start?: string) {
   const { username } = await botApi(env.BOT_TOKEN).getMe();
   return Response.redirect(`https://t.me/${username}${start ? `?start=${start}` : ""}`, 302);
 }

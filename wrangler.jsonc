@@ -3,7 +3,7 @@
   "name": "memesave-bot",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"], // strictly_public: SSRF guard for OAuth client metadata fetches
   "observability": { "enabled": true },
   "assets": { "directory": "./app/dist" },
   "triggers": { "crons": ["*/15 * * * *"] },
@@ -26,6 +26,8 @@
     { "binding": "DB", "database_name": "memesave", "database_id": "f5a303a3-e2ed-4e35-9e6f-0cf8abead35a", "migrations_dir": "migrations" }
   ],
   "vectorize": [{ "binding": "VECTORS", "index_name": "memesave-memes" }],
+  // OAuth grants and tokens of MCP connections (workers-oauth-provider).
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "4733f84f28f84e61ba3a90776ef7c413" }],
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "memesave-media" }],
   "containers": [
     { "class_name": "ZipImporter", "image": "./container/Dockerfile", "instance_type": "standard-1", "max_instances": 5 },

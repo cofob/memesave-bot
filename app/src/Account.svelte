@@ -7,6 +7,7 @@
   import { addFiles } from "./uploads.svelte";
   import Billing from "./Billing.svelte";
   import Channels from "./Channels.svelte";
+  import Connections from "./Connections.svelte";
 
   interface Props {
     me: Me;
@@ -179,6 +180,7 @@
               }}
             />
             <Channels />
+            <Connections />
             <Heading as="h3" size="sm">{s.keyTitle}</Heading>
             <Text tone="muted">{me.key ? s.keyOwn : s.keyShared}</Text>
             <Inline gap="sm" wrap>

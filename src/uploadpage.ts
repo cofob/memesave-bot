@@ -1,6 +1,6 @@
 import { esc, t, type Lang } from "./i18n";
 
-const CSS = "https://cdn.jsdelivr.net/npm/@cofob2/design-system-css@0.5.0/dist/index.css";
+export const CSS = "https://cdn.jsdelivr.net/npm/@cofob2/design-system-css@0.5.0/dist/index.css";
 const PART_SIZE = 50 * 1024 * 1024; // under the 100 MB Worker request limit; R2 needs >= 5 MB parts
 
 const SCRIPT = `

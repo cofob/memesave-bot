@@ -134,7 +134,8 @@ async function cryptoCheckout(env: Env, ctx: Ctx, provider: "btc" | "usdt", kind
       });
     }
     const inv = await createBtcpayInvoice(env, ctx.user, kind, amount, network);
-    const text = network ? t(ctx.lang, "bill_usdt_checkout", { usd: money(amount), network }) : t(ctx.lang, "bill_crypto_checkout", { usd: money(amount) });
+    if (!inv) return ctx.reply(t(ctx.lang, "bill_crypto_limit"), html);
+    const text = network ? t(ctx.lang, "bill_usdt_checkout", { usd: money(inv.usd), network }) : t(ctx.lang, "bill_crypto_checkout", { usd: money(inv.usd) });
     return ctx.reply(text, { ...html, reply_markup: kb([[{ text: t(ctx.lang, "bill_btn_open_checkout"), url: inv.url }]]) });
   } catch (e) {
     console.error("crypto checkout", e);
