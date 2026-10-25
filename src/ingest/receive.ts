@@ -78,6 +78,7 @@ export type MemeRow = NewMeme & {
   sha256?: string | null;
   r2_file?: string | null;
   r2_preview?: string | null;
+  tg_meta?: string | null;
 };
 
 /** Inserts a meme; returns its id, or null when the user already has this file. */
@@ -85,8 +86,8 @@ export const insertMeme = (db: D1Database, userId: number, m: MemeRow) =>
   db
     .prepare(
       `INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, preview_file_id, preview_unique_id, mime, file_size,
-        width, height, duration, caption, source, import_id, sha256, r2_file, r2_preview)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        width, height, duration, caption, source, import_id, sha256, r2_file, r2_preview, tg_meta)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(user_id, file_unique_id) DO NOTHING RETURNING id`,
     )
     .bind(
@@ -108,24 +109,26 @@ export const insertMeme = (db: D1Database, userId: number, m: MemeRow) =>
       m.sha256 ?? null,
       m.r2_file ?? null,
       m.r2_preview ?? null,
+      m.tg_meta ?? null,
     )
     .first<string>("id");
 
 /** Saves a forwarded meme row and starts stage 1. */
-export async function receiveMedia(ctx: Ctx, env: Env) {
-  const msg = ctx.msg!;
+export async function receiveMedia(ctx: Ctx, env: Env, msg: Message = ctx.msg!, link?: { source: string; mediaGroupId?: string; position?: number }) {
   const media = extractMedia(msg);
   if (!media) return;
   const db = env.DB;
   const html = { parse_mode: "HTML" } as const;
   // Batch mode collects photos only; videos and GIFs always use the normal pipeline.
   const importId = media.kind === "photo" ? await collectingImport(db, ctx.user.id) : null;
+  const { photo, video, animation, ...meta } = msg;
 
   let memeId = await insertMeme(db, ctx.user.id, {
     ...media,
     caption: msg.caption ?? null,
-    source: describeOrigin(msg.forward_origin),
+    source: link?.source ?? describeOrigin(msg.forward_origin),
     import_id: importId,
+    tg_meta: JSON.stringify(meta),
   });
 
   if (memeId && importId) {
@@ -143,7 +146,12 @@ export async function receiveMedia(ctx: Ctx, env: Env) {
     memeId = old!.id;
   }
 
-  await addToPost(db, ctx.user.id, { memeId, mediaGroupId: msg.media_group_id, caption: msg.caption, position: msg.message_id });
+  await addToPost(db, ctx.user.id, {
+    memeId,
+    mediaGroupId: link?.mediaGroupId ?? msg.media_group_id,
+    caption: msg.caption,
+    position: link?.position ?? msg.message_id,
+  });
   const status = await ctx.reply(t(ctx.lang, "saving"), { ...html, reply_parameters: { message_id: msg.message_id } });
   await db
     .prepare("UPDATE memes SET status = 'embedding', error = NULL, status_msg_id = ?, updated_at = unixepoch() WHERE id = ?")

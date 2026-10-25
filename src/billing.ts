@@ -19,6 +19,8 @@ export type Method = "stars" | "btcpay";
 export const isFree = (u: Pick<User, "role">) => u.role !== "paid";
 export const ownKey = (u: Pick<User, "openrouter_key">) => u.openrouter_key !== null;
 export const isActive = (u: Pick<User, "paid_until">, at = now()) => (u.paid_until ?? 0) > at;
+/** Whether the current plan time was bought at the full price, with included AI spend. */
+export const hasAllowance = (u: Pick<User, "allowance_until">, at = now()) => (u.allowance_until ?? 0) > at;
 
 /** Stars for a USD price: at STAR_USD, rounded up to 10⭐ ($1 = 80⭐, $0.5 = 40⭐, $10 = 770⭐, $4 = 310⭐). */
 export const starsFor = (usdPrice: number) => Math.ceil(usdPrice / STAR_USD / 10) * 10;
@@ -34,7 +36,7 @@ export const monthStart = (u: Pick<User, "plan_started">, at = now()) => {
 
 /** Included AI spend left this month (0 for own-key plans and inactive subscriptions). */
 export async function allowanceLeft(db: D1Database, u: User, at = now()) {
-  if (isFree(u) || !isActive(u, at) || u.plan_byok) return 0;
+  if (isFree(u) || !hasAllowance(u, at)) return 0;
   const used =
     (await db
       .prepare("SELECT COALESCE(SUM(from_allowance), 0) AS s FROM transactions WHERE user_id = ? AND created_at >= ?")
@@ -48,7 +50,7 @@ export async function billingStatus(env: Env, u: User) {
     free: isFree(u),
     active: isFree(u) || isActive(u),
     plan: u.plan,
-    byok: !!u.plan_byok,
+    byok: isActive(u) && !hasAllowance(u),
     ownKey: ownKey(u),
     paidUntil: u.paid_until,
     subState: u.sub_state,
@@ -118,11 +120,12 @@ export async function applyPayment(db: D1Database, p: PaymentInput): Promise<{ a
                plan = ?, plan_byok = ?,
                plan_started = CASE WHEN COALESCE(paid_until, 0) <= ? THEN ? ELSE plan_started END,
                paid_until = MAX(COALESCE(paid_until, 0), ?) + ?,
+               allowance_until = CASE WHEN ? THEN allowance_until ELSE MAX(COALESCE(allowance_until, 0), ?) + ? END,
                sub_charge_id = COALESCE(?, sub_charge_id),
                sub_state = CASE WHEN ? IS NOT NULL THEN 'active' ELSE sub_state END
              WHERE id = ? RETURNING *`,
           )
-          .bind(p.kind, p.byok ? 1 : 0, at, at, at, PLANS[p.kind].days * DAY, p.subChargeId ?? null, p.subChargeId ?? null, p.userId)
+          .bind(p.kind, p.byok ? 1 : 0, at, at, at, PLANS[p.kind].days * DAY, p.byok ? 1 : 0, at, PLANS[p.kind].days * DAY, p.subChargeId ?? null, p.subChargeId ?? null, p.userId)
           .first<User>();
   return { applied: true, user };
 }

@@ -80,16 +80,27 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
       return ctx.reply(card.text, { ...html, reply_markup: card.reply_markup });
     }
     const app = { text: t(ctx.lang, "app_button"), web_app: { url: `${env.PUBLIC_URL.replace(/\/$/, "")}/` } };
-    await ctx.reply(t(ctx.lang, "start", { bot: ctx.me.username, role: ctx.user.role }), { ...html, reply_markup: { inline_keyboard: [[app]] } });
+    const keyboard = [
+      [app],
+      [
+        { text: t(ctx.lang, "start_try"), switch_inline_query_current_chat: "" },
+        { text: t(ctx.lang, "start_share"), switch_inline_query: "" },
+      ],
+      [{ text: t(ctx.lang, "start_help"), callback_data: "help" }],
+    ];
+    await ctx.reply(t(ctx.lang, "start", { bot: ctx.me.username }), { ...html, reply_markup: { inline_keyboard: keyboard } });
     if (ctx.user.role === "paid" && !isActive(ctx.user)) {
       const card = await subscribeCard(env, ctx.api, ctx.user, ctx.lang);
       await ctx.reply(card.text, { ...html, reply_markup: card.reply_markup });
     }
   });
 
-  bot.command("help", (ctx) =>
-    ctx.reply(t(ctx.lang, "help") + (ctx.user.role === "admin" ? t(ctx.lang, "help_admin") : ""), html),
-  );
+  const help = (ctx: C) => ctx.reply(t(ctx.lang, "help") + (ctx.user.role === "admin" ? t(ctx.lang, "help_admin") : ""), html);
+  bot.command("help", help);
+  bot.callbackQuery("help", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await help(ctx);
+  });
 
   bot.command("mcp", (ctx) => {
     const app = { text: t(ctx.lang, "app_button"), web_app: { url: `${env.PUBLIC_URL.replace(/\/$/, "")}/` } };

@@ -15,6 +15,7 @@ export interface User {
   plan: "monthly" | "yearly" | null;
   plan_byok: number;
   paid_until: number | null;
+  allowance_until: number | null;
   plan_started: number | null;
   balance: number;
   sub_charge_id: string | null;
@@ -51,6 +52,7 @@ export interface Meme {
   sha256: string | null;
   r2_file: string | null; // permanent copy in MEDIA ("" = cannot be downloaded from Telegram)
   r2_preview: string | null;
+  tg_meta: string | null; // Telegram message JSON without media fields
   created_at: number;
 }
 

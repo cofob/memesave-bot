@@ -10,6 +10,7 @@
     Inline,
     MediaGrid,
     Select,
+    Skeleton,
     Spinner,
     Stack,
     Tag,
@@ -130,9 +131,11 @@
     searching && (mode === "quick" ? serverItems !== null && textItems.length === 0 : !aiLoading && aiItems !== null && aiItems.length === 0),
   );
 
+  const pending = $derived(searching && (mode === "quick" ? query.trim().length >= 2 && serverItems === null : aiLoading));
+
   async function serverSearch(q: string, gen: number) {
     const page = await api.search(q, "fast").catch(() => null);
-    if (page && gen === searchGen) serverItems = page.items;
+    if (gen === searchGen) serverItems = page?.items ?? [];
   }
 
   $effect(() => {
@@ -428,6 +431,9 @@
           </button>
         </li>
       {/each}
+      {#if pending}
+        {#each { length: shown.length ? 3 : 9 }, i (i)}<li><Skeleton width="100%" style="aspect-ratio:1" /></li>{/each}
+      {/if}
     </MediaGrid>
 
     {#if selecting}
@@ -450,7 +456,7 @@
     {/if}
 
     <div bind:this={sentinel} class="sentinel">
-      {#if (loading && !searching) || aiLoading}<Spinner label="Loading" />{/if}
+      {#if loading && !searching}<Spinner label="Loading" />{/if}
     </div>
   </Stack>
 </Container>

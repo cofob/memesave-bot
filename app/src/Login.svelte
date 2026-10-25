@@ -2,6 +2,7 @@
   import { Alert, Card, Container, Heading, Inline, Stack, Text } from "@cofob2/design-system-svelte";
   import { Bot, LogIn } from "@lucide/svelte";
   import { MONTHLY_ALLOWANCE, PLANS } from "../../src/config";
+  import HowItWorks from "./HowItWorks.svelte";
   import { fill, s } from "./strings";
 
   const error = new URLSearchParams(location.search).get("error");
@@ -34,6 +35,8 @@
     <ul class="features">
       {#each features as f (f)}<li><Text>{f}</Text></li>{/each}
     </ul>
+
+    <HowItWorks />
 
     <Card padding="lg">
       <Stack gap="sm">

@@ -17,7 +17,8 @@
     "R2_BUCKET": "memesave-media",
     "BTCPAY_URL": "https://btcpay.cofob.dev",
     "BTCPAY_STORE_ID": "9rM3R2iTYdrsnqHkWiu9co4U79tLVLjAvusCLsvxQgoi",
-    "BTCPAY_USDT": "Ethereum,Polygon,Plasma"
+    "BTCPAY_USDT": "Ethereum,Polygon,Plasma",
+    "COBALT_URL": "https://cobalt.cfb.wtf/"
   },
   "workers_dev": true,
   "preview_urls": false,

@@ -22,13 +22,19 @@ const E = Object.fromEntries(
 const en = {
   no_access: `${E.noAccess} No access. Your id: <code>{id}</code>`,
   no_access_short: "No access",
-  start: `${E.hi} Hi! I save your memes and find them later.
+  start: `${E.hi} Hi! I save your memes and find them later by text, meaning or mood.
 
-• Forward me photos, videos or GIFs.
-• Send any text here to search.
-• Type <code>@{bot} text</code> in any chat.
+<b>1.</b> Forward me a photo, video or GIF. AI reads the text, transcribes speech and writes what the meme means.
+<b>2.</b> Send any words here to search: a caption fragment, a template name or a mood.
+<b>3.</b> Type <code>@{bot} words</code> in any chat to send a meme there.
 
-Your role: <b>{role}</b>. More: /help`,
+Try it now: forward a meme from any chat.`,
+  start_try: "🔍 Try search",
+  start_share: "📤 Search in a chat",
+  start_help: "💡 How to use",
+  first_meme: `\n\n${E.help} Your first meme! Now find it: send a word from it here, or type <code>@{bot}</code> and a word in any chat.`,
+  bot_description: "I save your memes and find them later by text, meaning or mood.\n\n• Forward photos, videos and GIFs: AI reads the text and writes what each meme means.\n• Search here, in the web app, or inline in any chat.\n• Import Telegram exports, auto-post to channels, connect AI apps.\n\nPress Start and forward your first meme.",
+  bot_short_description: "Save memes and find them by text, meaning or mood. Inline search in any chat.",
   help: `${E.help} <b>How to use</b>
 Forward a photo, video or GIF to save it. Send text to search: a caption fragment, a description, a template name or a mood.
 
@@ -64,6 +70,7 @@ Every AI request cost is saved to your /stats. /export downloads all your data, 
   saved: `${E.done} <b>{title}</b>\n{tags}`,
   index_failed: `${E.error} Could not index. Forward it again to retry.`,
   already_saved: `${E.done} Already saved.`,
+  link_failed: `${E.error} Could not download this TikTok.`,
   processing: `${E.indexing} Still processing.`,
   searching: `${E.search} Searching…`,
   nothing_found: `${E.notFound} Nothing found.`,
@@ -298,13 +305,19 @@ export type Key = keyof typeof en;
 const ru: Record<Key, string> = {
   no_access: `${E.noAccess} Нет доступа. Ваш id: <code>{id}</code>`,
   no_access_short: "Нет доступа",
-  start: `${E.hi} Привет! Я сохраняю ваши мемы и нахожу их потом.
+  start: `${E.hi} Привет! Я сохраняю ваши мемы и нахожу их потом по тексту, смыслу или настроению.
 
-• Пересылайте мне фото, видео или GIF.
-• Отправьте любой текст сюда для поиска.
-• Пишите <code>@{bot} текст</code> в любом чате.
+<b>1.</b> Перешлите мне фото, видео или GIF. ИИ прочитает текст, расшифрует речь и напишет, что значит мем.
+<b>2.</b> Отправьте сюда любые слова для поиска: фрагмент подписи, название шаблона или настроение.
+<b>3.</b> Пишите <code>@{bot} слова</code> в любом чате, чтобы отправить туда мем.
 
-Ваша роль: <b>{role}</b>. Подробнее: /help`,
+Попробуйте сейчас: перешлите мем из любого чата.`,
+  start_try: "🔍 Попробовать поиск",
+  start_share: "📤 Поиск в другом чате",
+  start_help: "💡 Как пользоваться",
+  first_meme: `\n\n${E.help} Ваш первый мем! Теперь найдите его: отправьте сюда слово из него или напишите <code>@{bot}</code> и слово в любом чате.`,
+  bot_description: "Я сохраняю ваши мемы и нахожу их потом по тексту, смыслу или настроению.\n\n• Пересылайте фото, видео и GIF: ИИ читает текст и пишет, что значит каждый мем.\n• Ищите здесь, в веб-приложении или inline в любом чате.\n• Импорт экспортов Telegram, автопостинг в каналы, подключение ИИ-приложений.\n\nНажмите «Начать» и перешлите первый мем.",
+  bot_short_description: "Сохраняйте мемы и находите их по тексту, смыслу или настроению. Inline-поиск в любом чате.",
   help: `${E.help} <b>Как пользоваться</b>
 Перешлите фото, видео или GIF, чтобы сохранить. Отправьте текст для поиска: фрагмент подписи, описание, название шаблона или настроение.
 
@@ -340,6 +353,7 @@ const ru: Record<Key, string> = {
   saved: `${E.done} <b>{title}</b>\n{tags}`,
   index_failed: `${E.error} Не удалось проиндексировать. Перешлите ещё раз.`,
   already_saved: `${E.done} Уже сохранено.`,
+  link_failed: `${E.error} Не удалось скачать этот TikTok.`,
   processing: `${E.indexing} Ещё обрабатывается.`,
   searching: `${E.search} Ищу…`,
   nothing_found: `${E.notFound} Ничего не найдено.`,

@@ -79,6 +79,19 @@ describe("payments", () => {
     const topup = await pay("topup", "c4", 1.3);
     expect(topup.user!.balance).toBeCloseTo(1.3);
   });
+
+  it("puts full-price time first: an own-key renewal keeps the paid allowance", async () => {
+    await user(102);
+    const pay = (byok: boolean, chargeId: string) => applyPayment(e.DB, { userId: 102, method: "stars", kind: "monthly", byok, usd: 1, chargeId });
+    const full = (await pay(false, "d1")).user!;
+    const own = (await pay(true, "d2")).user!;
+    expect(own.allowance_until).toBe(full.paid_until);
+    expect(own.paid_until).toBe(full.paid_until! + 30 * DAY);
+    expect(await allowanceLeft(e.DB, own)).toBeGreaterThan(0);
+    const again = (await pay(false, "d3")).user!;
+    expect(again.allowance_until).toBe(full.paid_until! + 30 * DAY);
+    expect(await allowanceLeft(e.DB, again, own.paid_until! + DAY)).toBe(0);
+  });
 });
 
 describe("included spend and gate", () => {
@@ -87,14 +100,14 @@ describe("included spend and gate", () => {
     expect(await canUseAi(e.DB, (await getUser(e.DB, 200))!)).toEqual({ ok: true });
     expect(await canUseAi(e.DB, await user(201))).toEqual({ ok: false, reason: "subscribe" });
     const active = `paid_until = ${now() + 10 * DAY}, plan_started = ${now() - 5 * DAY}, plan = 'monthly'`;
-    expect(await canUseAi(e.DB, await user(202, active))).toEqual({ ok: true });
+    expect(await canUseAi(e.DB, await user(202, `${active}, allowance_until = ${now() + 10 * DAY}`))).toEqual({ ok: true });
     expect(await canUseAi(e.DB, await user(203, `${active}, plan_byok = 1`))).toEqual({ ok: false, reason: "credit" });
     expect(await canUseAi(e.DB, await user(204, `${active}, plan_byok = 1, balance = 0.2`))).toEqual({ ok: true });
     expect(await canUseAi(e.DB, await user(205, `${active}, plan_byok = 1, openrouter_key = 'x'`))).toEqual({ ok: true });
   });
 
   it("takes shared-key costs from the allowance, then the balance; own-key costs are free", async () => {
-    const u = await user(210, `paid_until = ${now() + 10 * DAY}, plan_started = ${now() - 31 * DAY}, plan = 'monthly', balance = 1`);
+    const u = await user(210, `paid_until = ${now() + 10 * DAY}, allowance_until = ${now() + 10 * DAY}, plan_started = ${now() - 31 * DAY}, plan = 'monthly', balance = 1`);
     // Spend in the previous allowance month does not count.
     await e.DB.prepare("INSERT INTO transactions (user_id, kind, model, key_source, cost, from_allowance, created_at) VALUES (210, 'x', 'm', 'global', 0.5, 0.5, ?)")
       .bind(now() - 2 * DAY)

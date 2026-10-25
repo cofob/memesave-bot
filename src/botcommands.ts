@@ -20,13 +20,20 @@ export async function setCommandScope(api: Api, chatId: number, role: Role, lang
 /** Sets bot command menus when the command list or texts changed since the last sync. */
 export async function syncCommands(env: Env, api: Api) {
   const appUrl = `${env.PUBLIC_URL.replace(/\/$/, "")}/`;
-  const hash = await sha256hex(JSON.stringify([list(ADMIN_COMMANDS, "en"), list(ADMIN_COMMANDS, "ru"), appUrl]));
+  const about = (lang: Lang) => [t(lang, "bot_description"), t(lang, "bot_short_description")];
+  const hash = await sha256hex(JSON.stringify([list(ADMIN_COMMANDS, "en"), list(ADMIN_COMMANDS, "ru"), appUrl, about("en"), about("ru")]));
   const old = await env.DB.prepare("SELECT value FROM meta WHERE key = 'commands_hash'").first<string>("value");
   if (old === hash) return false;
 
   await api.setChatMenuButton({ menu_button: { type: "web_app", text: "Open App", web_app: { url: appUrl } } });
   await api.setMyCommands(list(USER_COMMANDS, "en"));
   await api.setMyCommands(list(USER_COMMANDS, "ru"), { language_code: "ru" });
+  for (const lang of ["en", "ru"] as const) {
+    const language_code = lang === "ru" ? "ru" : undefined;
+    const [description, short_description] = about(lang);
+    await api.setMyDescription(description, { language_code });
+    await api.setMyShortDescription(short_description, { language_code });
+  }
   const { results } = await env.DB.prepare("SELECT id, lang FROM users WHERE role = 'admin'").all<{
     id: number;
     lang: string | null;

@@ -6,6 +6,7 @@ import {
   canUseAi,
   date,
   expectedStars,
+  hasAllowance,
   isActive,
   isFree,
   money,
@@ -97,7 +98,7 @@ export async function balanceText(env: Env, u: User, lang: Lang) {
   return t(lang, "bill_balance_card", {
     status: statusLine(u, lang),
     left: money(await allowanceLeft(env.DB, u)),
-    allowance: money(u.plan_byok ? 0 : MONTHLY_ALLOWANCE),
+    allowance: money(hasAllowance(u) ? MONTHLY_ALLOWANCE : 0),
     balance: money(u.balance),
     own: t(lang, ownKey(u) ? "bill_yes" : "bill_no"),
   });

@@ -53,6 +53,19 @@ const en = {
   landingPlan: "{month} per month or {year} per year.",
   landingByok: "With your own OpenRouter key: {month} per month or {year} per year.",
   landingPay: "Pay with Telegram Stars, Bitcoin, Monero or USDT.",
+  howTitle: "How it works",
+  howPlay: "Play",
+  howPause: "Pause",
+  howYou: "You",
+  howForwardedFrom: "Forwarded from {from}",
+  howBotSaving: "⏳ Saved, indexing…",
+  howEdited: "edited",
+  howStep1: "Forward",
+  howStep1Text: "Forward a photo, video or GIF to the bot, or upload files here. The bot saves it right away.",
+  howStep2: "AI describes",
+  howStep2Text: "AI reads the text on the image, transcribes speech, finds the source and writes what the meme means. Embeddings make it searchable by meaning.",
+  howStep3: "Find",
+  howStep3Text: "Type a few words: results update on every keystroke. Try it, or tap a meme to see its description.",
   loginNoAccess: "This Telegram account has no access to the bot.",
   uploading: "Uploading {n} items",
   uploadsDone: "{n} uploads complete",
@@ -279,6 +292,19 @@ const ru: Strings = {
   landingPlan: "{month} в месяц или {year} в год.",
   landingByok: "Со своим ключом OpenRouter: {month} в месяц или {year} в год.",
   landingPay: "Оплата через Telegram Stars, Bitcoin, Monero или USDT.",
+  howTitle: "Как это работает",
+  howPlay: "Воспроизвести",
+  howPause: "Пауза",
+  howYou: "Вы",
+  howForwardedFrom: "Переслано из {from}",
+  howBotSaving: "⏳ Сохранено, индексирую…",
+  howEdited: "изменено",
+  howStep1: "Перешлите",
+  howStep1Text: "Перешлите боту фото, видео или GIF или загрузите файлы здесь. Бот сразу сохранит мем.",
+  howStep2: "ИИ описывает",
+  howStep2Text: "ИИ читает текст на картинке, расшифровывает речь, находит источник и пишет, что значит мем. Эмбеддинги делают его доступным для поиска по смыслу.",
+  howStep3: "Найдите",
+  howStep3Text: "Введите пару слов: результаты меняются с каждой буквой. Попробуйте сами или нажмите на мем, чтобы открыть описание.",
   loginNoAccess: "У этого аккаунта Telegram нет доступа к боту.",
   uploading: "Загрузка: {n}",
   uploadsDone: "Загружено: {n}",
@@ -452,7 +478,8 @@ const ru: Strings = {
 };
 
 const lang = tg?.initDataUnsafe.user?.language_code ?? navigator.language;
-export const s: Strings = lang.startsWith("ru") ? ru : en;
+export const isRu = lang.startsWith("ru");
+export const s: Strings = isRu ? ru : en;
 
 export const fmt = (text: string, n: number) => text.replace("{n}", String(n));
 export const fill = (text: string, params: Record<string, string | number>) => text.replace(/\{(\w+)\}/g, (m, k) => String(params[k] ?? m));

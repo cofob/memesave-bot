@@ -10,9 +10,12 @@ describe("syncCommands", () => {
       setMyCommands: vi.fn(async () => true),
       deleteMyCommands: vi.fn(async () => true),
       setChatMenuButton: vi.fn(async () => true),
+      setMyDescription: vi.fn(async () => true),
+      setMyShortDescription: vi.fn(async () => true),
     };
     expect(await syncCommands(env, api as unknown as Api)).toBe(true);
     expect(api.setMyCommands).toHaveBeenCalledTimes(3);
+    expect(api.setMyDescription).toHaveBeenCalledWith(expect.stringContaining("Нажмите «Начать»"), { language_code: "ru" });
     expect(api.setChatMenuButton).toHaveBeenCalledWith({
       menu_button: { type: "web_app", text: "Open App", web_app: { url: expect.stringMatching(/^https:\/\/[^/]+\/$/) } },
     });

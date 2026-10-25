@@ -8,6 +8,7 @@ import type { User } from "./db";
 import type { Env } from "./env";
 import { langOf, t, type Lang } from "./i18n";
 import { receiveMedia } from "./ingest/receive";
+import { importTiktok, tiktokLink } from "./ingest/tiktok";
 import { handleInline } from "./search/inline";
 import { allowAi, registerBilling, registerPayments } from "./billingbot";
 import { captionReply, onBotMembership, registerChannels } from "./channels";
@@ -56,6 +57,8 @@ export function createBot(env: Env) {
     if (text.startsWith("/")) return ctx.reply(t(ctx.lang, "unknown_cmd"), html);
     if (await captionReply(env, ctx)) return;
     if (!(await allowAi(env, ctx))) return;
+    const link = tiktokLink(text);
+    if (link) return importTiktok(ctx, env, link);
     const placeholder = await ctx.reply(t(ctx.lang, "searching"), html);
     await env.JOBS.send({
       type: "search",

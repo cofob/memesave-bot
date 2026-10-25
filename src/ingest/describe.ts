@@ -3,7 +3,7 @@ import { DEFAULT_TIER, DESCRIBE_FALLBACKS, DESCRIBE_MODELS, MODELS, VIDEO_INLINE
 import { getMeme, getUser, setStatus, userLang, type Meme } from "../db";
 import { queuePosts } from "../channels";
 import type { Env } from "../env";
-import { esc, t } from "../i18n";
+import { esc, t, type Lang } from "../i18n";
 import { memeMedia, toDataUrl, variantOf } from "../media";
 import { chat, embed, type Part } from "../openrouter";
 import { namespace, upsertVectors } from "./embed";
@@ -224,8 +224,18 @@ export async function finishStage(env: Env, memeId: string) {
   await setStatus(env.DB, memeId, "ready");
 
   const tags = d.tags.slice(0, 8).map((x) => "#" + esc(x.replace(/[^\p{L}\p{N}_]+/gu, "_"))).join(" ");
-  await editStatus(env, m, t(await userLang(env.DB, m.user_id), "saved", { title: esc(d.title), tags }));
+  const lang = await userLang(env.DB, m.user_id);
+  await editStatus(env, m, t(lang, "saved", { title: esc(d.title), tags }) + (await firstMemeTip(env, m, lang)));
   await queuePosts(env, memeId);
+}
+
+/** A search hint under the first meme a user saves from the chat. */
+async function firstMemeTip(env: Env, m: Meme, lang: Lang) {
+  if (!m.status_msg_id) return "";
+  const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM memes WHERE user_id = ? AND status = 'ready'").bind(m.user_id).first<number>("n");
+  if (n !== 1) return "";
+  const { username } = await botApi(env.BOT_TOKEN).getMe();
+  return t(lang, "first_meme", { bot: username });
 }
 
 export async function editStatus(env: Env, m: Meme, text: string) {
