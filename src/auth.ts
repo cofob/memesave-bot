@@ -1,4 +1,5 @@
 import type { User as TgUser } from "grammy/types";
+import { DEFAULT_TIER } from "./config";
 import { getUser, type Role, type User } from "./db";
 import type { Env } from "./env";
 import { langOf } from "./i18n";
@@ -31,8 +32,8 @@ export async function resolveUser(env: Env, from: TgUser): Promise<{ user: User;
   role ??= "paid"; // open signup: new accounts pay for the bot
 
   const created = await db
-    .prepare("INSERT INTO users (id, username, role, lang, added_by) VALUES (?, ?, ?, ?, ?) RETURNING *")
-    .bind(from.id, username, role, lang, addedBy)
+    .prepare("INSERT INTO users (id, username, role, lang, added_by, describe_tier) VALUES (?, ?, ?, ?, ?, ?) RETURNING *")
+    .bind(from.id, username, role, lang, addedBy, DEFAULT_TIER)
     .first<User>();
   return { user: created!, created: true };
 }
@@ -50,8 +51,8 @@ export function parseTarget(arg: string | undefined): Target | null {
 export async function grant(db: D1Database, target: Target, role: Role, by: number): Promise<number | null> {
   if ("id" in target) {
     await db
-      .prepare("INSERT INTO users (id, role, added_by) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET role = excluded.role")
-      .bind(target.id, role, by)
+      .prepare("INSERT INTO users (id, role, added_by, describe_tier) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET role = excluded.role")
+      .bind(target.id, role, by, DEFAULT_TIER)
       .run();
     return target.id;
   }

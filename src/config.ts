@@ -28,4 +28,6 @@ export const STAR_TOPUPS = [100, 250, 500, 1000];
 export const CRYPTO_TOPUPS = [5, 10, 25, 50]; // USD: on-chain fees make small amounts pointless
 export const LOW_BALANCE = 0.1;
 export const DESCRIBE_MODELS = { max: "google/gemini-4-argon", medium: "openai/gpt-6-luna" } as const; // photos
+// Tier of new accounts. The DB column default stays "max" (SQLite cannot change it), so inserts set it.
+export const DEFAULT_TIER = "medium";
 export const DESCRIBE_FALLBACKS = ["openai/gpt-6-luna", "deepseek/deepseek-v4.1-flash-1017"]; // photos a provider blocks

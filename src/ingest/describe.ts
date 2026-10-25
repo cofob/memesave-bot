@@ -1,5 +1,5 @@
 import { botApi } from "../botapi";
-import { DESCRIBE_FALLBACKS, DESCRIBE_MODELS, MODELS, VIDEO_INLINE_MAX_BYTES } from "../config";
+import { DEFAULT_TIER, DESCRIBE_FALLBACKS, DESCRIBE_MODELS, MODELS, VIDEO_INLINE_MAX_BYTES } from "../config";
 import { getMeme, getUser, setStatus, userLang, type Meme } from "../db";
 import { queuePosts } from "../channels";
 import type { Env } from "../env";
@@ -124,7 +124,7 @@ async function mediaPart(env: Env, m: Meme): Promise<Part[]> {
 export type Tier = keyof typeof DESCRIBE_MODELS;
 
 /** The owner's describe quality tier. */
-export const userTier = async (db: D1Database, userId: number): Promise<Tier> => (await getUser(db, userId))?.describe_tier ?? "max";
+export const userTier = async (db: D1Database, userId: number): Promise<Tier> => (await getUser(db, userId))?.describe_tier ?? DEFAULT_TIER;
 
 /** Models to try in order: the tier's model, then cheaper ones when a provider blocks the photo. Videos have one. */
 export const describeModels = (m: Pick<Meme, "kind">, tier: Tier) =>
@@ -133,7 +133,7 @@ export const describeModels = (m: Pick<Meme, "kind">, tier: Tier) =>
 /** A provider's safety filter refused the request (an error, or an empty answer). */
 export const isBlocked = (e: unknown) => /SAFETY|content.?(policy|filter)|PROHIBITED|blocked|moderation|empty answer/i.test(String(e));
 
-export function describeRequest(m: Meme, usedTags: string[], media: Part[], tier: Tier = "max") {
+export function describeRequest(m: Meme, usedTags: string[], media: Part[], tier: Tier = DEFAULT_TIER) {
   const context = [
     `Meme kind: ${m.kind}. User caption: ${JSON.stringify(m.caption ?? "")}. Forwarded from: ${JSON.stringify(m.source ?? "")}.`,
     usedTags.length ? `Most used tags in this collection (reuse them when they fit, add new ones when needed): ${usedTags.join(", ")}` : "",
