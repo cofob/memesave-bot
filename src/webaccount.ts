@@ -12,6 +12,7 @@ import { createZipImport, zipStatus } from "./zip";
 import { exportStatus, setExportStatusMessage, startExport } from "./export";
 import { accountSummary, CONFIRM, deleteAccount } from "./purge";
 import { oauthApi } from "./oauth";
+import { createToken, deleteToken, listTokens } from "./tokens";
 import { billingStatus, ownKey, starsInvoiceLink, type ProductKind } from "./billing";
 import { addChannelUrl, listChannels, removeChannel, updateChannel } from "./channels";
 import { btcpayOn, createBtcpayInvoice, getInvoice, productUsd, usdtNetworks } from "./crypto";
@@ -114,6 +115,16 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
       await api.revokeGrant(id, String(user.id));
       return json({ ok: true });
     }
+  }
+
+  if (resource === "tokens") {
+    if (m === "GET" && !id) return json(await listTokens(env.DB, user.id));
+    if (m === "POST" && !id) {
+      const { name = "", write = false } = await req.json<{ name?: string; write?: boolean }>();
+      const created = await createToken(env.DB, user.id, String(name), write === true);
+      return created ? json(created) : json({ error: "too many tokens" }, 409);
+    }
+    if (m === "DELETE" && id) return (await deleteToken(env.DB, user.id, id)) ? json({ ok: true }) : json({ error: "not found" }, 404);
   }
 
   if (resource === "billing") {

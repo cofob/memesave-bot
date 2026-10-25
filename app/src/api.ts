@@ -96,6 +96,14 @@ export interface Connection {
   created_at: number;
 }
 
+export interface ApiToken {
+  id: string;
+  name: string;
+  write: boolean;
+  created_at: number;
+  used_at: number | null;
+}
+
 export type ProductKind = "monthly" | "yearly" | "topup";
 
 export interface Billing {
@@ -218,6 +226,9 @@ export const api = {
   removeChannel: (id: number) => call(`channels/${id}`, { method: "DELETE" }),
   connections: () => call<{ mcp_url: string; items: Connection[] }>("connections"),
   revokeConnection: (id: string) => call(`connections/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  tokens: () => call<ApiToken[]>("tokens"),
+  createToken: (name: string, write: boolean) => post<{ id: string; token: string }>("tokens", { name, write }),
+  deleteToken: (id: string) => call(`tokens/${id}`, { method: "DELETE" }),
   billing: () => call<Billing>("billing"),
   starsInvoice: (kind: ProductKind, stars?: number) => post<{ url: string }>("billing/invoice", { kind, stars }),
   cryptoInvoice: (body: { provider: "btcpay"; kind: ProductKind; usd?: number; crypto?: string }) => post<CryptoInvoice>("billing/crypto", body),

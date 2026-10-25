@@ -29,3 +29,5 @@ Set your domain in `PUBLIC_URL` and `routes` in `wrangler.jsonc` (the zone must 
 Enable inline mode in @BotFather (`/setinline`). Bot commands are set automatically.
 
 MCP server for AI apps: `<PUBLIC_URL>/mcp` (OAuth with Telegram login; connections are managed in Account → Settings).
+
+HTTP API for scripts: `<PUBLIC_URL>/app/api/*` with `Authorization: Bearer <token>` (Account → Settings → API tokens), described in `<PUBLIC_URL>/openapi.json`. `tiktok-sync/` imports liked TikToks through it.

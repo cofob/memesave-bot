@@ -10,6 +10,8 @@ import { addToPost, albumMemes } from "./channels";
 import { billingStatus, canUseAi } from "./billing";
 import { facets, filterSql } from "./filters";
 import { getCookie, readSession } from "./session";
+import { TOKEN_PREFIX, tokenUser } from "./tokens";
+import { serveOpenapi } from "./openapi";
 import type { Env } from "./env";
 import { cachedMedia, extOf, fileKey, memeMedia, previewKey, signedQuery, verifyQuery } from "./media";
 import { sendAlbum, sendMeme, toInlineResult } from "./search/deliver";
@@ -137,15 +139,21 @@ export async function tagCounts(env: Env, user: User) {
     .map(([tag, n]) => ({ tag, count: n }));
 }
 
-/** Mini App: `Authorization: tma <initData>`; web: the session cookie from Telegram Login. */
-async function authUser(req: Request, env: Env): Promise<User | null> {
+/** Mini App: `Authorization: tma <initData>`; scripts: `Bearer <API token>`; web: the session cookie from Telegram Login. */
+async function authUser(req: Request, env: Env): Promise<{ user: User; token?: { write: boolean } } | null> {
   const header = req.headers.get("Authorization") ?? "";
+  if (header.startsWith(`Bearer ${TOKEN_PREFIX}`)) {
+    const t = await tokenUser(env.DB, header.slice(7));
+    return t && { user: t.user, token: { write: t.write } };
+  }
   if (header.startsWith("tma ")) {
     const from = await checkInitData(env.BOT_TOKEN, header.slice(4));
-    return from ? ((await resolveUser(env, from))?.user ?? null) : null;
+    const user = from && (await resolveUser(env, from))?.user;
+    return user ? { user } : null;
   }
   const userId = await readSession(env, getCookie(req, "session"));
-  return userId ? getUser(env.DB, userId) : null;
+  const user = userId && (await getUser(env.DB, userId));
+  return user ? { user } : null;
 }
 
 export const LIMITS: Record<Kind, number> = { photo: 10 << 20, video: 50 << 20, animation: 50 << 20 }; // Bot API send limits
@@ -235,8 +243,10 @@ export async function retryMeme(env: Env, meme: Meme) {
 
 /** /app/api/* — Mini App and web API. */
 async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
-  const user = await authUser(req, env);
-  if (!user) return json({ error: "no access" }, 403);
+  const auth = await authUser(req, env);
+  if (!auth) return json({ error: "no access" }, 403);
+  const { user, token } = auth;
+  if (token && !token.write && req.method !== "GET") return json({ error: "read-only token" }, 403);
 
   const [, , , resource = "", id = "", action = ""] = url.pathname.split("/");
   if (resource === "me" && req.method === "GET") {
@@ -254,7 +264,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   // New AI work needs an active plan and credit (paid role); 402 tells the app to show the billing tab.
   const m = req.method;
   const aiWork =
-    (resource === "upload" && m === "POST") ||
+    ((resource === "upload" || resource === "import") && m === "POST") ||
     (resource === "search" && url.searchParams.get("mode") !== "fts") ||
     (resource === "zip" && m === "POST" && !id) ||
     (resource === "batch" && m === "POST" && (id === "start" || id === "retry")) ||
@@ -263,9 +273,17 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
     const gate = await canUseAi(env.DB, user);
     if (!gate.ok) return json({ error: "payment required", reason: gate.reason }, 402);
   }
-  const account = await handleAccount(req, env, user, [resource, id, action]);
+  // API tokens cannot change the account (tokens, keys, billing, deletion).
+  const account = token && m !== "GET" ? null : await handleAccount(req, env, user, [resource, id, action]);
   if (account) return account;
   if (resource === "upload" && req.method === "POST") return upload(env, user, req);
+  if (resource === "import" && req.method === "POST") {
+    // Media of a link (any cobalt service), saved in the background like a link sent to the bot.
+    const { url: link = "" } = await req.json<{ url?: string }>();
+    if (!/^https?:\/\/\S+$/i.test(link)) return json({ error: "url required" }, 400);
+    await env.JOBS.send({ type: "link", userId: user.id, url: link });
+    return json({ queued: true }, 202);
+  }
   if (resource === "status" && req.method === "GET") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").filter(Boolean).slice(0, 50);
     if (!ids.length) return json([]);
@@ -375,6 +393,7 @@ async function handleMedia(req: Request, env: Env, ctx: ExecutionContext, url: U
 export async function handleApp(req: Request, env: Env, ctx: ExecutionContext): Promise<Response | null> {
   const url = new URL(req.url);
   if (url.pathname === "/app" || url.pathname === "/app/") return Response.redirect(`${base(env)}/`, 301); // old Mini App URL
+  if (req.method === "GET" && url.pathname === "/app/api/openapi.json") return serveOpenapi(env);
   if (url.pathname.startsWith("/app/api/")) return handleApi(req, env, url);
   if (req.method === "GET" && url.pathname.startsWith("/app/thumb/")) return handleMedia(req, env, ctx, url, "thumb");
   if (req.method === "GET" && url.pathname.startsWith("/app/file/")) return handleMedia(req, env, ctx, url, "file");

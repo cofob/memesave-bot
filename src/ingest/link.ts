@@ -1,10 +1,13 @@
-import { InputFile, InputMediaBuilder } from "grammy";
+import { type Api, InputFile, InputMediaBuilder } from "grammy";
+import type { Message } from "grammy/types";
 import type { Ctx } from "../bot";
+import { botApi } from "../botapi";
+import { addToPost } from "../channels";
 import type { Kind } from "../db";
 import type { Env } from "../env";
 import { t } from "../i18n";
 import { extOf } from "../media";
-import { receiveMedia } from "./receive";
+import { extractMedia, insertMeme, receiveMedia } from "./receive";
 
 // Media by link: any service of the cobalt API (github.com/imputnet/cobalt, COBALT_URL).
 
@@ -64,36 +67,59 @@ export async function cobalt(env: Env, url: string): Promise<Fetched> {
   throw new Error(`cobalt: ${r.error?.code ?? r.status}`);
 }
 
+/** The user already has this link (dedupe before the download). */
+const linkSaved = (db: D1Database, userId: number, url: string) =>
+  db.prepare("SELECT 1 FROM memes WHERE user_id = ? AND status != 'failed' AND source = ?").bind(userId, url).first();
+
+/** Sends the media to a chat: one message, or albums of up to 10 (albums have no GIFs: they go as videos). */
+async function sendItems(api: Api, chatId: number, items: Item[], other: { reply_parameters?: { message_id: number }; disable_notification?: boolean }) {
+  const file = (it: Item, i: number) => new InputFile(it.bytes, `${i + 1}.${extOf(it.mime)}`);
+  if (items.length === 1) {
+    const [it] = items;
+    const f = file(it, 0);
+    return [
+      it.kind === "photo"
+        ? await api.sendPhoto(chatId, f, other)
+        : it.kind === "animation"
+          ? await api.sendAnimation(chatId, f, other)
+          : await api.sendVideo(chatId, f, { ...other, supports_streaming: true }),
+    ];
+  }
+  const media = items.map((it, i) => (it.kind === "photo" ? InputMediaBuilder.photo(file(it, i)) : InputMediaBuilder.video(file(it, i))));
+  const sent: Message[] = [];
+  for (let i = 0; i < media.length; i += ALBUM_MAX) sent.push(...(await api.sendMediaGroup(chatId, media.slice(i, i + ALBUM_MAX), other)));
+  return sent;
+}
+
+/** One group id for all chunks keeps the order in one post. */
+const groupOf = (sent: Message[]) => (sent.length > 1 ? `link:${crypto.randomUUID()}` : undefined);
+
 /** Downloads media of a link, sends it to the user and saves it like forwarded media; an album becomes one post. */
 export async function importLink(ctx: Ctx, env: Env, url: string) {
   const html = { parse_mode: "HTML" } as const;
   try {
-    const old = await env.DB.prepare("SELECT 1 FROM memes WHERE user_id = ? AND status != 'failed' AND source = ?").bind(ctx.user.id, url).first();
-    if (old) return ctx.reply(t(ctx.lang, "already_saved"), html);
+    if (await linkSaved(env.DB, ctx.user.id, url)) return ctx.reply(t(ctx.lang, "already_saved"), html);
     await ctx.replyWithChatAction("upload_video").catch(() => {});
     const { source, items } = await cobalt(env, url);
-
-    const reply_parameters = { message_id: ctx.msg!.message_id };
-    const file = (it: Item, i: number) => new InputFile(it.bytes, `${i + 1}.${extOf(it.mime)}`);
-    if (items.length === 1) {
-      const [it] = items;
-      const sent =
-        it.kind === "photo"
-          ? await ctx.replyWithPhoto(file(it, 0), { reply_parameters })
-          : it.kind === "animation"
-            ? await ctx.replyWithAnimation(file(it, 0), { reply_parameters })
-            : await ctx.replyWithVideo(file(it, 0), { supports_streaming: true, reply_parameters });
-      return receiveMedia(ctx, env, sent, { source });
-    }
-    // Albums have no GIFs: they go as videos. One group id for all chunks keeps the order in one post.
-    const media = items.map((it, i) => (it.kind === "photo" ? InputMediaBuilder.photo(file(it, i)) : InputMediaBuilder.video(file(it, i))));
-    const group = `link:${crypto.randomUUID()}`;
-    for (let i = 0; i < media.length; i += ALBUM_MAX) {
-      const sent = await ctx.replyWithMediaGroup(media.slice(i, i + ALBUM_MAX), { reply_parameters });
-      for (const [j, msg] of sent.entries()) await receiveMedia(ctx, env, msg, { source, mediaGroupId: group, position: i + j });
-    }
+    const sent = await sendItems(ctx.api, ctx.chat!.id, items, { reply_parameters: { message_id: ctx.msg!.message_id } });
+    const group = groupOf(sent);
+    for (const [i, msg] of sent.entries()) await receiveMedia(ctx, env, msg, { source, mediaGroupId: group, position: i });
   } catch (e) {
     console.error("link import failed", url, e);
     return ctx.reply(t(ctx.lang, "link_failed"), html);
+  }
+}
+
+/** Queue job of the API import: like importLink, but silent and without status messages. */
+export async function linkJob(env: Env, userId: number, url: string) {
+  if (await linkSaved(env.DB, userId, url)) return;
+  const { source, items } = await cobalt(env, url);
+  const sent = await sendItems(botApi(env.BOT_TOKEN), userId, items, { disable_notification: true });
+  const group = groupOf(sent);
+  for (const [i, msg] of sent.entries()) {
+    const memeId = await insertMeme(env.DB, userId, { ...extractMedia(msg)!, caption: null, source, import_id: null });
+    if (!memeId) continue;
+    await addToPost(env.DB, userId, { memeId, mediaGroupId: group, position: i });
+    await env.JOBS.send({ type: "embed", memeId });
   }
 }

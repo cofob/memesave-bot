@@ -13,6 +13,7 @@ import { serveMedia } from "./media";
 import { handleLogin } from "./login";
 import { handleAuthorize, oauthOptions } from "./oauth";
 import { handleApp } from "./webapp";
+import { serveOpenapi } from "./openapi";
 import { billingNotices } from "./billing";
 import { handleBtcpay } from "./crypto";
 import { expireZipUploads, handleUpload, handleZipCallback } from "./zip";
@@ -29,6 +30,7 @@ const app = {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
     if (req.method === "GET" && url.pathname === "/bot") return backToBot(env);
+    if (req.method === "GET" && url.pathname === "/openapi.json") return serveOpenapi(env);
     if (req.method === "GET" && url.pathname === "/oauth/callback") return oauthCallback(req, env);
     if (url.pathname === "/oauth/authorize") return handleAuthorize(req, env);
     if (req.method === "GET" && url.pathname.startsWith("/media/")) return serveMedia(req, env, ctx);

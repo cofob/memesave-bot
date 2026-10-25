@@ -7,6 +7,7 @@ import { embedStage, hashStage } from "./ingest/embed";
 import { purgeStage } from "./purge";
 import { rekeyStage } from "./rekey";
 import { postJob } from "./channels";
+import { linkJob } from "./ingest/link";
 import { failSearch, searchJob } from "./search/chat";
 
 export type SearchJob = { type: "search"; userId: number; messageId: number; placeholderId: number; query: string; lang: Lang };
@@ -17,6 +18,7 @@ export type Job =
   | { type: "batch_poll" }
   | { type: "post"; postId: string }
   | { type: "purge"; userId: number; before: number }
+  | { type: "link"; userId: number; url: string } // API import (src/ingest/link.ts)
   | SearchJob;
 
 async function run(env: Env, job: Job) {
@@ -41,6 +43,8 @@ async function run(env: Env, job: Job) {
       return rekeyStage(env, job.memeId);
     case "purge":
       return purgeStage(env, job.userId, job.before);
+    case "link":
+      return linkJob(env, job.userId, job.url);
   }
 }
 
@@ -48,7 +52,7 @@ async function fail(env: Env, job: Job, error: unknown) {
   if (job.type === "search") return failSearch(env, job);
   if (job.type === "batch_submit") return failImport(env, job.importId, error);
   if (job.type === "batch_poll" || job.type === "hash" || job.type === "rekey") return; // cron runs them again
-  if (job.type === "purge" || job.type === "post") return; // idempotent: the dead letter queue keeps it for a manual re-run
+  if (job.type === "purge" || job.type === "post" || job.type === "link") return; // idempotent: the dead letter queue keeps it for a manual re-run
   return failIngest(env, job.memeId, error);
 }
 
