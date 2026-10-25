@@ -14,7 +14,7 @@ const now = () => Math.floor(Date.now() / 1000);
 
 export type PlanKind = keyof typeof PLANS;
 export type ProductKind = PlanKind | "topup";
-export type Method = "stars" | "btcpay" | "shkeeper";
+export type Method = "stars" | "btcpay";
 
 export const isFree = (u: Pick<User, "role">) => u.role !== "paid";
 export const ownKey = (u: Pick<User, "openrouter_key">) => u.openrouter_key !== null;

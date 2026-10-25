@@ -16,7 +16,8 @@
     "R2_ACCOUNT_ID": "025464e503cbb7385dff88bd6d3c9128",
     "R2_BUCKET": "memesave-media",
     "BTCPAY_URL": "https://btcpay.cofob.dev",
-    "BTCPAY_STORE_ID": "9rM3R2iTYdrsnqHkWiu9co4U79tLVLjAvusCLsvxQgoi"
+    "BTCPAY_STORE_ID": "9rM3R2iTYdrsnqHkWiu9co4U79tLVLjAvusCLsvxQgoi",
+    "BTCPAY_USDT": "Ethereum,Polygon,Plasma"
   },
   "workers_dev": true,
   "preview_urls": false,

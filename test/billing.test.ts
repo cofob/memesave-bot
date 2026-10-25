@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { allowanceLeft, applyPayment, billingNotices, canUseAi, expectedStars, starsFor } from "../src/billing";
-import { handleBtcpay, handleShkeeper } from "../src/crypto";
+import { createBtcpayInvoice, handleBtcpay } from "../src/crypto";
 import { getUser, type User } from "../src/db";
 import type { Env } from "../src/env";
 import { recordSpend } from "../src/spend";
@@ -15,22 +15,25 @@ const e = {
   BTCPAY_STORE_ID: "st",
   BTCPAY_API_KEY: "bk",
   BTCPAY_WEBHOOK_SECRET: "whs",
-  SHKEEPER_URL: "https://shk.example",
-  SHKEEPER_CRYPTOS: "ETH-USDT,POLYGON-USDT",
-  SHKEEPER_API_KEY: "sk",
+  BTCPAY_USDT: "Ethereum,Polygon,Plasma",
 } as Env;
 
 let sent: string[] = [];
+let btcpayBodies: string[] = [];
 let btcpayStatus = "Settled";
 beforeEach(() => {
   sent = [];
+  btcpayBodies = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url.includes("api.telegram.org")) {
       sent.push(String(JSON.parse(String(init?.body ?? "{}")).text ?? ""));
       return Response.json({ ok: true, result: { message_id: 1 } });
     }
-    if (url.startsWith("https://pay.example/")) return Response.json({ id: "inv1", status: btcpayStatus });
+    if (url.startsWith("https://pay.example/")) {
+      if (init?.body) btcpayBodies.push(String(init.body));
+      return Response.json({ id: "inv1", status: btcpayStatus, checkoutLink: "https://pay.example/i/inv1" });
+    }
     throw new Error(`unexpected fetch ${url}`);
   });
 });
@@ -147,32 +150,14 @@ describe("BTCPay", () => {
     expect(await e.DB.prepare("SELECT COUNT(*) n FROM payments WHERE user_id = 401").first("n")).toBe(1);
     expect(await e.DB.prepare("SELECT status FROM crypto_invoices WHERE id = 'o1'").first("status")).toBe("paid");
   });
-});
 
-describe("SHKeeper", () => {
-  const callback = async (body: object, opts: { ts?: number; key?: string } = {}) => {
-    const raw = JSON.stringify(body);
-    const ts = String(opts.ts ?? now());
-    const sig = await hex(opts.key ?? "sk", `${ts}.${raw}`);
-    return handleShkeeper(
-      new Request("https://m.example/pay/shkeeper", { method: "POST", body: raw, headers: { "X-Shkeeper-Timestamp": ts, "X-Shkeeper-Signature": sig } }),
-      e,
-    );
-  };
-
-  it("verifies callbacks; PARTIAL waits, PAID applies once, OVERPAID credits the balance", async () => {
-    await user(501);
-    await e.DB.prepare("INSERT INTO crypto_invoices (id, user_id, provider, kind, usd) VALUES ('s1', 501, 'shkeeper', 'yearly', 10), ('s2', 501, 'shkeeper', 'topup', 5)").run();
-    expect((await callback({ external_id: "s1", status: "PAID" }, { key: "bad" })).status).toBe(401);
-    expect((await callback({ external_id: "s1", status: "PAID" }, { ts: now() - 600 })).status).toBe(401);
-    expect((await callback({ external_id: "s1", status: "PARTIAL", balance_fiat: "4" })).status).toBe(202);
-    expect((await getUser(e.DB, 501))!.paid_until).toBeNull();
-    await callback({ external_id: "s1", status: "PAID" });
-    await callback({ external_id: "s1", status: "PAID" });
-    expect((await getUser(e.DB, 501))!.paid_until).toBeGreaterThan(now() + 359 * DAY);
-    await callback({ external_id: "s2", status: "OVERPAID", overpaid_fiat: "0.5" });
-    expect((await getUser(e.DB, 501))!.balance).toBeCloseTo(5.5);
-    expect(await e.DB.prepare("SELECT COUNT(*) n FROM payments WHERE user_id = 501").first("n")).toBe(3);
+  it("limits a USDT invoice to the chosen network", async () => {
+    const u = await user(402);
+    await createBtcpayInvoice(e, u, "monthly", 1, "Plasma");
+    expect(JSON.parse(btcpayBodies[0]).checkout.paymentMethods).toEqual(["USDT-PLASMA"]);
+    await expect(createBtcpayInvoice(e, u, "monthly", 1, "Tron")).rejects.toThrow();
+    await createBtcpayInvoice(e, u, "monthly", 1);
+    expect(JSON.parse(btcpayBodies[1]).checkout.paymentMethods).toBeUndefined();
   });
 });
 

@@ -23,7 +23,7 @@ import {
 } from "./billing";
 import type { Ctx } from "./bot";
 import { CRYPTO_TOPUPS, MONTHLY_ALLOWANCE, STAR_TOPUPS, STAR_USD } from "./config";
-import { btcpayOn, createBtcpayInvoice, createShkeeperInvoice, productUsd, shkeeperCryptos } from "./crypto";
+import { btcpayOn, createBtcpayInvoice, productUsd, usdtNetworks } from "./crypto";
 import type { User } from "./db";
 import type { Env } from "./env";
 import { t, type Lang } from "./i18n";
@@ -67,8 +67,8 @@ export async function subscribeCard(env: Env, api: Api, u: User, lang: Lang) {
       btcpayOn(env)
         ? [{ text: t(lang, "bill_btn_btcpay_monthly", { usd: money(m) }), callback_data: "bill:btc:monthly" }, { text: t(lang, "bill_btn_btcpay_yearly", { usd: money(y) }), callback_data: "bill:btc:yearly" }]
         : [],
-      shkeeperCryptos(env).length
-        ? [{ text: t(lang, "bill_btn_shkeeper_monthly", { usd: money(m) }), callback_data: "bill:usdt:monthly" }, { text: t(lang, "bill_btn_shkeeper_yearly", { usd: money(y) }), callback_data: "bill:usdt:yearly" }]
+      usdtNetworks(env).length
+        ? [{ text: t(lang, "bill_btn_usdt_monthly", { usd: money(m) }), callback_data: "bill:usdt:monthly" }, { text: t(lang, "bill_btn_usdt_yearly", { usd: money(y) }), callback_data: "bill:usdt:yearly" }]
         : [],
       [topupButton(lang)],
       renew,
@@ -80,7 +80,7 @@ export async function subscribeCard(env: Env, api: Api, u: User, lang: Lang) {
 export async function topupCard(env: Env, api: Api, u: User, lang: Lang) {
   const links = await Promise.all(STAR_TOPUPS.map((s) => starsInvoiceLink(api, u, lang, "topup", s)));
   const stars = STAR_TOPUPS.map((s, i) => ({ text: t(lang, "bill_btn_topup_stars", { stars: s, usd: money(s * STAR_USD) }), url: links[i] }));
-  const crypto = (key: "bill_btn_topup_btcpay" | "bill_btn_topup_shkeeper", prefix: string) =>
+  const crypto = (key: "bill_btn_topup_btcpay" | "bill_btn_topup_usdt", prefix: string) =>
     CRYPTO_TOPUPS.map((x) => ({ text: t(lang, key, { usd: money(x) }), callback_data: `${prefix}:topup:${x}` }));
   return {
     text: t(lang, "bill_topup_choose", { rate: `$${STAR_USD}` }),
@@ -88,7 +88,7 @@ export async function topupCard(env: Env, api: Api, u: User, lang: Lang) {
       stars.slice(0, 2),
       stars.slice(2),
       btcpayOn(env) ? crypto("bill_btn_topup_btcpay", "bill:btc") : [],
-      shkeeperCryptos(env).length ? crypto("bill_btn_topup_shkeeper", "bill:usdt") : [],
+      usdtNetworks(env).length ? crypto("bill_btn_topup_usdt", "bill:usdt") : [],
     ]),
   };
 }
@@ -121,27 +121,21 @@ export async function allowAi(env: Env, ctx: Ctx) {
   return false;
 }
 
-/** Crypto checkout for a product: a BTCPay link, or the USDT address and amount. */
+/** Crypto checkout for a product: a BTCPay link; USDT asks for the network first. */
 async function cryptoCheckout(env: Env, ctx: Ctx, provider: "btc" | "usdt", kind: ProductKind, topup: number | undefined, network?: string) {
   const amount = productUsd(kind, ownKey(ctx.user), topup);
   if (amount === null) return;
   try {
-    if (provider === "btc") {
-      const inv = await createBtcpayInvoice(env, ctx.user, kind, amount);
-      return ctx.reply(t(ctx.lang, "bill_crypto_checkout", { usd: money(amount) }), {
-        ...html,
-        reply_markup: kb([[{ text: t(ctx.lang, "bill_btn_open_checkout"), url: inv.url }]]),
-      });
-    }
-    if (!network) {
+    if (provider === "usdt" && !network) {
       const suffix = kind === "topup" ? `:${amount}` : "";
       return ctx.reply(t(ctx.lang, "bill_usdt_choose"), {
         ...html,
-        reply_markup: kb([shkeeperCryptos(env).map((c) => ({ text: c, callback_data: `bill:usdtn:${c}:${kind}${suffix}` }))]),
+        reply_markup: kb([usdtNetworks(env).map((c) => ({ text: c, callback_data: `bill:usdtn:${c}:${kind}${suffix}` }))]),
       });
     }
-    const inv = await createShkeeperInvoice(env, ctx.user, kind, amount, network);
-    return ctx.reply(t(ctx.lang, "bill_usdt_invoice", { amount: inv.amount, network, address: inv.address }), html);
+    const inv = await createBtcpayInvoice(env, ctx.user, kind, amount, network);
+    const text = network ? t(ctx.lang, "bill_usdt_checkout", { usd: money(amount), network }) : t(ctx.lang, "bill_crypto_checkout", { usd: money(amount) });
+    return ctx.reply(text, { ...html, reply_markup: kb([[{ text: t(ctx.lang, "bill_btn_open_checkout"), url: inv.url }]]) });
   } catch (e) {
     console.error("crypto checkout", e);
     return ctx.reply(t(ctx.lang, "bill_crypto_unavailable"), html);

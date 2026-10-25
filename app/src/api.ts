@@ -107,10 +107,7 @@ export interface Billing {
 
 export interface CryptoInvoice {
   id: string;
-  url?: string; // BTCPay checkout page
-  address?: string; // USDT
-  amount?: string;
-  crypto?: string;
+  url: string; // BTCPay checkout page
 }
 
 export interface Stats {
@@ -211,7 +208,7 @@ export const api = {
   removeChannel: (id: number) => call(`channels/${id}`, { method: "DELETE" }),
   billing: () => call<Billing>("billing"),
   starsInvoice: (kind: ProductKind, stars?: number) => post<{ url: string }>("billing/invoice", { kind, stars }),
-  cryptoInvoice: (body: { provider: "btcpay" | "shkeeper"; kind: ProductKind; usd?: number; crypto?: string }) => post<CryptoInvoice>("billing/crypto", body),
+  cryptoInvoice: (body: { provider: "btcpay"; kind: ProductKind; usd?: number; crypto?: string }) => post<CryptoInvoice>("billing/crypto", body),
   cryptoStatus: (id: string) => call<{ id: string; status: string }>(`billing/crypto/${id}`),
   autorenew: (on: boolean) => post("billing/autorenew", { on }),
   connectKey: () => post<{ url: string }>("key"),

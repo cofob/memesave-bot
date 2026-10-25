@@ -1,19 +1,16 @@
 <script lang="ts">
   import { Alert, Button, Heading, Inline, Progress, Select, Spinner, Text } from "@cofob2/design-system-svelte";
-  import qrcode from "qrcode-generator";
   import { onDestroy } from "svelte";
-  import { api, type Billing, type CryptoInvoice, type ProductKind } from "./api";
+  import { api, type Billing, type ProductKind } from "./api";
   import { paywall } from "./paywall.svelte";
   import { fill, s } from "./strings";
   import { openTab, tg } from "./telegram";
 
   let billing = $state<Billing | null>(null);
-  let method = $state("stars"); // stars | btcpay | usdt:<SHKeeper crypto>
-  let invoice = $state<CryptoInvoice | null>(null);
+  let method = $state("stars"); // stars | btcpay | usdt:<BTCPay USDT network>
   let paid = $state(false);
   let failed = $state(false);
   let busy = $state(false);
-  let copied = $state(false);
 
   const load = async () => {
     billing = await api.billing();
@@ -33,13 +30,6 @@
         ]
       : [],
   );
-  const qr = $derived.by(() => {
-    if (!invoice?.address) return "";
-    const code = qrcode(0, "M");
-    code.addData(invoice.address);
-    code.make();
-    return code.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
-  });
 
   // Polls until the payment arrives (or 60 minutes pass): the crypto invoice status, or the plan for Stars on the web.
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -51,7 +41,6 @@
       if (await check().catch(() => false)) {
         clearInterval(timer);
         paid = true;
-        invoice = null;
         await load();
       }
     }, 5000);
@@ -74,10 +63,8 @@
           });
         }
       } else {
-        const provider = method === "btcpay" ? "btcpay" : "shkeeper";
-        const inv = await api.cryptoInvoice({ provider, kind, usd: amount, crypto: method.startsWith("usdt:") ? method.slice(5) : undefined });
-        if (inv.url) openTab(inv.url);
-        invoice = inv.address ? inv : null;
+        const inv = await api.cryptoInvoice({ provider: "btcpay", kind, usd: amount, crypto: method.startsWith("usdt:") ? method.slice(5) : undefined });
+        openTab(inv.url);
         watch(async () => (await api.cryptoStatus(inv.id)).status === "paid");
       }
     } catch {
@@ -91,11 +78,6 @@
     busy = true;
     await api.autorenew(on).then(load, () => (failed = true));
     busy = false;
-  }
-
-  async function copy() {
-    await navigator.clipboard.writeText(invoice?.address ?? "");
-    copied = true;
   }
 </script>
 
@@ -153,16 +135,6 @@
       {/each}
     {/if}
   </Inline>
-
-  {#if invoice?.address}
-    <Text>{fill(s.billUsdtSend, { amount: invoice.amount ?? "", network: invoice.crypto ?? "" })}</Text>
-    <code class="address">{invoice.address}</code>
-    <Inline gap="sm" align="center" wrap>
-      <Button size="sm" variant="secondary" onclick={copy}>{copied ? s.billCopied : s.billCopy}</Button>
-      <Text tone="muted" size="sm">{s.billWaiting}</Text>
-    </Inline>
-    <div class="qr">{@html qr}</div>
-  {/if}
 {/if}
 
 <style>
@@ -178,15 +150,5 @@
   .grid dd {
     margin: 0;
     font-variant-numeric: tabular-nums;
-  }
-  .address {
-    overflow-wrap: anywhere;
-    user-select: all;
-  }
-  .qr {
-    inline-size: 12rem;
-    padding: var(--cf-space-2);
-    background: #fff;
-    border-radius: var(--cf-radius-md);
   }
 </style>

@@ -12,7 +12,7 @@ import { serveMedia } from "./media";
 import { handleLogin } from "./login";
 import { handleApp } from "./webapp";
 import { billingNotices } from "./billing";
-import { handleBtcpay, handleShkeeper } from "./crypto";
+import { handleBtcpay } from "./crypto";
 import { expireZipUploads, handleUpload, handleZipCallback } from "./zip";
 
 export { ZipImporter } from "./zip";
@@ -31,7 +31,6 @@ export default {
     if (url.pathname.startsWith("/auth/")) return (await handleLogin(req, env)) ?? new Response("Not found", { status: 404 });
     if (url.pathname.startsWith("/zip/")) return handleZipCallback(req, env);
     if (req.method === "POST" && url.pathname === "/pay/btcpay") return handleBtcpay(req, env);
-    if (req.method === "POST" && url.pathname === "/pay/shkeeper") return handleShkeeper(req, env);
     if (url.pathname.startsWith("/export/")) return handleExport(req, env);
     if (req.method === "POST" && url.pathname === "/batch/webhook") {
       // Only a hint: the poll re-reads every batch from OpenRouter with our key.

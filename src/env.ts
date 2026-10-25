@@ -21,11 +21,9 @@ export interface Env {
   OPENROUTER_API_KEY: string;
   ENCRYPTION_KEY: string;
   TG_CLIENT_SECRET: string; // BotFather → Login Widget → Client Secret
-  BTCPAY_URL?: string; // BTCPay Server (BTC, Lightning, XMR); payments are off without it
+  BTCPAY_URL?: string; // BTCPay Server (BTC, Lightning, XMR, USDT); payments are off without it
   BTCPAY_STORE_ID?: string;
   BTCPAY_API_KEY?: string; // secret: Greenfield API key with invoice create/view rights
   BTCPAY_WEBHOOK_SECRET?: string; // secret: webhook to PUBLIC_URL/pay/btcpay
-  SHKEEPER_URL?: string; // SHKeeper (USDT); payments are off without it
-  SHKEEPER_CRYPTOS?: string; // e.g. "ETH-USDT,POLYGON-USDT"
-  SHKEEPER_API_KEY?: string; // secret
+  BTCPAY_USDT?: string; // USDt plugin networks, e.g. "Ethereum,Polygon,Plasma" (payment methods USDT-ETHEREUM, …)
 }
