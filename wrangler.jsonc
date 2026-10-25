@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "memesave-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "assets": { "directory": "./app/dist" },
+  "triggers": { "crons": ["*/15 * * * *"] },
+  "vars": {
+    "ADMIN_ID": "1457408124",
+    "PUBLIC_URL": "https://memereserve.cfb.wtf",
+    // Host for batch image URLs: provider fetchers (Google Vertex) are blocked by the zone's AI-bot rules.
+    "MEDIA_URL": "https://memesave-bot.cofob.workers.dev"
+  },
+  "workers_dev": true,
+  "preview_urls": false,
+  "routes": [{ "pattern": "memereserve.cfb.wtf", "custom_domain": true }],
+  "d1_databases": [
+    { "binding": "DB", "database_name": "memesave", "database_id": "f5a303a3-e2ed-4e35-9e6f-0cf8abead35a", "migrations_dir": "migrations" }
+  ],
+  "vectorize": [{ "binding": "VECTORS", "index_name": "memesave-memes" }],
+  "r2_buckets": [
+    { "binding": "CACHE", "bucket_name": "memesave-tmp" },
+    { "binding": "MEDIA", "bucket_name": "memesave-media" }
+  ],
+  "containers": [
+    { "class_name": "ZipImporter", "image": "./container/Dockerfile", "instance_type": "standard-1", "max_instances": 5 }
+  ],
+  "durable_objects": { "bindings": [{ "name": "ZIP", "class_name": "ZipImporter" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ZipImporter"] }],
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "memesave-jobs" }],
+    "consumers": [
+      { "queue": "memesave-jobs", "max_batch_size": 5, "max_batch_timeout": 1, "max_retries": 3, "max_concurrency": 10, "dead_letter_queue": "memesave-dlq" }
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "memesave-bot",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "bun run build:app && wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc",
+    "migrate:local": "wrangler d1 migrations apply memesave --local",
+    "migrate:remote": "wrangler d1 migrations apply memesave --remote",
+    "setup": "bun scripts/setup.ts",
+    "build:app": "vite build --config app/vite.config.ts",
+    "dev:app": "vite --config app/vite.config.ts"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7",
+    "@grammyjs/auto-retry": "^2.0.2",
+    "grammy": "^1.46.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.7",
+    "@cloudflare/workers-types": "^5.20261024.1",
+    "@cofob2/design-system-css": "^0.5.0",
+    "@cofob2/design-system-svelte": "^0.5.0",
+    "@lucide/svelte": "^1.61.0",
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "@types/node": "^26.6.5",
+    "minisearch": "^7.2.0",
+    "svelte": "^5.57.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.152.0"
+  }
+}
