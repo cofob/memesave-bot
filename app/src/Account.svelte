@@ -1,21 +1,23 @@
 <script lang="ts">
   import { Alert, Button, Drawer, Heading, Inline, Progress, Select, Spinner, Stack, Tabs, Text, TextField } from "@cofob2/design-system-svelte";
   import { Archive } from "@lucide/svelte";
-  import { api, type AllStats, type ImportRow, type Me, type Stats, type UsersList } from "./api";
+  import { api, type AllStats, type ExportStatus, type ImportRow, type Me, type Stats, type UsersList } from "./api";
   import { fill, s, usd } from "./strings";
   import { confirm, openExternal, tg } from "./telegram";
   import { addFiles } from "./uploads.svelte";
+  import Billing from "./Billing.svelte";
 
   interface Props {
     me: Me;
     open: boolean;
     onClose: () => void;
     onMeChange: (me: Me) => void;
+    tab?: string;
   }
-  let { me, open, onClose, onMeChange }: Props = $props();
+  let { me, open, onClose, onMeChange, tab = $bindable("stats") }: Props = $props();
 
-  let tab = $state("stats");
   const tabs = $derived([
+    ...(me.role === "paid" ? [{ id: "billing", label: s.tabBilling }] : []),
     { id: "stats", label: s.tabStats },
     { id: "settings", label: s.tabSettings },
     { id: "batch", label: s.tabBatch },
@@ -28,6 +30,7 @@
   let showAll = $state(false);
   let batch = $state<{ collecting: ImportRow | null; recent: ImportRow[]; failed: number } | null>(null);
   let users = $state<UsersList | null>(null);
+  let exp = $state<ExportStatus | null>(null);
   let message = $state<{ tone: "success" | "danger" | "info"; text: string } | null>(null);
   let busy = $state(false);
   let target = $state("");
@@ -41,7 +44,26 @@
     if (tab === "stats") api.stats().then((v) => (stats = v), () => {});
     if (tab === "batch") api.batch().then((v) => (batch = v), () => {});
     if (tab === "admin") api.users().then((v) => (users = v), () => {});
+    if (tab === "settings") api.exportStatus().then((v) => (exp = v), () => {});
+    if (tab === "settings") api.accountSummary().then((v) => (summary = v), () => {});
   });
+
+  // Export progress while the Settings tab is open.
+  $effect(() => {
+    if (!open || tab !== "settings") return;
+    const timer = setInterval(() => exp?.status === "running" && api.exportStatus().then((v) => (exp = v), () => {}), 10_000);
+    return () => clearInterval(timer);
+  });
+  const DELETE_CONFIRM = "DELETE"; // same phrase as the bot's /delete_all
+  let summary = $state<{ memes: number; payments: number } | null>(null);
+  let deleteText = $state("");
+  async function deleteAll() {
+    await api.deleteAccount(deleteText);
+    if (tg) return tg.close();
+    await api.logout();
+    location.reload();
+  }
+  const exportBlocked = $derived(!!exp?.next_at && exp.next_at > Date.now() / 1000);
 
   // Live batch progress while the Batch tab is open and something is running.
   const running = (r: ImportRow) => ["submitting", "submitted", "processing"].includes(r.status) || r.pending > 0;
@@ -89,7 +111,9 @@
         <div class="panel">
           {#if message}<Alert tone={message.tone} title={message.text} />{/if}
 
-          {#if current.id === "stats"}
+          {#if current.id === "billing"}
+            <Billing />
+          {:else if current.id === "stats"}
             {#if !stats}
               <Spinner label="Loading" />
             {:else}
@@ -138,7 +162,19 @@
               ]}
               onchange={(e: Event) => {
                 const mode = (e.currentTarget as HTMLSelectElement).value as Me["search_mode"];
-                act(() => api.setSearchMode(mode), s.stateReady).then(() => onMeChange({ ...me, search_mode: mode }));
+                act(() => api.setSettings({ search_mode: mode }), s.stateReady).then(() => onMeChange({ ...me, search_mode: mode }));
+              }}
+            />
+            <Select
+              label={s.tierLabel}
+              value={me.describe_tier}
+              options={[
+                { value: "max", label: s.tierMax },
+                { value: "medium", label: s.tierMedium },
+              ]}
+              onchange={(e: Event) => {
+                const tier = (e.currentTarget as HTMLSelectElement).value as Me["describe_tier"];
+                act(() => api.setSettings({ describe_tier: tier }), s.stateReady).then(() => onMeChange({ ...me, describe_tier: tier }));
               }}
             />
             <Heading as="h3" size="sm">{s.keyTitle}</Heading>
@@ -152,6 +188,31 @@
                   onclick={() => act(() => api.removeKey(), s.stateReady).then(() => onMeChange({ ...me, key: false }))}>{s.keyRemove}</Button
                 >
               {/if}
+            </Inline>
+            <Heading as="h3" size="sm">{s.exportTitle}</Heading>
+            <Text tone="muted" size="sm">{s.exportHint}</Text>
+            {#if exp?.status === "running"}
+              <Inline gap="sm" align="center"><Spinner label="Loading" /><Text>{s.exportRunning}</Text></Inline>
+            {:else if exp?.status === "failed"}
+              <Text tone="muted">{fill(s.exportFailed, { error: exp.error ?? "" })}</Text>
+            {/if}
+            <Inline gap="sm" align="center" wrap>
+              {#if exp?.url}
+                <Button size="sm" onclick={() => openExternal(exp!.url!)}>{s.exportDownload}</Button>
+              {/if}
+              {#if exportBlocked}
+                {#if exp?.status !== "running"}<Text tone="muted" size="sm">{fill(s.exportNext, { time: date(exp!.next_at!) })}</Text>{/if}
+              {:else}
+                <Button size="sm" variant="secondary" loading={busy} onclick={() => act(async () => (await api.exportStart(), (exp = await api.exportStatus())))}
+                  >{s.exportStart}</Button
+                >
+              {/if}
+            </Inline>
+            <Heading as="h3" size="sm">{s.deleteTitle}</Heading>
+            <Text tone="muted" size="sm">{fill(s.deleteWarn, { memes: summary?.memes ?? "…", payments: summary?.payments ?? "…" })}</Text>
+            <Inline gap="sm" align="end" wrap>
+              <TextField label={fill(s.deleteLabel, { confirm: DELETE_CONFIRM })} bind:value={deleteText} size="sm" />
+              <Button size="sm" variant="danger" loading={busy} disabled={deleteText !== DELETE_CONFIRM} onclick={() => act(deleteAll)}>{s.deleteButton}</Button>
             </Inline>
           {:else if current.id === "batch"}
             {#if !batch}
@@ -226,6 +287,7 @@
                 options={[
                   { value: "user", label: s.adminRoleUser },
                   { value: "admin", label: s.adminRoleAdmin },
+                  { value: "paid", label: s.adminRolePaid },
                 ]}
               />
               <Button size="sm" loading={busy} disabled={!target.trim()} onclick={() => adminAction("grant", target)}>{s.adminGrant}</Button>

@@ -1,6 +1,6 @@
 import type { Lang } from "./i18n";
 
-export type Role = "admin" | "user";
+export type Role = "admin" | "user" | "paid";
 export type Kind = "photo" | "video" | "animation";
 
 export interface User {
@@ -11,6 +11,14 @@ export interface User {
   search_mode: "advanced" | "fast";
   total_cost: number;
   openrouter_key: string | null;
+  describe_tier: "max" | "medium";
+  plan: "monthly" | "yearly" | null;
+  plan_byok: number;
+  paid_until: number | null;
+  plan_started: number | null;
+  balance: number;
+  sub_charge_id: string | null;
+  sub_state: string | null;
 }
 
 export interface Meme {
@@ -77,11 +85,17 @@ export const recentMemes = async (db: D1Database, userId: number, limit: number)
       .all<Meme>()
   ).results;
 
-export async function deleteMeme(env: { DB: D1Database; VECTORS: Vectorize; MEDIA: R2Bucket }, id: string) {
-  await env.VECTORS.deleteByIds([`${id}:i`, `${id}:t`]);
-  const row = await env.DB.prepare("DELETE FROM memes WHERE id = ? RETURNING r2_file, r2_preview")
-    .bind(id)
-    .first<{ r2_file: string | null; r2_preview: string | null }>();
-  const keys = [row?.r2_file, row?.r2_preview].filter((k): k is string => !!k);
+type MemeStores = { DB: D1Database; VECTORS: Vectorize; MEDIA: R2Bucket };
+
+/** Deletes memes with their vectors and R2 files (up to 100 ids: Vectorize and D1 bind limits). */
+export async function deleteMemes(env: MemeStores, ids: string[]) {
+  if (!ids.length) return;
+  await env.VECTORS.deleteByIds(ids.flatMap((id) => [`${id}:i`, `${id}:t`]));
+  const { results } = await env.DB.prepare(`DELETE FROM memes WHERE id IN (${ids.map(() => "?").join(",")}) RETURNING r2_file, r2_preview`)
+    .bind(...ids)
+    .all<{ r2_file: string | null; r2_preview: string | null }>();
+  const keys = results.flatMap((r) => [r.r2_file, r.r2_preview]).filter((k): k is string => !!k);
   if (keys.length) await env.MEDIA.delete(keys);
 }
+
+export const deleteMeme = (env: MemeStores, id: string) => deleteMemes(env, [id]);

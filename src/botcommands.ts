@@ -4,7 +4,7 @@ import type { Role } from "./db";
 import type { Env } from "./env";
 import { t, type Key, type Lang } from "./i18n";
 
-const USER_COMMANDS = ["start", "help", "stats", "settings", "key", "batch", "batch_zip", "batch_finish", "batch_cancel", "batch_status", "batch_retry", "delete", "about"];
+const USER_COMMANDS = ["start", "help", "stats", "settings", "key", "batch", "batch_zip", "batch_finish", "batch_cancel", "batch_status", "batch_retry", "export", "delete", "delete_all", "subscribe", "balance", "paysupport", "terms", "about"];
 const ADMIN_COMMANDS = [...USER_COMMANDS, "grant", "revoke", "users"];
 
 const list = (names: string[], lang: Lang) =>

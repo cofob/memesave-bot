@@ -9,8 +9,13 @@ import { oauthUrl, setUserKey } from "./userkey";
 import { allStats, userStats } from "./stats";
 import { batchProgress, cancelImport, collectingImport, countMemes, finishImport, retryFailed, startImport } from "./batch";
 import { createZipImport, setZipStatusMessage } from "./zip";
+import { isActive } from "./billing";
+import { allowAi, balanceText, subscribeCard, topupCard } from "./billingbot";
+import { setExportStatusMessage, startExport } from "./export";
+import { accountSummary, CONFIRM, deleteAccount } from "./purge";
 
 const html = { parse_mode: "HTML" } as const;
+const utc = (t: number) => new Date(t * 1000).toISOString().slice(0, 16).replace("T", " ") + " UTC";
 
 /** file_unique_ids of the media in a message (all photo sizes, so any of them matches). */
 export function mediaUniqueIds(msg: Message): string[] {
@@ -25,7 +30,12 @@ function settingsKeyboard(user: User, lang: Lang) {
     callback_data: `mode:${mode}`,
     ...(user.search_mode === mode ? { icon_custom_emoji_id: EMOJI.done[0] } : {}),
   });
-  return { inline_keyboard: [[button("advanced"), button("fast")]] };
+  const tier = (tier: User["describe_tier"]) => ({
+    text: t(lang, tier === "max" ? "tier_max" : "tier_medium"),
+    callback_data: `tier:${tier}`,
+    ...(user.describe_tier === tier ? { icon_custom_emoji_id: EMOJI.done[0] } : {}),
+  });
+  return { inline_keyboard: [[button("advanced"), button("fast")], [tier("max"), tier("medium")]] };
 }
 
 async function statsText(env: Env, user: User, lang: Lang) {
@@ -40,6 +50,7 @@ async function statsText(env: Env, user: User, lang: Lang) {
     kinds: "",
   });
   if (st.kinds.length) text += t(lang, "stats_kinds", { lines: st.kinds.map((k) => `${k.kind}: ${usd(k.cost)} (${k.count})`).join("\n") });
+  if (user.role === "paid") text += "\n\n" + (await balanceText(env, user, lang));
   return text;
 }
 
@@ -64,8 +75,16 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
       await ctx.reply(t(ctx.lang, "key_failed"), html);
       return replyKey(ctx, env);
     }
+    if (ctx.match === "subscribe" || ctx.match === "topup") {
+      const card = await (ctx.match === "subscribe" ? subscribeCard : topupCard)(env, ctx.api, ctx.user, ctx.lang);
+      return ctx.reply(card.text, { ...html, reply_markup: card.reply_markup });
+    }
     const app = { text: t(ctx.lang, "app_button"), web_app: { url: `${env.PUBLIC_URL.replace(/\/$/, "")}/` } };
     await ctx.reply(t(ctx.lang, "start", { bot: ctx.me.username, role: ctx.user.role }), { ...html, reply_markup: { inline_keyboard: [[app]] } });
+    if (ctx.user.role === "paid" && !isActive(ctx.user)) {
+      const card = await subscribeCard(env, ctx.api, ctx.user, ctx.lang);
+      await ctx.reply(card.text, { ...html, reply_markup: card.reply_markup });
+    }
   });
 
   bot.command("help", (ctx) =>
@@ -99,12 +118,13 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
   });
 
   bot.command("settings", (ctx) =>
-    ctx.reply(t(ctx.lang, "settings"), { ...html, reply_markup: settingsKeyboard(ctx.user, ctx.lang) }),
+    ctx.reply(t(ctx.lang, "settings") + "\n\n" + t(ctx.lang, "tier_hint"), { ...html, reply_markup: settingsKeyboard(ctx.user, ctx.lang) }),
   );
 
   bot.command("key", (ctx) => replyKey(ctx, env));
 
   bot.command("batch", async (ctx) => {
+    if (!(await allowAi(env, ctx))) return;
     const { created, count } = await startImport(env.DB, ctx.user.id);
     await ctx.reply(created ? t(ctx.lang, "batch_started") : t(ctx.lang, "batch_open", { n: count }), html);
   });
@@ -133,15 +153,32 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
   bot.command("batch_retry", async (ctx) => {
     const failed = (await batchProgress(env, ctx.user.id)).failed;
     if (!failed) return ctx.reply(t(ctx.lang, "batch_retry_none"), html);
+    if (!(await allowAi(env, ctx))) return;
     const msg = await ctx.reply(t(ctx.lang, "batch_retry_started", { photos: "…", others: "…" }), html);
     const { photos, others } = await retryFailed(env, ctx.user.id, msg.message_id);
     await ctx.api.editMessageText(ctx.chat.id, msg.message_id, t(ctx.lang, "batch_retry_started", { photos, others }), html).catch(() => {});
   });
 
   bot.command("batch_zip", async (ctx) => {
+    if (!(await allowAi(env, ctx))) return;
     const zip = await createZipImport(env, ctx.user.id, ctx.lang);
     const msg = await ctx.reply(zip.text, { ...html, reply_markup: { inline_keyboard: [[zip.button]] } });
     await setZipStatusMessage(env.DB, zip.id, msg.message_id);
+  });
+
+  bot.command("export", async (ctx) => {
+    const res = await startExport(env, ctx.user.id);
+    if ("next_at" in res) return ctx.reply(t(ctx.lang, "export_limit", { time: utc(res.next_at) }), html);
+    const msg = await ctx.reply(t(ctx.lang, "export_started"), html);
+    await setExportStatusMessage(env.DB, res.id, msg.message_id);
+  });
+
+  bot.command("delete_all", async (ctx) => {
+    if (ctx.match.trim() !== CONFIRM) {
+      return ctx.reply(t(ctx.lang, "delete_all_warn", { ...(await accountSummary(env.DB, ctx.user.id)), confirm: CONFIRM }), html);
+    }
+    await deleteAccount(env, ctx.user);
+    await ctx.reply(t(ctx.lang, "delete_all_done"), html);
   });
 
   bot.command("batch_cancel", async (ctx) => {
@@ -160,5 +197,12 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
     await env.DB.prepare("UPDATE users SET search_mode = ? WHERE id = ?").bind(mode, ctx.user.id).run();
     await ctx.answerCallbackQuery(t(ctx.lang, "mode_saved"));
     await ctx.editMessageReplyMarkup({ reply_markup: settingsKeyboard({ ...ctx.user, search_mode: mode }, ctx.lang) }).catch(() => {});
+  });
+
+  bot.callbackQuery(/^tier:(max|medium)$/, async (ctx) => {
+    const tier = ctx.match[1] as User["describe_tier"];
+    await env.DB.prepare("UPDATE users SET describe_tier = ? WHERE id = ?").bind(tier, ctx.user.id).run();
+    await ctx.answerCallbackQuery(t(ctx.lang, "mode_saved"));
+    await ctx.editMessageReplyMarkup({ reply_markup: settingsKeyboard({ ...ctx.user, describe_tier: tier }, ctx.lang) }).catch(() => {});
   });
 }

@@ -40,10 +40,14 @@ Forward a photo, video or GIF to save it. Send text to search: a caption fragmen
 /batch_zip — import a .zip with media or a Telegram chat export
 /batch_status — batch progress
 /batch_retry — retry failed memes
+/export — download all your data as a .zip
+/delete_all — delete your account and all data
+/subscribe, /balance — plan and AI balance
+/paysupport, /terms — payment support and terms
 /about — what the bot stores`,
   help_admin: `
 <b>Admin</b>
-/grant @username|id [user|admin]
+/grant @username|id [user|admin|paid]
 /revoke @username|id
 /users — list users
 /stats all — spend of all users`,
@@ -105,7 +109,7 @@ They were not sent to full-price processing. Fix the cause, then run /batch_retr
   batch_status_failed: "Failed memes: {n}. Retry them with /batch_retry.",
   batch_retry_none: `${E.notFound} No failed memes.`,
   batch_retry_started: `${E.indexing} Retrying {photos} photos as a half-price batch and {others} videos/GIFs normally…`,
-  zip_link: `${E.indexing} Upload a .zip with the button: any archive with photos, videos and GIFs, or a Telegram Desktop chat export (<b>HTML</b> or <b>JSON</b>). The type is detected automatically. The link works for 24 h. Photos are described in a half-price batch automatically; videos and GIFs are indexed right away.`,
+  zip_link: `${E.indexing} Upload a .zip with the button: any archive with photos, videos and GIFs, a Telegram Desktop chat export (<b>HTML</b> or <b>JSON</b>), or a memesave /export (restored without AI processing). The type is detected automatically. The link works for 24 h. Photos are described in a half-price batch automatically; videos and GIFs are indexed right away.`,
   zip_button: "Upload .zip",
   app_button: "Open App",
   zip_unpacking: `${E.indexing} Archive uploaded. Unpacking and checking media…`,
@@ -113,8 +117,20 @@ They were not sent to full-price processing. Fix the cause, then run /batch_retr
   fmt_telegram_json: "Telegram JSON export",
   fmt_telegram_html: "Telegram HTML export",
   fmt_files: "media files",
+  fmt_memesave: "memesave export",
   zip_done: `${E.done} <b>Archive imported:</b> {imported} new memes, {skipped} duplicates skipped, {failed} failed. Photos are submitted as a half-price batch; I will tell you when it is done.`,
   zip_failed: `${E.error} Archive import failed: {error}`,
+  export_started: `${E.indexing} Preparing your data export: memes, metadata, embeddings and all files. I will send a link when the .zip is ready.`,
+  export_limit: `${E.help} One export per day. The next one is possible after {time}.`,
+  export_done: `${E.done} <b>Your data export is ready:</b> {size} MB, {files} files ({failed} could not be read). The link works for 7 days.`,
+  export_button: "Download .zip",
+  delete_all_warn: `${E.deleted} <b>Delete your account and all data?</b>
+This removes {memes} memes with their files, descriptions and embeddings, your AI spend history, {payments} payments, your subscription and balance, and your OpenRouter key. It cannot be undone. Messages in this chat stay.
+
+Download a copy first: /export
+To confirm, send <code>/delete_all {confirm}</code>`,
+  delete_all_done: `${E.deleted} Account deleted. Files are removed in the background within minutes. Write again any time to start over as a new user.`,
+  export_failed: `${E.error} Data export failed: {error}. You can try /export again.`,
   page_title: "Import a .zip",
   page_lead: "Upload any .zip with photos, videos and GIFs, or a chat exported from Telegram Desktop (HTML or JSON); the type is detected automatically. Unique media are added to your collection.",
   page_drop: "Choose or drop a .zip file",
@@ -122,8 +138,92 @@ They were not sent to full-price processing. Fix the cause, then run /batch_retr
   page_done: "Upload complete. You can return to Telegram: the bot shows the progress.",
   page_error: "Upload failed. Open the link from the bot again and retry.",
   page_used: "This link was already used. Send /batch_zip to the bot for a new one.",
+  bill_btn_subscribe: "Subscribe",
+  bill_btn_topup: "Top up",
+  bill_btn_balance: "Balance",
+  bill_btn_connect_key: "Connect OpenRouter",
+  bill_btn_cancel_renew: "Turn off auto-renew",
+  bill_btn_resume_renew: "Turn on auto-renew",
+  bill_btn_stars_monthly: "⭐ Monthly · {stars}⭐",
+  bill_btn_stars_yearly: "⭐ Yearly · {stars}⭐",
+  bill_btn_btcpay_monthly: "₿ BTC/XMR · month · {usd}",
+  bill_btn_btcpay_yearly: "₿ BTC/XMR · year · {usd}",
+  bill_btn_shkeeper_monthly: "USDT · month · {usd}",
+  bill_btn_shkeeper_yearly: "USDT · year · {usd}",
+  bill_btn_topup_stars: "{stars}⭐ → +{usd}",
+  bill_btn_topup_btcpay: "₿ BTC/XMR {usd}",
+  bill_btn_topup_shkeeper: "USDT {usd}",
+  bill_btn_pay_stars: "Pay {stars}⭐",
+  bill_btn_open_checkout: "Open payment page",
+  bill_gate_subscribe: `${E.noAccess} memesave is a paid bot. Subscribe to save and search memes: from {price}/month, with {allowance} of AI spend included.`,
+  bill_gate_credit: `${E.error} Out of AI credit: this month's included spend is used up and your balance is empty. Top up, or connect your own OpenRouter account (/key).`,
+  bill_subscribe: `${E.stats} <b>Subscription</b>
+Monthly: <b>{m_usd}</b> ({m_stars}⭐), renews automatically with Stars
+Yearly: <b>{y_usd}</b> ({y_stars}⭐) for 12 months
+{included}
+AI use above the included spend is paid from your balance at the actual API price, or by your own OpenRouter key (/key).
+{status}`,
+  bill_included_std: "Includes {allowance} of AI spend per month; it does not carry over. With your own OpenRouter key the price is lower.",
+  bill_included_byok: "Price with your own OpenRouter key: AI costs go to your key.",
+  bill_status_free: "Your account is free: no subscription needed.",
+  bill_status_active: "Active until <b>{date}</b>{renew}.",
+  bill_renew_on: ", renews automatically",
+  bill_renew_off: ", auto-renew off",
+  bill_status_none: "No active subscription.",
+  bill_balance_card: `${E.stats} <b>Balance</b>
+{status}
+Included AI spend left this month: <b>{left}</b> of {allowance}
+Balance: <b>{balance}</b>
+Own OpenRouter key: {own}`,
+  bill_yes: "connected",
+  bill_no: "not connected",
+  bill_topup_choose: `${E.help} Choose a top-up. Stars are added at {rate} per ⭐.`,
+  bill_pay_link: `${E.help} {title}: {stars}⭐`,
+  bill_crypto_checkout: `${E.help} Pay <b>{usd}</b> in Bitcoin, Lightning or Monero on the payment page (valid 60 min). I will tell you when the payment is confirmed.`,
+  bill_usdt_choose: `${E.help} Choose the USDT network:`,
+  bill_usdt_invoice: `${E.help} Send exactly <code>{amount}</code> USDT ({network}) to:
+<code>{address}</code>
+Only this network! I will tell you when the payment is confirmed.`,
+  bill_usdt_partial: `${E.error} Received {paid} of {usd}. Send the rest to the same address.`,
+  bill_crypto_unavailable: `${E.error} This payment method is not available right now. Try another one.`,
+  bill_title_monthly: "memesave · 1 month",
+  bill_title_yearly: "memesave · 12 months",
+  bill_title_topup: "memesave · AI balance",
+  bill_desc_plan: "Saving and searching memes with AI. Includes $0.50 of AI spend per month.",
+  bill_desc_byok: "Saving and searching memes with AI using your own OpenRouter key.",
+  bill_desc_topup: "Adds {amount} to your AI balance.",
+  bill_precheckout_bad: "This invoice is outdated. Open /subscribe again.",
+  bill_active: `${E.done} Subscription active until {date}.`,
+  bill_renewed: `${E.done} Subscription renewed until {date}.`,
+  bill_topped_up: `${E.done} Balance topped up: +{amount} (now {balance}).`,
+  bill_renew_failed: `${E.error} Auto-renewal payment failed. Pay before {date} to keep access.`,
+  bill_renew_canceled: `${E.done} Auto-renew is off. Access stays until {date}.`,
+  bill_renew_resumed: `${E.done} Auto-renew is on again.`,
+  bill_allow_80: `${E.indexing} 80% of this month's included AI spend is used ({left} left).`,
+  bill_allow_done: `${E.error} This month's included AI spend is used up. Further AI use is paid from your balance ({balance}).`,
+  bill_balance_low: `${E.error} Your AI balance is low: {balance}.`,
+  bill_balance_empty: `${E.error} Your AI balance is empty. New saves and searches are paused until you top up or connect your own OpenRouter account.`,
+  bill_renew_soon: `${E.indexing} Your subscription renews on {date} for {stars}⭐. Keep enough Stars in Telegram.`,
+  bill_expiry_soon: `${E.indexing} Your subscription ends on {date}. Renew it to keep saving and searching.`,
+  bill_expired: `${E.error} Your subscription has ended. Saving and search are paused; your memes are kept.`,
+  paysupport: `${E.help} Payment support: write to the bot owner, {contact}. Include the date and amount of the payment.`,
+  terms: `${E.help} <b>Terms</b>
+• A subscription gives access to saving and searching memes with AI for the paid period.
+• Included AI spend is per 30-day month and does not carry over.
+• The balance pays AI costs at the actual API price. Used balance is not refunded; for anything else write to /paysupport.
+• Prices may change for future periods.`,
+  tier_title: "Describe quality",
+  tier_max: "Max",
+  tier_medium: "Medium",
+  tier_hint: `${E.settings} <b>Describe quality</b>
+<b>Max</b> — Gemini 4 Argon: best recognition.
+<b>Medium</b> — GPT-6 Luna: about 20× cheaper. Videos always use Gemini Flash.`,
+  cmd_subscribe: "Subscription",
+  cmd_balance: "Balance and plan",
+  cmd_paysupport: "Payment support",
+  cmd_terms: "Terms",
   admin_only: `${E.noAccess} Admins only.`,
-  grant_usage: `${E.help} Usage: /grant @username|id [user|admin]`,
+  grant_usage: `${E.help} Usage: /grant @username|id [user|admin|paid]`,
   revoke_usage: `${E.help} Usage: /revoke @username|id`,
   granted: `${E.admin} {target} is now <b>{role}</b>.`,
   granted_pending: `${E.admin} {target} will be <b>{role}</b> after the first message to the bot.`,
@@ -143,6 +243,8 @@ They were not sent to full-price processing. Fix the cause, then run /batch_retr
   cmd_batch_finish: "Submit the batch import",
   cmd_batch_cancel: "Stop batch mode",
   cmd_batch_zip: "Import a .zip (media or chat export)",
+  cmd_export: "Export all your data",
+  cmd_delete_all: "Delete your account and all data",
   cmd_batch_status: "Batch progress",
   cmd_batch_retry: "Retry failed memes",
   cmd_grant: "Give access",
@@ -172,10 +274,14 @@ const ru: Record<Key, string> = {
 /batch_zip — импорт .zip с медиа или экспорта чата Telegram
 /batch_status — прогресс пакетов
 /batch_retry — повторить мемы с ошибкой
+/export — скачать все ваши данные в .zip
+/delete_all — удалить аккаунт и все данные
+/subscribe, /balance — тариф и баланс ИИ
+/paysupport, /terms — поддержка по оплате и условия
 /about — что хранит бот`,
   help_admin: `
 <b>Админ</b>
-/grant @username|id [user|admin]
+/grant @username|id [user|admin|paid]
 /revoke @username|id
 /users — список пользователей
 /stats all — расходы всех пользователей`,
@@ -237,7 +343,7 @@ const ru: Record<Key, string> = {
   batch_status_failed: "Мемов с ошибкой: {n}. Повторить: /batch_retry.",
   batch_retry_none: `${E.notFound} Мемов с ошибкой нет.`,
   batch_retry_started: `${E.indexing} Повторяю {photos} фото пакетом за полцены и {others} видео/GIF обычным способом…`,
-  zip_link: `${E.indexing} Загрузите .zip по кнопке: любой архив с фото, видео и GIF или экспорт чата из Telegram Desktop (<b>HTML</b> или <b>JSON</b>). Тип определяется автоматически. Ссылка работает 24 ч. Фото автоматически описываются пакетом за полцены; видео и GIF индексируются сразу.`,
+  zip_link: `${E.indexing} Загрузите .zip по кнопке: любой архив с фото, видео и GIF, экспорт чата из Telegram Desktop (<b>HTML</b> или <b>JSON</b>) или /export из memesave (восстанавливается без AI-обработки). Тип определяется автоматически. Ссылка работает 24 ч. Фото автоматически описываются пакетом за полцены; видео и GIF индексируются сразу.`,
   zip_button: "Загрузить .zip",
   app_button: "Открыть приложение",
   zip_unpacking: `${E.indexing} Архив загружен. Распаковываю и проверяю медиа…`,
@@ -245,8 +351,20 @@ const ru: Record<Key, string> = {
   fmt_telegram_json: "экспорт Telegram JSON",
   fmt_telegram_html: "экспорт Telegram HTML",
   fmt_files: "медиафайлы",
+  fmt_memesave: "экспорт memesave",
   zip_done: `${E.done} <b>Архив импортирован:</b> {imported} новых мемов, {skipped} дубликатов пропущено, {failed} с ошибкой. Фото отправлены пакетом за полцены; я напишу, когда он будет готов.`,
   zip_failed: `${E.error} Импорт архива не удался: {error}`,
+  export_started: `${E.indexing} Готовлю экспорт ваших данных: мемы, метаданные, эмбеддинги и все файлы. Пришлю ссылку, когда .zip будет готов.`,
+  export_limit: `${E.help} Экспорт можно делать раз в день. Следующий — после {time}.`,
+  export_done: `${E.done} <b>Экспорт данных готов:</b> {size} МБ, {files} файлов ({failed} не удалось прочитать). Ссылка работает 7 дней.`,
+  export_button: "Скачать .zip",
+  delete_all_warn: `${E.deleted} <b>Удалить аккаунт и все данные?</b>
+Будут удалены {memes} мемов с файлами, описаниями и эмбеддингами, история расходов на AI, {payments} платежей, подписка и баланс, а также ключ OpenRouter. Это нельзя отменить. Сообщения в этом чате останутся.
+
+Сначала скачайте копию: /export
+Для подтверждения отправьте <code>/delete_all {confirm}</code>`,
+  delete_all_done: `${E.deleted} Аккаунт удалён. Файлы удаляются в фоне в течение нескольких минут. Напишите в любой момент, чтобы начать заново как новый пользователь.`,
+  export_failed: `${E.error} Экспорт данных не удался: {error}. Попробуйте /export ещё раз.`,
   page_title: "Импорт .zip",
   page_lead: "Загрузите любой .zip с фото, видео и GIF или чат, экспортированный из Telegram Desktop (HTML или JSON); тип определяется автоматически. Уникальные медиа добавятся в вашу коллекцию.",
   page_drop: "Выберите или перетащите .zip",
@@ -254,8 +372,92 @@ const ru: Record<Key, string> = {
   page_done: "Загрузка завершена. Можно вернуться в Telegram: бот покажет прогресс.",
   page_error: "Загрузка не удалась. Откройте ссылку из бота ещё раз и повторите.",
   page_used: "Эта ссылка уже использована. Отправьте боту /batch_zip, чтобы получить новую.",
+  bill_btn_subscribe: "Подписаться",
+  bill_btn_topup: "Пополнить",
+  bill_btn_balance: "Баланс",
+  bill_btn_connect_key: "Подключить OpenRouter",
+  bill_btn_cancel_renew: "Выключить автопродление",
+  bill_btn_resume_renew: "Включить автопродление",
+  bill_btn_stars_monthly: "⭐ Месяц · {stars}⭐",
+  bill_btn_stars_yearly: "⭐ Год · {stars}⭐",
+  bill_btn_btcpay_monthly: "₿ BTC/XMR · месяц · {usd}",
+  bill_btn_btcpay_yearly: "₿ BTC/XMR · год · {usd}",
+  bill_btn_shkeeper_monthly: "USDT · месяц · {usd}",
+  bill_btn_shkeeper_yearly: "USDT · год · {usd}",
+  bill_btn_topup_stars: "{stars}⭐ → +{usd}",
+  bill_btn_topup_btcpay: "₿ BTC/XMR {usd}",
+  bill_btn_topup_shkeeper: "USDT {usd}",
+  bill_btn_pay_stars: "Оплатить {stars}⭐",
+  bill_btn_open_checkout: "Открыть страницу оплаты",
+  bill_gate_subscribe: `${E.noAccess} memesave — платный бот. Оформите подписку, чтобы сохранять и искать мемы: от {price} в месяц, {allowance} расходов на ИИ включено.`,
+  bill_gate_credit: `${E.error} Закончился кредит на ИИ: включённые расходы этого месяца израсходованы, а баланс пуст. Пополните баланс или подключите свой аккаунт OpenRouter (/key).`,
+  bill_subscribe: `${E.stats} <b>Подписка</b>
+Месяц: <b>{m_usd}</b> ({m_stars}⭐), продлевается автоматически звёздами
+Год: <b>{y_usd}</b> ({y_stars}⭐) на 12 месяцев
+{included}
+Расходы на ИИ сверх включённых оплачиваются с баланса по фактической цене API или вашим ключом OpenRouter (/key).
+{status}`,
+  bill_included_std: "Включено {allowance} расходов на ИИ в месяц, остаток не переносится. Со своим ключом OpenRouter цена ниже.",
+  bill_included_byok: "Цена со своим ключом OpenRouter: расходы на ИИ идут на ваш ключ.",
+  bill_status_free: "Ваш аккаунт бесплатный: подписка не нужна.",
+  bill_status_active: "Активна до <b>{date}</b>{renew}.",
+  bill_renew_on: ", продлевается автоматически",
+  bill_renew_off: ", автопродление выключено",
+  bill_status_none: "Нет активной подписки.",
+  bill_balance_card: `${E.stats} <b>Баланс</b>
+{status}
+Осталось включённых расходов на ИИ в этом месяце: <b>{left}</b> из {allowance}
+Баланс: <b>{balance}</b>
+Свой ключ OpenRouter: {own}`,
+  bill_yes: "подключён",
+  bill_no: "не подключён",
+  bill_topup_choose: `${E.help} Выберите пополнение. Звёзды зачисляются по {rate} за ⭐.`,
+  bill_pay_link: `${E.help} {title}: {stars}⭐`,
+  bill_crypto_checkout: `${E.help} Оплатите <b>{usd}</b> в Bitcoin, Lightning или Monero на странице оплаты (действует 60 мин). Я напишу, когда платёж подтвердится.`,
+  bill_usdt_choose: `${E.help} Выберите сеть USDT:`,
+  bill_usdt_invoice: `${E.help} Отправьте ровно <code>{amount}</code> USDT ({network}) на адрес:
+<code>{address}</code>
+Только эта сеть! Я напишу, когда платёж подтвердится.`,
+  bill_usdt_partial: `${E.error} Получено {paid} из {usd}. Отправьте остаток на тот же адрес.`,
+  bill_crypto_unavailable: `${E.error} Этот способ оплаты сейчас недоступен. Попробуйте другой.`,
+  bill_title_monthly: "memesave · 1 месяц",
+  bill_title_yearly: "memesave · 12 месяцев",
+  bill_title_topup: "memesave · баланс ИИ",
+  bill_desc_plan: "Сохранение и поиск мемов с ИИ. Включено $0.50 расходов на ИИ в месяц.",
+  bill_desc_byok: "Сохранение и поиск мемов с ИИ на вашем ключе OpenRouter.",
+  bill_desc_topup: "Пополняет баланс ИИ на {amount}.",
+  bill_precheckout_bad: "Этот счёт устарел. Откройте /subscribe ещё раз.",
+  bill_active: `${E.done} Подписка активна до {date}.`,
+  bill_renewed: `${E.done} Подписка продлена до {date}.`,
+  bill_topped_up: `${E.done} Баланс пополнен: +{amount} (теперь {balance}).`,
+  bill_renew_failed: `${E.error} Не удалось списать автопродление. Оплатите до {date}, чтобы сохранить доступ.`,
+  bill_renew_canceled: `${E.done} Автопродление выключено. Доступ сохранится до {date}.`,
+  bill_renew_resumed: `${E.done} Автопродление снова включено.`,
+  bill_allow_80: `${E.indexing} Израсходовано 80% включённых расходов на ИИ в этом месяце (осталось {left}).`,
+  bill_allow_done: `${E.error} Включённые расходы на ИИ в этом месяце закончились. Дальше ИИ оплачивается с баланса ({balance}).`,
+  bill_balance_low: `${E.error} Баланс ИИ почти закончился: {balance}.`,
+  bill_balance_empty: `${E.error} Баланс ИИ пуст. Новые сохранения и поиск приостановлены, пока вы не пополните баланс или не подключите свой OpenRouter.`,
+  bill_renew_soon: `${E.indexing} Подписка продлится {date} за {stars}⭐. Держите достаточно звёзд в Telegram.`,
+  bill_expiry_soon: `${E.indexing} Подписка заканчивается {date}. Продлите её, чтобы продолжать сохранять и искать.`,
+  bill_expired: `${E.error} Подписка закончилась. Сохранение и поиск приостановлены; ваши мемы сохранены.`,
+  paysupport: `${E.help} Поддержка по оплате: напишите владельцу бота, {contact}. Укажите дату и сумму платежа.`,
+  terms: `${E.help} <b>Условия</b>
+• Подписка даёт доступ к сохранению и поиску мемов с ИИ на оплаченный срок.
+• Включённые расходы на ИИ действуют 30 дней и не переносятся.
+• Баланс оплачивает расходы на ИИ по фактической цене API. Израсходованный баланс не возвращается; по остальным вопросам — /paysupport.
+• Цены на будущие периоды могут меняться.`,
+  tier_title: "Качество описания",
+  tier_max: "Максимум",
+  tier_medium: "Среднее",
+  tier_hint: `${E.settings} <b>Качество описания</b>
+<b>Максимум</b> — Gemini 4 Argon: лучшее распознавание.
+<b>Среднее</b> — GPT-6 Luna: примерно в 20 раз дешевле. Видео всегда описывает Gemini Flash.`,
+  cmd_subscribe: "Подписка",
+  cmd_balance: "Баланс и тариф",
+  cmd_paysupport: "Поддержка по оплате",
+  cmd_terms: "Условия",
   admin_only: `${E.noAccess} Только для админов.`,
-  grant_usage: `${E.help} Использование: /grant @username|id [user|admin]`,
+  grant_usage: `${E.help} Использование: /grant @username|id [user|admin|paid]`,
   revoke_usage: `${E.help} Использование: /revoke @username|id`,
   granted: `${E.admin} {target} теперь <b>{role}</b>.`,
   granted_pending: `${E.admin} {target} станет <b>{role}</b> после первого сообщения боту.`,
@@ -275,6 +477,8 @@ const ru: Record<Key, string> = {
   cmd_batch_finish: "Отправить пакетный импорт",
   cmd_batch_cancel: "Выключить пакетный режим",
   cmd_batch_zip: "Импорт .zip (медиа или экспорт чата)",
+  cmd_export: "Экспорт всех ваших данных",
+  cmd_delete_all: "Удалить аккаунт и все данные",
   cmd_batch_status: "Прогресс пакетов",
   cmd_batch_retry: "Повторить мемы с ошибкой",
   cmd_grant: "Дать доступ",

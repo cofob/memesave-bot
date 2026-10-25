@@ -16,3 +16,16 @@ export const AGENT_MAX_STEPS = 6;
 export const AGENT_MAX_VIEWS = 12;
 export const FAST_LLM_TIMEOUT_MS = 3500;
 export const MAX_JOB_ATTEMPTS = 3;
+
+// Billing for the "paid" role. Prices in USD; Telegram Stars at STAR_USD, rounded up to 10⭐.
+export const STAR_USD = 0.013;
+export const PLANS = {
+  monthly: { usd: 1, byokUsd: 0.5, days: 30 },
+  yearly: { usd: 10, byokUsd: 4, days: 360 }, // 12 allowance months of 30 days
+} as const;
+export const MONTHLY_ALLOWANCE = 0.5; // USD of AI spend per 30-day month on standard (not own-key) plans
+export const STAR_TOPUPS = [100, 250, 500, 1000];
+export const CRYPTO_TOPUPS = [5, 10, 25, 50]; // USD: on-chain fees make small amounts pointless
+export const LOW_BALANCE = 0.1;
+export const DESCRIBE_MODELS = { max: "google/gemini-4-argon", medium: "openai/gpt-6-luna" } as const; // photos
+export const DESCRIBE_FALLBACKS = ["openai/gpt-6-luna", "deepseek/deepseek-v4.1-flash-1017"]; // photos a provider blocks

@@ -4,8 +4,8 @@ import type { Env } from "./env";
 import { langOf } from "./i18n";
 
 /**
- * Finds the user for a Telegram account. Creates the user for the bootstrap admin
- * or when a pending grant matches the username. Returns null when there is no access.
+ * Finds the user for a Telegram account, or creates it: admin for the bootstrap admin,
+ * the role of a pending username grant, otherwise "paid".
  */
 export async function resolveUser(env: Env, from: TgUser): Promise<{ user: User; created: boolean } | null> {
   const db = env.DB;
@@ -28,7 +28,7 @@ export async function resolveUser(env: Env, from: TgUser): Promise<{ user: User;
       .first<{ role: Role; added_by: number }>();
     if (grant) [role, addedBy] = [grant.role, grant.added_by];
   }
-  if (!role) return null;
+  role ??= "paid"; // open signup: new accounts pay for the bot
 
   const created = await db
     .prepare("INSERT INTO users (id, username, role, lang, added_by) VALUES (?, ?, ?, ?, ?) RETURNING *")

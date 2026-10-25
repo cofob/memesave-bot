@@ -5,14 +5,20 @@ import { botApi } from "./botapi";
 import type { User } from "./db";
 import type { Env } from "./env";
 import { allStats, userStats } from "./stats";
+import { BACKFILL_WHERE, queueHashBackfill } from "./ingest/embed";
+import { queueRekey, recoverLostKeys, REKEY_WHERE } from "./rekey";
 import { oauthUrl, setUserKey } from "./userkey";
 import { createZipImport, zipStatus } from "./zip";
+import { exportStatus, setExportStatusMessage, startExport } from "./export";
+import { accountSummary, CONFIRM, deleteAccount } from "./purge";
+import { billingStatus, ownKey, starsInvoiceLink, type ProductKind } from "./billing";
+import { btcpayOn, createBtcpayInvoice, createShkeeperInvoice, getInvoice, productUsd, shkeeperCryptos } from "./crypto";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 
-/** App equivalents of the bot commands: /stats, /settings, /key, /batch*, /batch_zip, /grant, /revoke, /users. */
+/** App equivalents of the bot commands: /stats, /settings, /key, /batch*, /batch_zip, /export, /delete_all, /grant, /revoke, /users. */
 export async function handleAccount(req: Request, env: Env, user: User, parts: string[]): Promise<Response | null> {
-  const [resource, id = ""] = parts;
+  const [resource, id = "", action = ""] = parts;
   const m = req.method;
   const lang = user.lang === "ru" ? "ru" : "en";
 
@@ -23,9 +29,10 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
   }
 
   if (resource === "settings" && m === "PUT") {
-    const { search_mode } = await req.json<{ search_mode?: string }>();
+    const { search_mode = user.search_mode, describe_tier = user.describe_tier } = await req.json<{ search_mode?: string; describe_tier?: string }>();
     if (search_mode !== "advanced" && search_mode !== "fast") return json({ error: "bad search_mode" }, 400);
-    await env.DB.prepare("UPDATE users SET search_mode = ? WHERE id = ?").bind(search_mode, user.id).run();
+    if (describe_tier !== "max" && describe_tier !== "medium") return json({ error: "bad describe_tier" }, 400);
+    await env.DB.prepare("UPDATE users SET search_mode = ?, describe_tier = ? WHERE id = ?").bind(search_mode, describe_tier, user.id).run();
     return json({ ok: true });
   }
 
@@ -57,9 +64,67 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
     if (m === "GET" && id) return json((await zipStatus(env.DB, id, user.id)) ?? { error: "not found" }, 200);
   }
 
+  if (resource === "account") {
+    if (m === "GET" && !id) return json(await accountSummary(env.DB, user.id));
+    if (m === "POST" && id === "delete") {
+      const { confirm } = await req.json<{ confirm?: string }>();
+      if (confirm !== CONFIRM) return json({ error: "confirm" }, 400);
+      await deleteAccount(env, user);
+      return json({ ok: true });
+    }
+  }
+
+  if (resource === "export") {
+    if (m === "GET") return json(await exportStatus(env, user.id));
+    if (m === "POST") {
+      const res = await startExport(env, user.id);
+      if ("next_at" in res) return json(res, 429);
+      // The bot posts the status message in the chat, as for /export; the link arrives as a reply.
+      const msg = await botApi(env.BOT_TOKEN).sendMessage(user.id, t(lang, "export_started"), { parse_mode: "HTML" }).catch(() => null);
+      if (msg) await setExportStatusMessage(env.DB, res.id, msg.message_id);
+      return json(res);
+    }
+  }
+
+  if (resource === "billing") {
+    if (m === "GET" && !id) return json({ ...(await billingStatus(env, user)), methods: { btcpay: btcpayOn(env), usdt: shkeeperCryptos(env) } });
+    if (m === "GET" && id === "crypto") {
+      const inv = await getInvoice(env.DB, action);
+      return inv?.user_id === user.id ? json({ id: inv.id, status: inv.status }) : json({ error: "not found" }, 404);
+    }
+    if (m !== "POST") return null;
+    const body = await req.json<{ kind?: ProductKind; stars?: number; usd?: number; provider?: string; crypto?: string; on?: boolean }>();
+    const kind = body.kind;
+    if (id === "invoice" && kind) return json({ url: await starsInvoiceLink(botApi(env.BOT_TOKEN), user, lang, kind, body.stars) });
+    if (id === "crypto" && kind) {
+      const amount = productUsd(kind, ownKey(user), body.usd);
+      if (amount === null) return json({ error: "bad product" }, 400);
+      if (body.provider === "btcpay" && btcpayOn(env)) return json(await createBtcpayInvoice(env, user, kind, amount));
+      if (body.provider === "shkeeper" && body.crypto) return json(await createShkeeperInvoice(env, user, kind, amount, body.crypto));
+      return json({ error: "method not available" }, 400);
+    }
+    if (id === "autorenew" && user.sub_charge_id) {
+      await botApi(env.BOT_TOKEN).editUserStarSubscription(user.id, user.sub_charge_id, !body.on);
+      await env.DB.prepare("UPDATE users SET sub_state = ? WHERE id = ?").bind(body.on ? "active" : "canceled", user.id).run();
+      return json({ ok: true });
+    }
+  }
+
   if (resource === "admin") {
     if (user.role !== "admin") return json({ error: "admins only" }, 403);
     if (m === "GET" && id === "users") return json(await listUsers(env));
+    if (id === "migrate") {
+      // Storage migration on demand: re-key all objects and back-fill all Telegram-only memes into R2.
+      const queued =
+        m === "POST"
+          ? { recovered: await recoverLostKeys(env), rekey: await queueRekey(env, 100_000), backfill: await queueHashBackfill(env, 100_000) }
+          : null;
+      const [rekey, backfill] = await env.DB.batch<{ n: number }>([
+        env.DB.prepare(`SELECT COUNT(*) AS n FROM memes WHERE ${REKEY_WHERE}`),
+        env.DB.prepare(`SELECT COUNT(*) AS n FROM memes WHERE ${BACKFILL_WHERE}`),
+      ]);
+      return json({ queued, remaining: { rekey: rekey.results[0].n, backfill: backfill.results[0].n } });
+    }
     const body = m === "POST" ? await req.json<{ target?: string; role?: string }>() : {};
     const api = botApi(env.BOT_TOKEN);
     if (m === "POST" && id === "grant") return json(await adminGrant(env, api, user, body.target ?? "", body.role));

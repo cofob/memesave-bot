@@ -1,6 +1,8 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cancelImport, finishImport, pollImports, retryFailed, startImport, submitImport } from "../src/batch";
+import { presignedR2Url } from "../src/presign";
+import { recoverLostKeys, rekeyStage } from "../src/rekey";
 import type { Env } from "../src/env";
 import { serveMedia, sign, signedMediaUrl } from "../src/media";
 
@@ -18,8 +20,10 @@ function fakeEnv() {
 }
 
 const addMeme = (id: string, user: number, importId: string, status = "describing") =>
-  env.DB.prepare("INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, status, import_id) VALUES (?, ?, 'photo', 'f', ?, ?, ?)")
-    .bind(id, user, `u_${id}`, status, importId)
+  env.DB.prepare(
+    "INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, status, import_id, mime, r2_file) VALUES (?, ?, 'photo', 'f', ?, ?, ?, 'image/jpeg', ?)",
+  )
+    .bind(id, user, `u_${id}`, status, importId, `u/${user}/${id}.jpg`)
     .run();
 
 afterEach(() => vi.restoreAllMocks());
@@ -84,7 +88,7 @@ describe("batch import", () => {
         status: "completed",
         usage: { cost: 0.01, prompt_tokens: 100, completion_tokens: 50 },
         results: [
-          { custom_id: "p1", response: { choices: [{ message: { content: '{"title":"Cat","tags":["cat"]}' } }] } },
+          { custom_id: "p1", response: { status_code: 200, body: { choices: [{ message: { content: '{"title":"Cat","tags":["cat"]}' } }] } } },
           { custom_id: "p2", error: { message: "bad" } },
         ],
       });
@@ -196,5 +200,85 @@ describe("retry edge cases", () => {
     await pollImports(e);
     expect(sent).toEqual([{ type: "finish", memeId: "s1" }]);
     expect(await e.DB.prepare("SELECT import_id FROM memes WHERE id = 's1'").first<string>("import_id")).toBeNull();
+  });
+});
+
+describe("R2 keys and presigned batch links", () => {
+  it("re-keys old objects to keys with a file extension", async () => {
+    const { env: e } = fakeEnv();
+    await e.MEDIA.put("r2/oldsha", "OLD", { httpMetadata: { contentType: "image/png" } });
+    await e.MEDIA.put("r2p/oldsha", "THUMB", { httpMetadata: { contentType: "image/jpeg" } });
+    await e.DB.prepare(
+      "INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, r2_file, r2_preview) VALUES ('rk', 28, 'video', '', 'r2:oldsha', 'r2/oldsha', 'r2p/oldsha')",
+    ).run();
+    await rekeyStage(e, "rk");
+    expect(await e.DB.prepare("SELECT r2_file, r2_preview FROM memes WHERE id = 'rk'").first()).toEqual({
+      r2_file: "r2/oldsha.png",
+      r2_preview: "r2p/oldsha.preview.jpg",
+    });
+    expect(await (await e.MEDIA.get("r2/oldsha.png"))!.text()).toBe("OLD");
+    expect(await e.MEDIA.get("r2/oldsha")).toBeNull();
+  });
+
+  it("survives two re-key jobs for the same meme and relinks lost keys", async () => {
+    const { env: e } = fakeEnv();
+    await e.MEDIA.put("r2/racesha", "IMG", { httpMetadata: { contentType: "image/jpeg" } });
+    await e.DB.prepare(
+      "INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, r2_file) VALUES ('race', 29, 'photo', '', 'r2:racesha', 'r2/racesha')",
+    ).run();
+    await Promise.all([rekeyStage(e, "race"), rekeyStage(e, "race")]);
+    expect(await e.DB.prepare("SELECT r2_file FROM memes WHERE id = 'race'").first<string>("r2_file")).toBe("r2/racesha.jpg");
+
+    await e.DB.prepare("UPDATE memes SET r2_file = NULL WHERE id = 'race'").run(); // as the old race left it
+    expect(await recoverLostKeys(e)).toBe(1);
+    expect(await e.DB.prepare("SELECT r2_file FROM memes WHERE id = 'race'").first<string>("r2_file")).toBe("r2/racesha.jpg");
+  });
+
+  it("presigns batch image links on the R2 S3 endpoint when API keys are set", async () => {
+    const { env: base } = fakeEnv();
+    const e = { ...base, R2_ACCESS_KEY_ID: "AKID", R2_SECRET_ACCESS_KEY: "secret" } as Env;
+    const url = new URL((await presignedR2Url(e, "u/1/abc.jpg", 5 * 86400))!);
+    expect(url.origin + url.pathname).toBe(`https://${e.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/memesave-media/u/1/abc.jpg`);
+    expect(url.searchParams.get("X-Amz-Expires")).toBe(String(5 * 86400));
+    expect(url.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
+    expect(await presignedR2Url(base, "u/1/abc.jpg", 60)).toBeNull(); // without keys the Worker URL is used
+  });
+});
+
+describe("blocked photos", () => {
+  it("sends a photo blocked in a batch to the next model instead of resubmitting it", async () => {
+    const { env: e, sent } = fakeEnv();
+    await e.DB.prepare("INSERT INTO users (id, role) VALUES (31, 'user')").run();
+    await e.DB.prepare("INSERT INTO imports (id, user_id, status, batch_id, key_source) VALUES ('ib', 31, 'submitted', 'b9', 'global')").run();
+    await addMeme("k1", 31, "ib");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      String(input).includes("api.telegram.org")
+        ? json({ ok: true, result: { message_id: 1 } })
+        : json({ id: "b9", status: "completed", results: [{ custom_id: "k1", response: null, error: { type: "content_policy_violation_error", message: "Gemini blocked the request: SAFETY" } }] }),
+    );
+    await pollImports(e);
+    expect(sent).toEqual([{ type: "describe", memeId: "k1", from: 1 }]);
+    expect(await e.DB.prepare("SELECT import_id FROM memes WHERE id = 'k1'").first("import_id")).toBeNull();
+    expect(await e.DB.prepare("SELECT status FROM imports WHERE id = 'ib'").first("status")).toBe("done");
+  });
+
+  it("describes a blocked photo with the next model", async () => {
+    const { env: e } = fakeEnv();
+    await e.DB.prepare("INSERT INTO users (id, role) VALUES (32, 'user')").run();
+    await env.MEDIA.put("u/32/k2.jpg", "IMG", { httpMetadata: { contentType: "image/jpeg" } });
+    await addMeme("k2", 32, "");
+    const models: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (!String(input).endsWith("/chat/completions")) return json({ ok: true, result: { message_id: 1 } });
+      const model = JSON.parse(String(init!.body)).model;
+      models.push(model);
+      if (model === "google/gemini-4-argon") return json({ error: { message: "Gemini blocked the request: SAFETY" } }, 400);
+      return json({ choices: [{ message: { content: '{"title":"Dog","tags":["dog"]}' } }], usage: { cost: 0.001 } });
+    });
+    const { describeStage } = await import("../src/ingest/describe");
+    await describeStage(e, "k2").catch(() => {}); // the finish step after it is not under test
+    expect(models).toEqual(["google/gemini-4-argon", "openai/gpt-6-luna"]);
+    expect(await e.DB.prepare("SELECT title FROM memes WHERE id = 'k2'").first("title")).toBe("Dog");
+    expect(await e.DB.prepare("SELECT model FROM transactions WHERE meme_id = 'k2'").first("model")).toBe("openai/gpt-6-luna");
   });
 });

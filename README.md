@@ -16,6 +16,8 @@ bunx wrangler secret put WEBHOOK_SECRET
 bunx wrangler secret put OPENROUTER_API_KEY
 bunx wrangler secret put ENCRYPTION_KEY     # random string, encrypts users' OpenRouter keys
 bunx wrangler secret put TG_CLIENT_SECRET   # BotFather → Login Widget → Client Secret (web login)
+bunx wrangler secret put R2_ACCESS_KEY_ID      # R2 API token (Object Read, memesave-media): presigned links
+bunx wrangler secret put R2_SECRET_ACCESS_KEY  # for batch images, which Vertex fetches outside Workers
 bun run migrate:remote
 bun run deploy
 BOT_TOKEN=... WEBHOOK_SECRET=... WORKER_URL=https://memereserve.cfb.wtf bun run setup

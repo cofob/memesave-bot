@@ -1,10 +1,12 @@
 import { botApi } from "./botapi";
-import { MODELS } from "./config";
-import { userLang, type Meme } from "./db";
+import { DESCRIBE_MODELS, MODELS } from "./config";
+import { getMeme, userLang, type Meme } from "./db";
 import type { Env } from "./env";
 import { esc, t, usd, type Key } from "./i18n";
-import { describeRequest, parseJson, saveDescription, toDescription, topTags } from "./ingest/describe";
-import { signedMediaUrl } from "./media";
+import { describeRequest, isBlocked, parseJson, saveDescription, toDescription, topTags, userTier } from "./ingest/describe";
+import { hasExt, memeMedia, signedMediaUrl } from "./media";
+import { presignedR2Url } from "./presign";
+import { rekeyStage } from "./rekey";
 import { createBatch, getBatch, type Batch, type KeySource } from "./openrouter";
 import type { Job } from "./queue";
 import { recordSpend } from "./spend";
@@ -27,6 +29,7 @@ interface Import {
   attempts: number;
   described: number;
   cost: number;
+  model: string | null;
 }
 
 type Status = Pick<Import, "user_id" | "status_msg_id">;
@@ -204,18 +207,24 @@ export async function submitImport(env: Env, importId: string) {
   const [inBatch, rest] = [memes.slice(0, BATCH_MAX), memes.slice(BATCH_MAX)];
   await sendJobs(env, describeJobs(rest));
   const tags = await topTags(env.DB, imp.user_id);
-  const requests = await Promise.all(
-    inBatch.map(async (m) => ({
-      custom_id: m.id,
-      body: describeRequest(m, tags, [{ type: "image_url", image_url: { url: await signedMediaUrl(env, m, "file", MEDIA_TTL, env.MEDIA_URL ?? env.PUBLIC_URL) } }]),
-    })),
-  );
+  const tier = await userTier(env.DB, imp.user_id);
+  const requests = [];
+  for (let i = 0; i < inBatch.length; i += 25) {
+    requests.push(
+      ...(await Promise.all(
+        inBatch.slice(i, i + 25).map(async (m) => ({
+          custom_id: m.id,
+          body: describeRequest(m, tags, [{ type: "image_url", image_url: { url: await batchImageUrl(env, m) } }], tier),
+        })),
+      )),
+    );
+  }
   const { batch, source } = await createBatch(
     env,
     imp.user_id,
     {
       endpoint: "/v1/chat/completions",
-      model: MODELS.describeImage,
+      model: DESCRIBE_MODELS[tier],
       completion_window: "24h",
       callback_url: `${env.PUBLIC_URL.replace(/\/$/, "")}/batch/webhook`,
     },
@@ -223,12 +232,26 @@ export async function submitImport(env: Env, importId: string) {
   );
   const attempt = imp.attempts + 1;
   await env.DB.prepare(
-    "UPDATE imports SET status = 'submitted', batch_id = ?, key_source = ?, attempts = ?, updated_at = unixepoch() WHERE id = ?",
+    "UPDATE imports SET status = 'submitted', batch_id = ?, key_source = ?, attempts = ?, model = ?, updated_at = unixepoch() WHERE id = ?",
   )
-    .bind(batch.id, source, attempt, importId)
+    .bind(batch.id, source, attempt, DESCRIBE_MODELS[tier], importId)
     .run();
   const retrying = attempt > 1;
   await progress(env, imp, retrying ? "batch_resubmitted" : "batch_submitted", { n: inBatch.length, attempt, max: MAX_ATTEMPTS });
+}
+
+/**
+ * Image URL for the batch provider: a presigned R2 link to the stored file (its key ends with the file
+ * extension Vertex requires); the Worker media URL without R2 API keys.
+ */
+async function batchImageUrl(env: Env, m: Meme) {
+  if (!m.r2_file) await memeMedia(env, m, "file"); // back-fill from Telegram
+  if (m.r2_file && !hasExt(m.r2_file)) {
+    await rekeyStage(env, m.id);
+    m.r2_file = (await getMeme(env.DB, m.id))?.r2_file ?? m.r2_file;
+  }
+  const presigned = m.r2_file ? await presignedR2Url(env, m.r2_file, MEDIA_TTL) : null;
+  return presigned ?? signedMediaUrl(env, m, "file", MEDIA_TTL, env.MEDIA_URL ?? env.PUBLIC_URL);
 }
 
 /** Last-retry failure of a submit: the photos go to the normal pipeline. */
@@ -280,9 +303,16 @@ async function pollImport(env: Env, imp: Import) {
     const byId = new Map((batch.results ?? []).map((r) => [r.custom_id, r]));
     const saved: string[] = [];
     const retry: Meme[] = [];
+    const blocked: string[] = [];
     const updates: D1PreparedStatement[] = [];
     for (const m of await pending(db, imp.id)) {
-      const content: string = byId.get(m.id)?.response?.choices?.[0]?.message?.content ?? "";
+      const error = byId.get(m.id)?.error;
+      if (error && isBlocked(JSON.stringify(error))) {
+        blocked.push(m.id); // a resubmit would be blocked again
+        continue;
+      }
+      const response = byId.get(m.id)?.response;
+      const content: string = (response?.body ?? response)?.choices?.[0]?.message?.content ?? ""; // OpenRouter wraps it in "body"
       try {
         updates.push(saveDescription(db, m.id, toDescription(parseJson(content), content)));
         saved.push(m.id);
@@ -291,8 +321,14 @@ async function pollImport(env: Env, imp: Import) {
       }
     }
     for (let i = 0; i < updates.length; i += 100) await db.batch(updates.slice(i, i + 100));
-    if (batch.usage) await recordSpend(db, { userId: imp.user_id, kind: "describe_batch" }, MODELS.describeImage, imp.key_source!, batch.usage);
+    if (batch.usage) await recordSpend(env, { userId: imp.user_id, kind: "describe_batch" }, imp.model ?? MODELS.describeImage, imp.key_source!, batch.usage);
     await sendJobs(env, saved.map((memeId): Job => ({ type: "finish", memeId })));
+    // Blocked photos leave the import and go to the next describe model one by one.
+    for (let i = 0; i < blocked.length; i += 50) {
+      const ids = blocked.slice(i, i + 50);
+      await db.prepare(`UPDATE memes SET import_id = NULL WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).run();
+    }
+    await sendJobs(env, blocked.map((memeId): Job => ({ type: "describe", memeId, from: 1 })));
     const described = imp.described + saved.length;
     const cost = imp.cost + (batch.usage?.cost ?? 0);
     // Keep the batch status and the first errors to debug failures.
@@ -320,7 +356,7 @@ async function pollImport(env: Env, imp: Import) {
           .run();
       }
     }
-    const status = described && fallback ? "done" : "failed";
+    const status = (described || blocked.length) && fallback ? "done" : "failed";
     await db.prepare("UPDATE imports SET status = ?, described = ?, cost = ?, error = ?, updated_at = unixepoch() WHERE id = ?")
       .bind(status, described, cost, error, imp.id)
       .run();

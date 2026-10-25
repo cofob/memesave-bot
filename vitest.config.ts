@@ -9,7 +9,7 @@ export default defineConfig(async () => {
         remoteBindings: false,
         wrangler: { configPath: "./wrangler.jsonc" },
         miniflare: {
-          bindings: { TEST_MIGRATIONS: migrations, BOT_TOKEN: "1:test", WEBHOOK_SECRET: "s", OPENROUTER_API_KEY: "k", ENCRYPTION_KEY: "e", TG_CLIENT_SECRET: "cs" },
+          bindings: { TEST_MIGRATIONS: migrations, BOT_TOKEN: "1:test", WEBHOOK_SECRET: "s", OPENROUTER_API_KEY: "k", ENCRYPTION_KEY: "e", TG_CLIENT_SECRET: "cs", R2_ACCESS_KEY_ID: "", R2_SECRET_ACCESS_KEY: "" },
         },
       }),
     ],

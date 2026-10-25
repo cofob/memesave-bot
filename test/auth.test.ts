@@ -5,9 +5,9 @@ import { grant, parseTarget, resolveUser, revoke } from "../src/auth";
 const from = (id: number, username?: string) => ({ id, is_bot: false, first_name: "x", username });
 
 describe("auth", () => {
-  it("bootstraps the admin and denies unknown users", async () => {
+  it("bootstraps the admin and signs up unknown users as paid", async () => {
     expect((await resolveUser(env, from(Number(env.ADMIN_ID))))?.user.role).toBe("admin");
-    expect(await resolveUser(env, from(42, "stranger"))).toBeNull();
+    expect(await resolveUser(env, from(42, "stranger"))).toMatchObject({ created: true, user: { role: "paid", balance: 0, paid_until: null } });
   });
 
   it("grants by id", async () => {
@@ -20,7 +20,7 @@ describe("auth", () => {
     const res = await resolveUser(env, from(99, "friend_1"));
     expect(res).toMatchObject({ created: true, user: { role: "admin", username: "friend_1" } });
     expect(await revoke(env.DB, { username: "friend_1" })).toEqual({ id: 99, removed: true });
-    expect(await resolveUser(env, from(99, "friend_1"))).toBeNull();
+    expect((await resolveUser(env, from(99, "friend_1")))?.user.role).toBe("paid");
   });
 
   it("parses targets", () => {

@@ -41,7 +41,7 @@ async function post(env: Env, path: string, body: { model: string } & Record<str
   if (!res.ok || data.error) {
     throw new Error(`OpenRouter ${path} ${res.status} (${source} key): ${JSON.stringify(data.error ?? data).slice(0, 500)}`);
   }
-  await recordSpend(env.DB, spend, body.model, source, data.usage ?? {});
+  await recordSpend(env, spend, body.model, source, data.usage ?? {});
   return data;
 }
 

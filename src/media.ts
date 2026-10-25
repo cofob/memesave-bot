@@ -18,6 +18,22 @@ const EXT_MIME: Record<string, string> = {
   webm: "video/webm",
 };
 
+const MIME_EXT: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(EXT_MIME).map(([ext, mime]) => [mime, ext])),
+  "video/quicktime": "mov",
+  "image/heic": "heic",
+};
+export const extOf = (mime: string) => MIME_EXT[mime] ?? "bin";
+
+/**
+ * R2 keys end with the file extension: presigned R2 links then end with it too, and Vertex batch only
+ * fetches image URLs with a recognized extension.
+ */
+export const fileKey = (base: string, mime: string) => `${base}.${extOf(mime)}`;
+export const previewKey = (base: string) => `${base}.preview.jpg`;
+export const hasExt = (key: string) => /\.(jpe?g|png|webp|heic|gif|mp4|mov|webm|bin)$/i.test(key);
+export const KEY_EXTS = ["jpg", "jpeg", "png", "webp", "heic", "gif", "mp4", "mov", "webm", "bin"];
+
 /** The meme fields media access needs. */
 export type MediaMeme = Pick<Meme, "id" | "kind" | "mime" | "file_id" | "preview_file_id" | "r2_file" | "r2_preview">;
 export type Variant = "file" | "preview";
@@ -54,7 +70,7 @@ export async function memeMedia(env: Env, m: MediaMeme, variant: Variant): Promi
   const fileId = v === "preview" ? m.preview_file_id : m.file_id;
   if (!fileId) throw new Error(`No ${v} for meme ${m.id}`);
   const media = await downloadTelegram(env, fileId, fallback);
-  const newKey = `memes/${m.id}/${v}`;
+  const newKey = v === "preview" ? previewKey(`memes/${m.id}/file`) : fileKey(`memes/${m.id}/file`, media.mime);
   await env.MEDIA.put(newKey, media.bytes, { httpMetadata: { contentType: media.mime } });
   await env.DB.prepare(`UPDATE memes SET ${v === "preview" ? "r2_preview" : "r2_file"} = ? WHERE id = ?`).bind(newKey, m.id).run();
   if (v === "preview") m.r2_preview = newKey;
@@ -105,15 +121,13 @@ export async function verifyQuery(env: Env, scope: string, url: URL) {
   return exp > Date.now() / 1000 && verify(env, `${scope}|${exp}`, url.searchParams.get("s") ?? "");
 }
 
-const MIME_EXT: Record<string, string> = Object.fromEntries(Object.entries(EXT_MIME).map(([ext, mime]) => [mime, ext]));
-
 /**
  * Public URL of a meme's file or preview for providers that only accept https media (OpenRouter Batch,
  * inline results). The path ends with a file extension: Vertex batch rejects image URLs without one.
  */
 export async function signedMediaUrl(env: Env, m: MediaMeme, variant: Variant, ttlSeconds: number, base = env.PUBLIC_URL) {
   const v = variantOf(m, variant);
-  const ext = MIME_EXT[fallbackMime(m, v)] ?? "jpg";
+  const ext = v === "preview" ? "jpg" : extOf(fallbackMime(m, v));
   return `${base.replace(/\/$/, "")}/media/${m.id}.${v}.${ext}${await signedQuery(env, `media|${m.id}|${v}`, ttlSeconds)}`;
 }
 

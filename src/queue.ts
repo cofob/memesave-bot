@@ -4,13 +4,17 @@ import type { Lang } from "./i18n";
 import { failImport, pollImports, submitImport } from "./batch";
 import { describeStage, failIngest, finishStage } from "./ingest/describe";
 import { embedStage, hashStage } from "./ingest/embed";
+import { purgeStage } from "./purge";
+import { rekeyStage } from "./rekey";
 import { failSearch, searchJob } from "./search/chat";
 
 export type SearchJob = { type: "search"; userId: number; messageId: number; placeholderId: number; query: string; lang: Lang };
 export type Job =
-  | { type: "embed" | "describe" | "finish" | "hash"; memeId: string }
+  | { type: "embed" | "finish" | "hash" | "rekey"; memeId: string }
+  | { type: "describe"; memeId: string; from?: number } // from: index in describeModels (1 after a blocked batch request)
   | { type: "batch_submit"; importId: string }
   | { type: "batch_poll" }
+  | { type: "purge"; userId: number; before: number }
   | SearchJob;
 
 async function run(env: Env, job: Job) {
@@ -24,18 +28,23 @@ async function run(env: Env, job: Job) {
     case "embed":
       return embedStage(env, job.memeId);
     case "describe":
-      return describeStage(env, job.memeId);
+      return describeStage(env, job.memeId, job.from);
     case "finish":
       return finishStage(env, job.memeId);
     case "hash":
       return hashStage(env, job.memeId);
+    case "rekey":
+      return rekeyStage(env, job.memeId);
+    case "purge":
+      return purgeStage(env, job.userId, job.before);
   }
 }
 
 async function fail(env: Env, job: Job, error: unknown) {
   if (job.type === "search") return failSearch(env, job);
   if (job.type === "batch_submit") return failImport(env, job.importId, error);
-  if (job.type === "batch_poll" || job.type === "hash") return; // cron runs them again
+  if (job.type === "batch_poll" || job.type === "hash" || job.type === "rekey") return; // cron runs them again
+  if (job.type === "purge") return; // idempotent: the dead letter queue keeps it for a manual re-run
   return failIngest(env, job.memeId, error);
 }
 

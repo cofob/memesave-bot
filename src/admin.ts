@@ -14,7 +14,7 @@ export type RevokeResult = "revoked" | "user_not_found" | "revoke_denied" | "rev
 /** Gives a role by "@username" or id; updates the admin command menu. Shared by /grant and the app. */
 export async function adminGrant(env: Env, api: Api, actor: User, arg: string, roleArg = "user"): Promise<{ result: GrantResult; target: string }> {
   const target = parseTarget(arg.trim());
-  if (!target || !["user", "admin"].includes(roleArg)) return { result: "grant_usage", target: arg };
+  if (!target || !["user", "admin", "paid"].includes(roleArg)) return { result: "grant_usage", target: arg };
   const role = roleArg as Role;
   const id = await grant(env.DB, target, role, actor.id);
   if (id !== null) await setCommandScope(api, id, role, null).catch(console.error);

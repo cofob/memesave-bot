@@ -1,7 +1,8 @@
 // zipimport unpacks a Telegram chat export, finds unique media and stores the new ones
 // in R2 through the Worker. Files reach Telegram later, on their first send. It runs once and exits.
+// With MODE=export it builds a user's data export instead (export.go).
 //
-// Env: ZIP_URL, API_URL (Worker callbacks), TOKEN (callback auth).
+// Env: MODE, ZIP_URL, API_URL (Worker callbacks), TOKEN (callback auth).
 package main
 
 import (
@@ -38,20 +39,25 @@ type media struct {
 
 // Item is what the Worker stores for an imported meme.
 type Item struct {
-	SHA256   string `json:"sha256"`
-	Kind     string `json:"kind"`
-	Thumb    bool   `json:"thumb"`
-	Mime     string `json:"mime,omitempty"`
-	FileSize int64  `json:"file_size,omitempty"`
-	Width    int    `json:"width,omitempty"`
-	Height   int    `json:"height,omitempty"`
-	Duration int    `json:"duration,omitempty"`
-	Caption  string `json:"caption,omitempty"`
-	Source   string `json:"source,omitempty"`
+	SHA256   string   `json:"sha256"`
+	Kind     string   `json:"kind"`
+	Thumb    bool     `json:"thumb"`
+	Mime     string   `json:"mime,omitempty"`
+	FileSize int64    `json:"file_size,omitempty"`
+	Width    int      `json:"width,omitempty"`
+	Height   int      `json:"height,omitempty"`
+	Duration int      `json:"duration,omitempty"`
+	Caption  string   `json:"caption,omitempty"`
+	Source   string   `json:"source,omitempty"`
+	Restore  *Restore `json:"restore,omitempty"`
 }
 
 func main() {
-	if err := run(); err != nil {
+	do := run
+	if os.Getenv("MODE") == "export" {
+		do = runExport
+	}
+	if err := do(); err != nil {
 		log.Print(err)
 		_ = callback("/fail", map[string]string{"error": err.Error()}, nil)
 		os.Exit(1)
@@ -179,6 +185,7 @@ func store(m *media) (Item, error) {
 	item := Item{
 		SHA256: m.sha256, Kind: m.kind, Mime: mime, FileSize: int64(len(data)),
 		Width: m.width, Height: m.height, Duration: m.duration, Caption: m.caption, Source: m.source,
+		Restore: m.restore.withVectors(),
 	}
 	if m.thumb != nil {
 		if thumb, err := readFile(m.thumb); err == nil && put("/blob/"+m.sha256+"?thumb=1", thumb, mimeOf(m.thumb.Name)) == nil {
@@ -193,12 +200,14 @@ type ref struct {
 	kind, path, caption, source string
 	thumb                       string // optional thumbnail path
 	width, height, duration     int
+	restore                     *Restore // memesave export: description and embeddings
 }
 
 // findMedia auto-detects the archive layout. Folders with a Telegram Desktop export (result.json or
 // messages*.html) give media referenced by the export, with captions, forward source and GIF vs video;
 // other files there (stickers, user pictures) are skipped. Media anywhere else is taken by extension.
-// It also returns the detected formats: "telegram_json", "telegram_html", "files".
+// A memesave export (memesave-export.json) gives its memes with descriptions and embeddings.
+// It also returns the detected formats: "memesave", "telegram_json", "telegram_html", "files".
 func findMedia(r *zip.Reader) ([]*media, []string, error) {
 	byName := map[string]*zip.File{}
 	for _, f := range r.File {
@@ -218,6 +227,9 @@ func findMedia(r *zip.Reader) ([]*media, []string, error) {
 		var refs []ref
 		var err error
 		switch base := path.Base(f.Name); {
+		case base == manifestName:
+			refs, err = readMemesave(byName, path.Dir(f.Name))
+			formats["memesave"] = true
 		case base == "result.json":
 			refs, err = readExport(f)
 			formats["telegram_json"] = true
@@ -262,7 +274,7 @@ func findMedia(r *zip.Reader) ([]*media, []string, error) {
 		}
 	}
 	list := []string{}
-	for _, name := range []string{"telegram_json", "telegram_html", "files"} {
+	for _, name := range []string{"memesave", "telegram_json", "telegram_html", "files"} {
 		if formats[name] {
 			list = append(list, name)
 		}
@@ -388,9 +400,18 @@ func readExport(f *zip.File) ([]ref, error) {
 	refs := make([]ref, 0, len(msgs))
 	for _, m := range msgs {
 		kind, rel := m.kind()
-		refs = append(refs, ref{kind, rel, m.caption(), m.ForwardedFrom, m.Thumbnail, m.Width, m.Height, m.Duration})
+		refs = append(refs, ref{kind, rel, m.caption(), m.ForwardedFrom, m.Thumbnail, m.Width, m.Height, m.Duration, nil})
 	}
 	return refs, nil
+}
+
+// get reads a Worker path with retries into out (JSON, or *blob for raw bytes).
+func get(p string, out any) error {
+	return withRetry(func() (*http.Response, error) {
+		req, _ := http.NewRequest("GET", env.apiURL+p, nil)
+		req.Header.Set("Authorization", "Bearer "+env.token)
+		return http.DefaultClient.Do(req)
+	}, out)
 }
 
 // put uploads bytes to the Worker with retries.
@@ -422,6 +443,11 @@ func withRetry(do func() (*http.Response, error), out any) error {
 		if err == nil {
 			if res.StatusCode == 200 {
 				defer res.Body.Close()
+				if b, ok := out.(*blob); ok {
+					b.mime = res.Header.Get("Content-Type")
+					b.data, err = io.ReadAll(res.Body)
+					return err
+				}
 				if out != nil {
 					return json.NewDecoder(res.Body).Decode(out)
 				}

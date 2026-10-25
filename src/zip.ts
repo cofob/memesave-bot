@@ -1,10 +1,12 @@
 import { botApi } from "./botapi";
+import { EMBED_DIMS } from "./config";
 import { Container, type StopParams } from "@cloudflare/containers";
 import { userLang, type Kind } from "./db";
 import type { Env } from "./env";
 import { t, type Key, type Lang } from "./i18n";
+import { namespace, upsertVectors } from "./ingest/embed";
 import { insertMeme } from "./ingest/receive";
-import { sign, signedQuery, tmpKey, verify, verifyQuery } from "./media";
+import { fileKey, previewKey, sign, signedQuery, tmpKey, verify, verifyQuery } from "./media";
 import type { Job } from "./queue";
 import { uploadPage } from "./uploadpage";
 
@@ -53,8 +55,42 @@ interface ZipItem {
   duration?: number;
   caption?: string;
   source?: string;
+  restore?: Restore; // from a memesave export: saved as ready, without AI processing
 }
 const KINDS: Kind[] = ["photo", "video", "animation"];
+
+/** Description and embeddings of a meme from a memesave export. */
+interface Restore {
+  title: string;
+  description?: string;
+  ocr_text?: string;
+  speech_text?: string;
+  meme_context?: string;
+  cultural_meaning?: string;
+  language?: string;
+  tags?: string;
+  search_phrases?: string;
+  created_at?: number;
+  image?: number[];
+  text: number[];
+}
+const isVector = (v: unknown): v is number[] => Array.isArray(v) && v.length === EMBED_DIMS && v.every(Number.isFinite);
+const FIELDS = ["title", "description", "ocr_text", "speech_text", "meme_context", "cultural_meaning", "language", "tags", "search_phrases"] as const;
+
+/** Saves the exported description and vectors; false when they are incomplete (then the meme is processed normally). */
+async function restoreMeme(env: Env, userId: number, memeId: string, kind: Kind, r: Restore | undefined) {
+  if (!r?.title || !isVector(r.text)) return false;
+  const text = (k: (typeof FIELDS)[number]) => (typeof r[k] === "string" && r[k] ? r[k] : null);
+  const vectors = [{ id: `${memeId}:t`, values: r.text, namespace: namespace(userId), metadata: { kind } }];
+  if (isVector(r.image)) vectors.push({ id: `${memeId}:i`, values: r.image, namespace: namespace(userId), metadata: { kind } });
+  await upsertVectors(env, vectors);
+  await env.DB.prepare(
+    `UPDATE memes SET ${FIELDS.map((k) => `${k} = ?`).join(", ")}, status = 'ready', created_at = COALESCE(?, created_at), updated_at = unixepoch() WHERE id = ?`,
+  )
+    .bind(...FIELDS.map(text), Number(r.created_at) || null, memeId)
+    .run();
+  return true;
+}
 
 const getZip = (db: D1Database, id: string) => db.prepare("SELECT * FROM zip_imports WHERE id = ?").bind(id).first<ZipImport>();
 
@@ -180,8 +216,10 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
     const sha = new URL(req.url).pathname.split("/")[4] ?? "";
     if (!/^[0-9a-f]{64}$/.test(sha)) return json({ error: "bad sha256" }, 400);
     const thumb = new URL(req.url).searchParams.has("thumb");
-    await env.MEDIA.put(`${blobKey(zip.user_id, sha)}${thumb ? ".preview" : ""}`, req.body, {
-      httpMetadata: { contentType: req.headers.get("Content-Type") ?? "application/octet-stream" },
+    const contentType = req.headers.get("Content-Type") ?? "application/octet-stream";
+    const base = blobKey(zip.user_id, sha);
+    await env.MEDIA.put(thumb ? previewKey(base) : fileKey(base, contentType), req.body, {
+      httpMetadata: { contentType },
     });
     return json({ ok: true });
   }
@@ -200,7 +238,7 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
     }
     const fresh = hashes.filter((h) => !known.has(h));
     const skipped = Number(body.found ?? hashes.length) - fresh.length;
-    const formats = ["telegram_json", "telegram_html", "files"];
+    const formats = ["memesave", "telegram_json", "telegram_html", "files"];
     const format = ((body.formats ?? []) as string[]).filter((f) => formats.includes(f)).join(",") || null;
     await db.prepare("UPDATE zip_imports SET total = ?, skipped = ?, format = ?, updated_at = unixepoch() WHERE id = ?")
       .bind(fresh.length, skipped, format, id)
@@ -211,8 +249,9 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
   }
 
   if (action === "items") {
-    // Photos go to the archive's own batch; videos and GIFs use the normal pipeline.
+    // Photos go to the archive's own batch; videos and GIFs use the normal pipeline; exported memes are restored.
     const jobs: { body: Job }[] = [];
+    let restored = 0;
     for (const item of body.items as ZipItem[]) {
       if (!/^[0-9a-f]{64}$/.test(item.sha256) || !KINDS.includes(item.kind)) continue;
       // Imported files live in R2; they get Telegram file ids on their first send ("r2:<sha256>" until then).
@@ -222,8 +261,9 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
         file_unique_id: `r2:${item.sha256}`,
         preview_file_id: null,
         preview_unique_id: null,
-        r2_file: blobKey(zip.user_id, item.sha256),
-        r2_preview: item.thumb ? `${blobKey(zip.user_id, item.sha256)}.preview` : null,
+        // Same keys as the blob upload: the container sends the same MIME type for both.
+        r2_file: fileKey(blobKey(zip.user_id, item.sha256), item.mime ?? "application/octet-stream"),
+        r2_preview: item.thumb ? previewKey(blobKey(zip.user_id, item.sha256)) : null,
         mime: item.mime ?? null,
         file_size: item.file_size ?? null,
         width: item.width ?? null,
@@ -231,15 +271,17 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
         duration: item.duration ?? null,
         caption: item.caption || null,
         source: item.source || null,
-        import_id: item.kind === "photo" ? zip.import_id : null,
+        import_id: item.kind === "photo" && !item.restore ? zip.import_id : null,
         sha256: item.sha256,
       });
-      if (memeId) jobs.push({ body: { type: "embed", memeId } });
+      if (!memeId) continue;
+      if (await restoreMeme(env, zip.user_id, memeId, item.kind, item.restore)) restored++;
+      else jobs.push({ body: { type: "embed", memeId } });
     }
     if (jobs.length) await env.JOBS.sendBatch(jobs);
     const done = await db
       .prepare("UPDATE zip_imports SET imported = imported + ?, updated_at = unixepoch() WHERE id = ? RETURNING imported")
-      .bind(jobs.length, id)
+      .bind(jobs.length + restored, id)
       .first<number>("imported");
     await progress(env, zip, { found: (zip.total ?? 0) + zip.skipped, total: zip.total ?? 0, skipped: zip.skipped, done: done ?? 0 });
     return json({ ok: true });

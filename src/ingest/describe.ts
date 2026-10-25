@@ -1,6 +1,6 @@
 import { botApi } from "../botapi";
-import { MODELS, VIDEO_INLINE_MAX_BYTES } from "../config";
-import { getMeme, setStatus, userLang, type Meme } from "../db";
+import { DESCRIBE_FALLBACKS, DESCRIBE_MODELS, MODELS, VIDEO_INLINE_MAX_BYTES } from "../config";
+import { getMeme, getUser, setStatus, userLang, type Meme } from "../db";
 import type { Env } from "../env";
 import { esc, t } from "../i18n";
 import { memeMedia, toDataUrl, variantOf } from "../media";
@@ -120,7 +120,19 @@ async function mediaPart(env: Env, m: Meme): Promise<Part[]> {
 }
 
 /** Chat request that describes one meme. Without tools; the sync pipeline adds web tools. */
-export function describeRequest(m: Meme, usedTags: string[], media: Part[]) {
+export type Tier = keyof typeof DESCRIBE_MODELS;
+
+/** The owner's describe quality tier. */
+export const userTier = async (db: D1Database, userId: number): Promise<Tier> => (await getUser(db, userId))?.describe_tier ?? "max";
+
+/** Models to try in order: the tier's model, then cheaper ones when a provider blocks the photo. Videos have one. */
+export const describeModels = (m: Pick<Meme, "kind">, tier: Tier) =>
+  m.kind === "photo" ? [...new Set([DESCRIBE_MODELS[tier], ...DESCRIBE_FALLBACKS])] : [MODELS.describeVideo];
+
+/** A provider's safety filter refused the request (an error, or an empty answer). */
+export const isBlocked = (e: unknown) => /SAFETY|content.?(policy|filter)|PROHIBITED|blocked|moderation|empty answer/i.test(String(e));
+
+export function describeRequest(m: Meme, usedTags: string[], media: Part[], tier: Tier = "max") {
   const context = [
     `Meme kind: ${m.kind}. User caption: ${JSON.stringify(m.caption ?? "")}. Forwarded from: ${JSON.stringify(m.source ?? "")}.`,
     usedTags.length ? `Most used tags in this collection (reuse them when they fit, add new ones when needed): ${usedTags.join(", ")}` : "",
@@ -128,7 +140,7 @@ export function describeRequest(m: Meme, usedTags: string[], media: Part[]) {
     .filter(Boolean)
     .join("\n");
   return {
-    model: m.kind === "photo" ? MODELS.describeImage : MODELS.describeVideo,
+    model: m.kind === "photo" ? DESCRIBE_MODELS[tier] : MODELS.describeVideo,
     temperature: 0.2,
     messages: [
       { role: "system" as const, content: PROMPT },
@@ -175,14 +187,28 @@ const fromRow = (m: Meme): Description => ({
   search_phrases: m.search_phrases ? m.search_phrases.split("\n") : [],
 });
 
-/** Stage 2: describes the meme with web tools, then finishes it. A retry skips the paid call when the description is saved. */
-export async function describeStage(env: Env, memeId: string) {
+/**
+ * Stage 2: describes the meme with web tools, then finishes it. A retry skips the paid call when the description is saved.
+ * When a provider blocks the photo, the next model in describeModels tries it; `from` skips models that already refused.
+ */
+export async function describeStage(env: Env, memeId: string, from = 0) {
   const m = await getMeme(env.DB, memeId);
   if (!m || m.status !== "describing") return;
   if (m.title === null) {
-    const body = { ...describeRequest(m, await topTags(env.DB, m.user_id), await mediaPart(env, m)), tools: WEB_TOOLS };
-    const msg = await chat(env, body, { userId: m.user_id, memeId, kind: "describe" });
-    await saveDescription(env.DB, memeId, toDescription(parseJson(msg.content ?? ""), msg.content ?? "")).run();
+    const tier = await userTier(env.DB, m.user_id);
+    const body = { ...describeRequest(m, await topTags(env.DB, m.user_id), await mediaPart(env, m), tier), tools: WEB_TOOLS };
+    const models = describeModels(m, tier);
+    for (let i = Math.min(from, models.length - 1); ; i++) {
+      try {
+        const msg = await chat(env, { ...body, model: models[i] }, { userId: m.user_id, memeId, kind: "describe" });
+        if (!msg.content?.trim()) throw new Error(`${models[i]}: empty answer`);
+        await saveDescription(env.DB, memeId, toDescription(parseJson(msg.content), msg.content)).run();
+        break;
+      } catch (e) {
+        if (i + 1 >= models.length || !isBlocked(e)) throw e;
+        console.warn("describe blocked, next model", memeId, models[i], String(e).slice(0, 200));
+      }
+    }
   }
   await finishStage(env, memeId);
 }

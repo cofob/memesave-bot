@@ -118,3 +118,38 @@ describe("metadata filters", () => {
     ]);
   });
 });
+
+describe("batch actions", () => {
+  it("deletes and links files only for the user's own memes", async () => {
+    const deleted: string[] = [];
+    const be = { ...e, VECTORS: { deleteByIds: async (ids: string[]) => void deleted.push(...ids) } } as unknown as Env;
+    const u = { id: 61, first_name: "B", username: "bob" };
+    await be.DB.prepare("INSERT INTO users (id, role) VALUES (61, 'user')").run();
+    const add = (id: string, owner: number, title: string | null, key: string) =>
+      be.DB.prepare("INSERT INTO memes (id, user_id, kind, mime, file_id, file_unique_id, status, title, r2_file) VALUES (?, ?, 'photo', 'image/png', '', ?, 'ready', ?, ?)")
+        .bind(id, owner, id, title, key)
+        .run();
+    await add("b1", 61, "Sad cat: 2", "u/61/b1.png");
+    await add("b2", 61, null, "u/61/b2.png");
+    await add("y1", 62, "other", "u/62/y1.png");
+    for (const k of ["u/61/b1.png", "u/61/b2.png", "u/62/y1.png"]) await be.MEDIA.put(k, "PNG", { httpMetadata: { contentType: "image/png" } });
+    const auth = { Authorization: `tma ${await initData(be.BOT_TOKEN, u)}` };
+    const call = async (path: string, init: RequestInit = {}) => (await handleApp(new Request(`https://m.example${path}`, { ...init, headers: auth }), be, ctx))!;
+
+    const files = await (await call("/app/api/files?ids=b1,b2,y1")).json<any[]>();
+    expect(files.map((f) => [f.id, f.name])).toEqual([
+      ["b1", "Sad_cat_2.png"],
+      ["b2", "b2.png"],
+    ]);
+    const file = await handleApp(new Request(files[0].url), be, ctx);
+    expect(file!.headers.get("Content-Disposition")).toBe("attachment; filename*=UTF-8''Sad_cat_2.png");
+    expect(await file!.text()).toBe("PNG");
+
+    const res = await call("/app/api/delete", { method: "POST", body: JSON.stringify({ ids: ["b1", "y1"] }) });
+    expect(await res.json()).toEqual({ deleted: ["b1"] });
+    expect(deleted).toEqual(["b1:i", "b1:t"]);
+    expect((await be.DB.prepare("SELECT id FROM memes WHERE id IN ('b1', 'b2', 'y1') ORDER BY id").all()).results).toEqual([{ id: "b2" }, { id: "y1" }]);
+    expect(await be.MEDIA.head("u/61/b1.png")).toBeNull();
+    expect(await be.MEDIA.head("u/62/y1.png")).not.toBeNull();
+  });
+});

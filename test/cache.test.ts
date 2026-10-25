@@ -20,15 +20,15 @@ describe("memeMedia", () => {
     const a = await memeMedia(env, meme, "file");
     expect(a.mime).toBe("image/jpeg");
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(await env.DB.prepare("SELECT r2_file FROM memes WHERE id = 'tg1'").first<string>("r2_file")).toBe("memes/tg1/file");
-    expect(await (await env.MEDIA.get("memes/tg1/file"))!.text()).toBe("IMG");
+    expect(await env.DB.prepare("SELECT r2_file FROM memes WHERE id = 'tg1'").first<string>("r2_file")).toBe("memes/tg1/file.jpg");
+    expect(await (await env.MEDIA.get("memes/tg1/file.jpg"))!.text()).toBe("IMG");
 
     const again = (await env.DB.prepare("SELECT * FROM memes WHERE id = 'tg1'").first<Meme>())!;
     expect(new TextDecoder().decode((await memeMedia(env, again, "file")).bytes)).toBe("IMG");
     expect(fetch).toHaveBeenCalledTimes(2); // no new Telegram download
 
     await memeMedia(env, again, "preview"); // the preview is a separate Telegram file
-    expect(await env.DB.prepare("SELECT r2_preview FROM memes WHERE id = 'tg1'").first<string>("r2_preview")).toBe("memes/tg1/preview");
+    expect(await env.DB.prepare("SELECT r2_preview FROM memes WHERE id = 'tg1'").first<string>("r2_preview")).toBe("memes/tg1/file.preview.jpg");
   });
 });
 

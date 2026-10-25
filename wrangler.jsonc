@@ -10,8 +10,11 @@
   "vars": {
     "ADMIN_ID": "1457408124",
     "PUBLIC_URL": "https://memereserve.cfb.wtf",
-    // Host for batch image URLs: provider fetchers (Google Vertex) are blocked by the zone's AI-bot rules.
-    "MEDIA_URL": "https://memesave-bot.cofob.workers.dev"
+    // Batch images are presigned R2 S3 links (Vertex cannot fetch Cloudflare-hosted Worker URLs);
+    // MEDIA_URL is the fallback host when the R2 API keys are not set.
+    "MEDIA_URL": "https://memesave-bot.cofob.workers.dev",
+    "R2_ACCOUNT_ID": "025464e503cbb7385dff88bd6d3c9128",
+    "R2_BUCKET": "memesave-media"
   },
   "workers_dev": true,
   "preview_urls": false,
@@ -22,10 +25,19 @@
   "vectorize": [{ "binding": "VECTORS", "index_name": "memesave-memes" }],
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "memesave-media" }],
   "containers": [
-    { "class_name": "ZipImporter", "image": "./container/Dockerfile", "instance_type": "standard-1", "max_instances": 5 }
+    { "class_name": "ZipImporter", "image": "./container/Dockerfile", "instance_type": "standard-1", "max_instances": 5 },
+    { "class_name": "DataExporter", "image": "./container/Dockerfile", "instance_type": "standard-1", "max_instances": 3 }
   ],
-  "durable_objects": { "bindings": [{ "name": "ZIP", "class_name": "ZipImporter" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ZipImporter"] }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "ZIP", "class_name": "ZipImporter" },
+      { "name": "EXPORT", "class_name": "DataExporter" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ZipImporter"] },
+    { "tag": "v2", "new_sqlite_classes": ["DataExporter"] }
+  ],
   "queues": {
     "producers": [{ "binding": "JOBS", "queue": "memesave-jobs" }],
     "consumers": [

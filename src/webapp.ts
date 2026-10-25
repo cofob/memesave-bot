@@ -1,15 +1,16 @@
 import { botApi } from "./botapi";
 import type { User as TgUser } from "grammy/types";
 import { resolveUser } from "./auth";
-import { deleteMeme, getMeme, getUser, type Kind, type Meme, type User } from "./db";
+import { deleteMeme, deleteMemes, getMeme, getUser, type Kind, type Meme, type User } from "./db";
 import { insertMeme } from "./ingest/receive";
 import { collectingImport } from "./batch";
 import { MODELS } from "./config";
 import { handleAccount } from "./webaccount";
+import { billingStatus, canUseAi } from "./billing";
 import { facets, filterSql } from "./filters";
 import { getCookie, readSession } from "./session";
 import type { Env } from "./env";
-import { cachedMedia, memeMedia, signedQuery, verifyQuery } from "./media";
+import { cachedMedia, extOf, fileKey, memeMedia, previewKey, signedQuery, verifyQuery } from "./media";
 import { sendMeme, toInlineResult } from "./search/deliver";
 import { agentSearch } from "./search/agent";
 import { keywordSearch } from "./search/hybrid";
@@ -78,6 +79,18 @@ async function detail(env: Env, m: Meme) {
   };
 }
 
+/** Download name of a meme file: its title (or id) and the extension of its type. */
+const fileName = (m: Meme) =>
+  `${(m.title ?? "").replace(/[^\p{L}\p{N}]+/gu, "_").replace(/^_+|_+$/g, "").slice(0, 60) || m.id}.${extOf(m.mime ?? (m.kind === "photo" ? "image/jpeg" : "video/mp4"))}`;
+
+/** The user's memes among `ids` (max 100). */
+async function ownMemes(env: Env, userId: number, ids: string[]) {
+  ids = ids.filter((id) => typeof id === "string").slice(0, 100);
+  if (!ids.length) return [];
+  const q = ids.map(() => "?").join(",");
+  return (await env.DB.prepare(`SELECT * FROM memes WHERE user_id = ? AND id IN (${q})`).bind(userId, ...ids).all<Meme>()).results;
+}
+
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 
 async function listMemes(env: Env, user: User, url: URL) {
@@ -135,11 +148,12 @@ async function upload(env: Env, user: User, req: Request) {
   const existing = await env.DB.prepare("SELECT id FROM memes WHERE user_id = ? AND sha256 = ?").bind(user.id, sha256).first<string>("id");
   if (existing) return json({ id: existing, duplicate: true });
 
-  const key = `u/${user.id}/${sha256}`;
+  const base = `u/${user.id}/${sha256}`;
+  const key = fileKey(base, file.type);
   await env.MEDIA.put(key, bytes, { httpMetadata: { contentType: file.type } });
   const thumb = form.get("thumb");
   const hasThumb = kind !== "photo" && thumb instanceof File && thumb.size > 0 && thumb.size < 1 << 20;
-  if (hasThumb) await env.MEDIA.put(`${key}.preview`, await thumb.arrayBuffer(), { httpMetadata: { contentType: "image/jpeg" } });
+  if (hasThumb) await env.MEDIA.put(previewKey(base), await thumb.arrayBuffer(), { httpMetadata: { contentType: "image/jpeg" } });
 
   // Photos join an open batch import (/batch), like forwards in the bot.
   const importId = kind === "photo" ? await collectingImport(env.DB, user.id) : null;
@@ -150,7 +164,7 @@ async function upload(env: Env, user: User, req: Request) {
     preview_file_id: null,
     preview_unique_id: null,
     r2_file: key,
-    r2_preview: hasThumb ? `${key}.preview` : null,
+    r2_preview: hasThumb ? previewKey(base) : null,
     mime: file.type,
     file_size: file.size,
     width: num(form.get("width")),
@@ -180,7 +194,21 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
       search_mode: user.search_mode,
       key: user.openrouter_key !== null,
       models: MODELS,
+      describe_tier: user.describe_tier,
+      billing: await billingStatus(env, user),
     });
+  }
+  // New AI work needs an active plan and credit (paid role); 402 tells the app to show the billing tab.
+  const m = req.method;
+  const aiWork =
+    (resource === "upload" && m === "POST") ||
+    (resource === "search" && url.searchParams.get("mode") !== "fts") ||
+    (resource === "zip" && m === "POST" && !id) ||
+    (resource === "batch" && m === "POST" && (id === "start" || id === "retry")) ||
+    (action === "retry" && m === "POST");
+  if (aiWork) {
+    const gate = await canUseAi(env.DB, user);
+    if (!gate.ok) return json({ error: "payment required", reason: gate.reason }, 402);
   }
   const account = await handleAccount(req, env, user, [resource, id, action]);
   if (account) return account;
@@ -196,6 +224,25 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
     return json(results);
   }
   if (resource === "memes" && !id && req.method === "GET") return json(await listMemes(env, user, url));
+  if (resource === "delete" && req.method === "POST") {
+    // Batch delete from the selection mode (the app sends up to 100 ids per call).
+    const { ids = [] } = await req.json<{ ids?: string[] }>();
+    const memes = await ownMemes(env, user.id, ids);
+    await deleteMemes(env, memes.map((m) => m.id));
+    return json({ deleted: memes.map((m) => m.id) });
+  }
+  if (resource === "files" && req.method === "GET") {
+    // Batch download: signed links that the browser saves as attachments.
+    const memes = (await ownMemes(env, user.id, (url.searchParams.get("ids") ?? "").split(","))).filter(fileFits);
+    return json(
+      await Promise.all(
+        memes.map(async (m) => {
+          const name = fileName(m);
+          return { id: m.id, name, url: `${base(env)}/app/file/${m.id}${await signedQuery(env, `file|${m.id}`, URL_TTL)}&dl=${encodeURIComponent(name)}` };
+        }),
+      ),
+    );
+  }
   if (resource === "tags" && req.method === "GET") return json(await tagCounts(env, user));
   if (resource === "facets" && req.method === "GET") return json(await facets(env.DB, user.id));
   if (resource === "search" && req.method === "GET") {
@@ -273,7 +320,9 @@ async function handleMedia(req: Request, env: Env, ctx: ExecutionContext, url: U
     if (!meme || (kind === "file" && !fileFits(meme))) return null;
     // Reading from R2 back-fills Telegram-only memes, so each file is downloaded from Telegram once.
     const media = await memeMedia(env, meme, kind === "thumb" ? "preview" : "file").catch(() => null);
-    return media && new Response(media.bytes, { headers: { "Content-Type": media.mime } });
+    const dl = url.searchParams.get("dl"); // batch download: save as a file (the name is not signed, so it is encoded)
+    const disposition: Record<string, string> = dl ? { "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(dl)}` } : {};
+    return media && new Response(media.bytes, { headers: { "Content-Type": media.mime, ...disposition } });
   });
 }
 

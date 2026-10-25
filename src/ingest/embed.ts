@@ -50,11 +50,13 @@ export async function hashStage(env: Env, memeId: string) {
 }
 
 /** Cron: back-fill R2 copies and hashes of memes saved before they were stored in R2. */
-export async function queueHashBackfill(env: Env) {
-  const { results } = await env.DB.prepare(
-    "SELECT id FROM memes WHERE file_id != '' AND status IN ('ready', 'failed') AND (sha256 IS NULL OR r2_file IS NULL) LIMIT 100",
-  ).all<{ id: string }>();
-  if (results.length) await env.JOBS.sendBatch(results.map((r) => ({ body: { type: "hash" as const, memeId: r.id } })));
+export const BACKFILL_WHERE = "file_id != '' AND status IN ('ready', 'failed') AND (sha256 IS NULL OR r2_file IS NULL)";
+
+export async function queueHashBackfill(env: Env, limit = 100) {
+  const { results } = await env.DB.prepare(`SELECT id FROM memes WHERE ${BACKFILL_WHERE} LIMIT ?`).bind(limit).all<{ id: string }>();
+  const jobs = results.map((r) => ({ body: { type: "hash" as const, memeId: r.id } }));
+  for (let i = 0; i < jobs.length; i += 100) await env.JOBS.sendBatch(jobs.slice(i, i + 100));
+  return jobs.length;
 }
 
 export const namespace = (userId: number) => `u${userId}`;

@@ -1,3 +1,4 @@
+import { paywall } from "./paywall.svelte";
 import { tg } from "./telegram";
 
 export type Kind = "photo" | "video" | "animation";
@@ -58,17 +59,50 @@ const authHeaders = (): Record<string, string> => (tg ? { Authorization: `tma ${
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = { ...authHeaders(), ...(init.body && typeof init.body === "string" ? { "Content-Type": "application/json" } : {}) };
   const res = await fetch(`/app/api/${path}`, { ...init, headers });
-  if (!res.ok) throw new ApiError(res.status, await res.text());
+  if (!res.ok) {
+    const text = await res.text();
+    if (res.status === 402) paywall.reason = text.includes('"credit"') ? "credit" : "subscribe";
+    throw new ApiError(res.status, text);
+  }
   return res.json();
 }
 
 export interface Me {
   id: number;
   username: string | null;
-  role: "admin" | "user";
+  role: "admin" | "user" | "paid";
   search_mode: "advanced" | "fast";
+  describe_tier: "max" | "medium";
   key: boolean;
   models: Record<string, string>;
+  billing: Billing;
+}
+
+export type ProductKind = "monthly" | "yearly" | "topup";
+
+export interface Billing {
+  free: boolean;
+  active: boolean;
+  plan: "monthly" | "yearly" | null;
+  byok: boolean;
+  ownKey: boolean;
+  paidUntil: number | null;
+  subState: "active" | "canceled" | "failed" | null;
+  balance: number;
+  allowance: number;
+  allowanceLeft: number;
+  prices: Record<"monthly" | "yearly", { usd: number; stars: number }>;
+  starTopups: { stars: number; usd: number }[];
+  cryptoTopups: number[];
+  methods: { btcpay: boolean; usdt: string[] };
+}
+
+export interface CryptoInvoice {
+  id: string;
+  url?: string; // BTCPay checkout page
+  address?: string; // USDT
+  amount?: string;
+  crypto?: string;
 }
 
 export interface Stats {
@@ -115,6 +149,16 @@ export interface ZipStatus {
   error: string | null;
 }
 
+export interface ExportStatus {
+  id: string;
+  status: "running" | "done" | "failed";
+  size: number | null;
+  error: string | null;
+  created_at: number;
+  next_at: number | null;
+  url: string | null;
+}
+
 export interface UsersList {
   users: { id: number; username: string | null; role: string; total_cost: number; memes: number }[];
   grants: { username: string; role: string }[];
@@ -140,7 +184,10 @@ function upload(file: File, meta: UploadMeta, onProgress: (fraction: number) => 
     xhr.open("POST", "/app/api/upload");
     for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, v);
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
-    xhr.onload = () => (xhr.status === 200 ? resolve(JSON.parse(xhr.responseText)) : reject(new ApiError(xhr.status, xhr.responseText)));
+    xhr.onload = () => {
+      if (xhr.status === 402) paywall.reason = JSON.parse(xhr.responseText).reason;
+      return xhr.status === 200 ? resolve(JSON.parse(xhr.responseText)) : reject(new ApiError(xhr.status, xhr.responseText));
+    };
     xhr.onerror = () => reject(new ApiError(0, "network error"));
     xhr.send(form);
   });
@@ -150,7 +197,12 @@ export const api = {
   me: () => call<Me>("me"),
   stats: () => call<Stats>("stats"),
   allStats: () => call<AllStats>("stats?all=1"),
-  setSearchMode: (search_mode: Me["search_mode"]) => call("settings", { method: "PUT", body: JSON.stringify({ search_mode }) }),
+  setSettings: (settings: Partial<Pick<Me, "search_mode" | "describe_tier">>) => call("settings", { method: "PUT", body: JSON.stringify(settings) }),
+  billing: () => call<Billing>("billing"),
+  starsInvoice: (kind: ProductKind, stars?: number) => post<{ url: string }>("billing/invoice", { kind, stars }),
+  cryptoInvoice: (body: { provider: "btcpay" | "shkeeper"; kind: ProductKind; usd?: number; crypto?: string }) => post<CryptoInvoice>("billing/crypto", body),
+  cryptoStatus: (id: string) => call<{ id: string; status: string }>(`billing/crypto/${id}`),
+  autorenew: (on: boolean) => post("billing/autorenew", { on }),
   connectKey: () => post<{ url: string }>("key"),
   removeKey: () => call("key", { method: "DELETE" }),
   batch: () => call<{ collecting: ImportRow | null; recent: ImportRow[]; failed: number }>("batch"),
@@ -160,6 +212,10 @@ export const api = {
   batchCancel: () => post<{ count: number | null }>("batch/cancel"),
   zipCreate: () => post<{ id: string; url: string }>("zip"),
   zipStatus: (id: string) => call<ZipStatus>(`zip/${id}`),
+  exportStatus: () => call<ExportStatus | null>("export"),
+  exportStart: () => post<{ id: string }>("export"),
+  accountSummary: () => call<{ memes: number; payments: number }>("account"),
+  deleteAccount: (confirm: string) => post<{ ok: true }>("account/delete", { confirm }),
   users: () => call<UsersList>("admin/users"),
   grant: (target: string, role: string) => post<{ result: string; target: string }>("admin/grant", { target, role }),
   revoke: (target: string) => post<{ result: string; target: string }>("admin/revoke", { target }),
@@ -177,4 +233,6 @@ export const api = {
   share: (id: string) => call<{ id: string }>(`memes/${id}/share`, { method: "POST" }),
   send: (id: string) => call<{ ok: true }>(`memes/${id}/send`, { method: "POST" }),
   remove: (id: string) => call<{ ok: true }>(`memes/${id}`, { method: "DELETE" }),
+  removeMany: (ids: string[]) => post<{ deleted: string[] }>("delete", { ids }),
+  files: (ids: string[]) => call<{ id: string; name: string; url: string }[]>(`files?ids=${ids.join(",")}`),
 };

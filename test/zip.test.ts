@@ -63,20 +63,20 @@ describe("zip import", () => {
       e,
     );
     expect(blob.status).toBe(200);
-    expect(await (await e.MEDIA.get(`u/32/${sha("c")}.preview`))!.text()).toBe("THUMB");
+    expect(await (await e.MEDIA.get(`u/32/${sha("c")}.preview.jpg`))!.text()).toBe("THUMB");
 
     expect((await call(e, zip.id, "items", { items: [item(sha("b"), "photo"), item(sha("c"), "video", true)] })).status).toBe(200);
     const rows = await e.DB.prepare(
       "SELECT kind, file_id, file_unique_id, r2_file, r2_preview, duration, import_id IS NOT NULL AS in_batch, caption FROM memes WHERE user_id = 32 AND id != 'old' ORDER BY sha256",
     ).all();
     expect(rows.results).toEqual([
-      { kind: "photo", file_id: "", file_unique_id: `r2:${sha("b")}`, r2_file: `u/32/${sha("b")}`, r2_preview: null, duration: null, in_batch: 1, caption: "hi" },
+      { kind: "photo", file_id: "", file_unique_id: `r2:${sha("b")}`, r2_file: `u/32/${sha("b")}.jpg`, r2_preview: null, duration: null, in_batch: 1, caption: "hi" },
       {
         kind: "video",
         file_id: "",
         file_unique_id: `r2:${sha("c")}`,
-        r2_file: `u/32/${sha("c")}`,
-        r2_preview: `u/32/${sha("c")}.preview`,
+        r2_file: `u/32/${sha("c")}.jpg`,
+        r2_preview: `u/32/${sha("c")}.preview.jpg`,
         duration: null,
         in_batch: 0,
         caption: "hi",

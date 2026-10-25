@@ -15,16 +15,18 @@
     Tag,
     TextField,
   } from "@cofob2/design-system-svelte";
-  import { Bot, CircleUser, LogOut, Search, SlidersHorizontal, Sparkles, Tags, Upload } from "@lucide/svelte";
+  import { Bot, CircleCheck, CircleUser, Download, ListChecks, LogOut, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Upload, X } from "@lucide/svelte";
   import { onMount, untrack } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { api, ApiError, type Me, type MemeBrief, type Sort } from "./api";
   import Account from "./Account.svelte";
   import FilterDrawer from "./FilterDrawer.svelte";
   import { activeCount, emptyFilters, groups, matches, toQuery, type Filters } from "./filters";
   import Login from "./Login.svelte";
   import MemeDetail from "./MemeDetail.svelte";
-  import { s } from "./strings";
-  import { syncTheme, tg } from "./telegram";
+  import { fill, s } from "./strings";
+  import { paywall } from "./paywall.svelte";
+  import { confirm, saveFile, syncTheme, tg } from "./telegram";
   import UploadPanel from "./UploadPanel.svelte";
   import { addFiles, onUploadReady } from "./uploads.svelte";
   import { forget, loadIndex, localSearch, textIndex } from "./search.svelte";
@@ -33,6 +35,7 @@
   let auth = $state<"checking" | "ok" | "login" | "denied">("checking");
   let me = $state<Me | null>(null);
   let accountOpen = $state(false);
+  let accountTab = $state("stats");
   // Result of the OpenRouter connect redirect (?key=connected|failed), shown once.
   let notice = $state<{ tone: "success" | "danger"; text: string } | null>(null);
   let fileInput = $state<HTMLInputElement>();
@@ -52,6 +55,55 @@
   let selected = $state<string | null>(null);
   let sentinel = $state<HTMLElement>();
   let generation = 0; // drops answers of outdated requests
+
+  // Selection mode: pick memes in the grid, then delete or download them together.
+  let selecting = $state(false);
+  const picked = new SvelteSet<string>();
+  let batchBusy = $state<"delete" | "download" | null>(null);
+  const chunks = (ids: string[]) => Array.from({ length: Math.ceil(ids.length / 100) }, (_, i) => ids.slice(i * 100, i * 100 + 100));
+
+  function stopSelecting() {
+    selecting = false;
+    picked.clear();
+  }
+
+  /** Removes deleted memes from every list on the screen. */
+  function drop(ids: string[]) {
+    const gone = new Set(ids);
+    items = items.filter((m) => !gone.has(m.id));
+    serverItems = serverItems?.filter((m) => !gone.has(m.id)) ?? null;
+    aiItems = aiItems?.filter((m) => !gone.has(m.id)) ?? null;
+    ids.forEach(forget);
+  }
+
+  async function deletePicked() {
+    const ids = [...picked];
+    if (!(await confirm(fill(s.deleteManyConfirm, { n: ids.length })))) return;
+    batchBusy = "delete";
+    try {
+      for (const chunk of chunks(ids)) drop((await api.removeMany(chunk)).deleted);
+      stopSelecting();
+    } catch {
+      notice = { tone: "danger", text: s.error };
+    } finally {
+      batchBusy = null;
+    }
+  }
+
+  async function downloadPicked() {
+    const ids = [...picked];
+    batchBusy = "download";
+    try {
+      const files = (await Promise.all(chunks(ids).map((chunk) => api.files(chunk)))).flat();
+      for (const f of files) await saveFile(f.url, f.name); // one by one: each may open a prompt
+      if (files.length < ids.length) notice = { tone: "danger", text: fill(s.downloadSkipped, { n: ids.length - files.length }) };
+      stopSelecting();
+    } catch {
+      notice = { tone: "danger", text: s.error };
+    } finally {
+      batchBusy = null;
+    }
+  }
 
   const searching = $derived(query.trim().length > 0);
 
@@ -196,6 +248,9 @@
       (value) => {
         me = value;
         auth = "ok";
+        const b = value.billing;
+        if (value.role === "paid" && !b.active) paywall.reason = "subscribe";
+        else if (value.role === "paid" && !b.ownKey && b.balance <= 0 && b.allowanceLeft <= 0) paywall.reason = "credit";
       },
       (e) => (auth = e instanceof ApiError && e.status === 403 ? (tg ? "denied" : "login") : "denied"),
     );
@@ -302,6 +357,10 @@
         >
       {/if}
       <span class="spacer"></span>
+      <Button size="sm" variant={selecting ? "primary" : "secondary"} onclick={() => (selecting ? stopSelecting() : (selecting = true))}>
+        {#snippet leading()}<ListChecks size={16} aria-hidden="true" />{/snippet}
+        {s.select}
+      </Button>
       <Button size="sm" onclick={() => fileInput?.click()}>
         {#snippet leading()}<Upload size={16} aria-hidden="true" />{/snippet}
         {s.upload}
@@ -326,6 +385,17 @@
     {#if notice}
       <Alert tone={notice.tone} title={notice.text} dismissible onDismiss={() => (notice = null)} />
     {/if}
+    {#if paywall.reason}
+      <Alert tone="info" title={paywall.reason === "credit" ? s.billGateCredit : s.billGateSubscribe}>
+        <Button
+          size="sm"
+          onclick={() => {
+            accountTab = "billing";
+            accountOpen = true;
+          }}>{s.billOpen}</Button
+        >
+      </Alert>
+    {/if}
     {#if error}
       <Alert tone="danger" title={error}>
         <Button size="sm" variant="secondary" onclick={() => load(true)}>{s.retry}</Button>
@@ -339,8 +409,15 @@
     <MediaGrid class="grid">
       {#each shown as meme (meme.id)}
         <li>
-          <button class="tile" onclick={() => (selected = meme.id)} aria-label={meme.title ?? meme.id}>
+          <button
+            class="tile"
+            class:picked={picked.has(meme.id)}
+            onclick={() => (!selecting ? (selected = meme.id) : picked.has(meme.id) ? picked.delete(meme.id) : picked.add(meme.id))}
+            aria-label={meme.title ?? meme.id}
+            aria-pressed={selecting ? picked.has(meme.id) : undefined}
+          >
             <img src={meme.thumb} alt={meme.title ?? ""} loading="lazy" />
+            {#if picked.has(meme.id)}<span class="check"><CircleCheck size={22} aria-hidden="true" /></span>{/if}
             {#if meme.status === "failed"}
               <Badge class="kind" size="sm" variant="solid" tone="danger">{s.stateError}</Badge>
             {:else if meme.status !== "ready"}
@@ -352,6 +429,25 @@
         </li>
       {/each}
     </MediaGrid>
+
+    {#if selecting}
+      <div class="selection">
+        <Inline gap="sm" align="center" wrap>
+          <span class="count">{fill(s.selectedN, { n: picked.size })}</span>
+          <Button size="sm" variant="ghost" onclick={() => shown.forEach((m) => picked.add(m.id))}>{s.selectAll}</Button>
+          <span class="spacer"></span>
+          <Button size="sm" variant="secondary" disabled={!picked.size} loading={batchBusy === "download"} onclick={downloadPicked}>
+            {#snippet leading()}<Download size={16} aria-hidden="true" />{/snippet}
+            {s.download}
+          </Button>
+          <Button size="sm" variant="danger" disabled={!picked.size} loading={batchBusy === "delete"} onclick={deletePicked}>
+            {#snippet leading()}<Trash2 size={16} aria-hidden="true" />{/snippet}
+            {s.delete}
+          </Button>
+          <IconButton label={s.close} variant="ghost" size="sm" onclick={stopSelecting}><X size={16} /></IconButton>
+        </Inline>
+      </div>
+    {/if}
 
     <div bind:this={sentinel} class="sentinel">
       {#if (loading && !searching) || aiLoading}<Spinner label="Loading" />{/if}
@@ -378,7 +474,7 @@
 <UploadPanel />
 <FilterDrawer open={filtersOpen} {filters} onChange={(f) => (filters = f)} onClose={() => (filtersOpen = false)} />
 {#if me}
-  <Account {me} open={accountOpen} onClose={() => (accountOpen = false)} onMeChange={(value) => (me = value)} />
+  <Account {me} bind:tab={accountTab} open={accountOpen} onClose={() => (accountOpen = false)} onMeChange={(value) => (me = value)} />
 {/if}
 {#if dragging}<div class="drop" aria-hidden="true">{s.dropHint}</div>{/if}
 
@@ -392,10 +488,7 @@
       selected = null;
     }}
     onDeleted={(id) => {
-      items = items.filter((m) => m.id !== id);
-      serverItems = serverItems?.filter((m) => m.id !== id) ?? null;
-      aiItems = aiItems?.filter((m) => m.id !== id) ?? null;
-      forget(id);
+      drop([id]);
       selected = null;
     }}
   />
@@ -431,6 +524,33 @@
     position: absolute;
     inset-block-end: var(--cf-space-1);
     inset-inline-start: var(--cf-space-1);
+  }
+  .tile.picked img {
+    opacity: 0.6;
+  }
+  .tile.picked {
+    outline: 3px solid var(--cf-color-accent);
+    outline-offset: -3px;
+  }
+  .check {
+    position: absolute;
+    inset-block-start: var(--cf-space-1);
+    inset-inline-end: var(--cf-space-1);
+    color: var(--cf-color-accent);
+    display: flex;
+  }
+  .selection {
+    position: sticky;
+    inset-block-end: var(--cf-space-3);
+    z-index: var(--cf-z-sticky);
+    padding: var(--cf-space-2) var(--cf-space-3);
+    border-radius: var(--cf-radius-xl);
+    background: var(--cf-color-surface-raised);
+    box-shadow: var(--cf-shadow-lg);
+  }
+  .count {
+    font-weight: var(--cf-font-weight-semibold);
+    font-variant-numeric: tabular-nums;
   }
   .tag-button {
     all: unset;
