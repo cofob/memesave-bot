@@ -278,7 +278,8 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
       "/upload": {
         post: {
           summary: "Upload a file",
-          description: "Adds a photo (up to 10 MB), video or GIF (up to 50 MB). The same file twice returns the existing meme. Needs a write token.",
+          description:
+            "Adds a photo (up to 10 MB), video or GIF (up to 50 MB). The same file twice returns the existing meme. Upload the files of a carousel one by one with the same `album` and their `position`. Needs a write token.",
           requestBody: body(
             {
               type: "object",
@@ -288,6 +289,14 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
                 width: { type: "integer" },
                 height: { type: "integer" },
                 duration: { type: "integer", description: "Seconds." },
+                source: { type: "string", maxLength: 500, description: "Where the file comes from, e.g. the post URL; shown as the meme source." },
+                album: {
+                  type: "string",
+                  maxLength: 100,
+                  description: "Client album id: files uploaded with the same id form one album (a carousel), ordered by position.",
+                  example: "tiktok:7300000000000000000",
+                },
+                position: { type: "integer", description: "Place of the file in its album, from 0." },
               },
               required: ["file"],
             },

@@ -62,3 +62,28 @@ describe("OpenAPI", () => {
     expect(Object.keys(doc.paths)).toEqual(expect.arrayContaining(["/memes", "/memes/{id}", "/upload", "/import", "/search"]));
   });
 });
+
+describe("uploads with an album", () => {
+  it("keeps the source and groups the files of one album in order", async () => {
+    await e.DB.prepare("INSERT INTO users (id, role) VALUES (93, 'admin')").run();
+    const token = (await createToken(e.DB, 93, "sync", true))!.token;
+    const up = async (name: string, position: number) => {
+      const form = new FormData();
+      form.set("file", new File([name], `${name}.jpg`, { type: "image/jpeg" }));
+      form.set("source", "https://www.tiktok.com/@u/video/1");
+      form.set("album", "tiktok:1");
+      form.set("position", String(position));
+      const res = (await handleApp(new Request("https://m.example/app/api/upload", { method: "POST", body: form, headers: { Authorization: `Bearer ${token}` } }), e, ctx))!;
+      return (await res.json<{ id: string }>()).id;
+    };
+    const second = await up("b", 1);
+    const first = await up("a", 0);
+    const { results } = await e.DB.prepare(
+      "SELECT m.id, m.source, p.media_group_id FROM post_items i JOIN posts p ON p.id = i.post_id JOIN memes m ON m.id = i.meme_id WHERE p.user_id = 93 ORDER BY i.position",
+    ).all<{ id: string; source: string; media_group_id: string }>();
+    expect(results).toEqual([
+      { id: first, source: "https://www.tiktok.com/@u/video/1", media_group_id: "api:tiktok:1" },
+      { id: second, source: "https://www.tiktok.com/@u/video/1", media_group_id: "api:tiktok:1" },
+    ]);
+  });
+});

@@ -159,23 +159,35 @@ async function authUser(req: Request, env: Env): Promise<{ user: User; token?: {
 export const LIMITS: Record<Kind, number> = { photo: 10 << 20, video: 50 << 20, animation: 50 << 20 }; // Bot API send limits
 export const kindOf = (mime: string): Kind | null =>
   mime === "image/gif" ? "animation" : mime.startsWith("image/") ? "photo" : mime.startsWith("video/") ? "video" : null;
+const str = (v: File | string | null, max: number) => (typeof v === "string" && v ? v.slice(0, max) : null);
 const num = (v: File | string | null) => (typeof v === "string" && v ? Math.round(Number(v)) || null : null);
 
-/** POST /app/api/upload (multipart: file, thumb?, width?, height?, duration?) — stored in R2 until the first send. */
+/** POST /app/api/upload (multipart: file, thumb?, width?, height?, duration?, source?, album?, position?) — stored in R2 until the first send. */
 async function upload(env: Env, user: User, req: Request) {
   const form = await req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) return json({ error: "file required" }, 400);
+  const album = str(form.get("album"), 100);
   const res = await saveUpload(env, user, file, {
     thumb: form.get("thumb"),
     width: num(form.get("width")),
     height: num(form.get("height")),
     duration: num(form.get("duration")),
+    source: str(form.get("source"), 500),
+    // One album per client id: the files of a carousel uploaded one by one, in position order.
+    post: album ? { mediaGroupId: `api:${album}`, position: num(form.get("position")) ?? 0 } : undefined,
   });
   return "error" in res ? json({ error: res.error }, res.status) : json(res);
 }
 
-type UploadMeta = { thumb?: File | string | null; width?: number | null; height?: number | null; duration?: number | null };
+type UploadMeta = {
+  thumb?: File | string | null;
+  width?: number | null;
+  height?: number | null;
+  duration?: number | null;
+  source?: string | null;
+  post?: { mediaGroupId: string; position: number };
+};
 
 /** Saves an uploaded file as a new meme (the app and MCP). */
 export async function saveUpload(env: Env, user: User, file: File, meta: UploadMeta = {}) {
@@ -212,12 +224,12 @@ export async function saveUpload(env: Env, user: User, file: File, meta: UploadM
     height: meta.height ?? null,
     duration: meta.duration ?? null,
     caption: null,
-    source: null,
+    source: meta.source ?? null,
     import_id: importId,
     sha256,
   });
   if (!id) return fail("already saved", 409);
-  if (!importId) await addToPost(env.DB, user.id, { memeId: id });
+  if (!importId || meta.post) await addToPost(env.DB, user.id, { memeId: id, ...meta.post });
   await env.JOBS.send({ type: "embed", memeId: id });
   return { id, duplicate: false, batched: importId !== null };
 }

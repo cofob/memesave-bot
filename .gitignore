@@ -5,3 +5,5 @@ node_modules
 app/dist
 __pycache__
 *.pyc
+profile/
+state.json
