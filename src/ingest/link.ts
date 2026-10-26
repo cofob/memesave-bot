@@ -6,8 +6,9 @@ import { addToPost } from "../channels";
 import type { Kind } from "../db";
 import type { Env } from "../env";
 import { t } from "../i18n";
-import { extOf } from "../media";
-import { extractMedia, insertMeme, receiveMedia } from "./receive";
+import { extOf, fileKey, previewKey } from "../media";
+import { type Thumb, thumbnail } from "../thumb";
+import { extractMedia, insertMeme, type MemeRow, receiveMedia } from "./receive";
 
 // Media by link: any service of the cobalt API (github.com/imputnet/cobalt, COBALT_URL).
 
@@ -19,6 +20,7 @@ export interface Item {
   kind: Kind;
   mime: string;
   bytes: Uint8Array;
+  thumb?: Thumb; // videos and GIFs: ffmpeg preview and size
 }
 export interface Fetched {
   source: string;
@@ -74,6 +76,9 @@ const linkSaved = (db: D1Database, userId: number, url: string) =>
 /** Sends the media to a chat: one message, or albums of up to 10 (albums have no GIFs: they go as videos). */
 async function sendItems(api: Api, chatId: number, items: Item[], other: { reply_parameters?: { message_id: number }; disable_notification?: boolean }) {
   const file = (it: Item, i: number) => new InputFile(it.bytes, `${i + 1}.${extOf(it.mime)}`);
+  // Telegram does not read the size of big videos and shows them as 320x320 squares without a thumbnail.
+  const meta = ({ thumb }: Item) =>
+    thumb ? { width: thumb.width, height: thumb.height, duration: thumb.duration, thumbnail: new InputFile(new Uint8Array(thumb.jpeg), "thumb.jpg") } : {};
   if (items.length === 1) {
     const [it] = items;
     const f = file(it, 0);
@@ -81,11 +86,11 @@ async function sendItems(api: Api, chatId: number, items: Item[], other: { reply
       it.kind === "photo"
         ? await api.sendPhoto(chatId, f, other)
         : it.kind === "animation"
-          ? await api.sendAnimation(chatId, f, other)
-          : await api.sendVideo(chatId, f, { ...other, supports_streaming: true }),
+          ? await api.sendAnimation(chatId, f, { ...other, ...meta(it) })
+          : await api.sendVideo(chatId, f, { ...other, ...meta(it), supports_streaming: true }),
     ];
   }
-  const media = items.map((it, i) => (it.kind === "photo" ? InputMediaBuilder.photo(file(it, i)) : InputMediaBuilder.video(file(it, i))));
+  const media = items.map((it, i) => (it.kind === "photo" ? InputMediaBuilder.photo(file(it, i)) : InputMediaBuilder.video(file(it, i), meta(it))));
   const sent: Message[] = [];
   for (let i = 0; i < media.length; i += ALBUM_MAX) sent.push(...(await api.sendMediaGroup(chatId, media.slice(i, i + ALBUM_MAX), other)));
   return sent;
@@ -94,6 +99,25 @@ async function sendItems(api: Api, chatId: number, items: Item[], other: { reply
 /** One group id for all chunks keeps the order in one post. */
 const groupOf = (sent: Message[]) => (sent.length > 1 ? `link:${crypto.randomUUID()}` : undefined);
 
+/** Adds ffmpeg previews to videos and GIFs; without one the item still goes, as before. */
+const withThumbs = (env: Env, items: Item[]) =>
+  Promise.all(
+    items.map(async (it) => {
+      if (it.kind !== "photo") it.thumb = await thumbnail(env, it.bytes).catch((e) => (console.error("thumbnail failed", e), undefined));
+    }),
+  );
+
+/** Keeps the downloaded bytes and the preview in R2: the bot cannot download files over 20 MB from Telegram. */
+async function stored(env: Env, it: Item): Promise<Partial<MemeRow>> {
+  const base = `link/${crypto.randomUUID().replaceAll("-", "")}`;
+  const r2_file = fileKey(base, it.mime);
+  await env.MEDIA.put(r2_file, it.bytes, { httpMetadata: { contentType: it.mime } });
+  if (!it.thumb) return { r2_file };
+  const { jpeg, ...size } = it.thumb;
+  await env.MEDIA.put(previewKey(base), jpeg, { httpMetadata: { contentType: "image/jpeg" } });
+  return { r2_file, ...size, r2_preview: previewKey(base) };
+}
+
 /** Downloads media of a link, sends it to the user and saves it like forwarded media; an album becomes one post. */
 export async function importLink(ctx: Ctx, env: Env, url: string) {
   const html = { parse_mode: "HTML" } as const;
@@ -101,9 +125,12 @@ export async function importLink(ctx: Ctx, env: Env, url: string) {
     if (await linkSaved(env.DB, ctx.user.id, url)) return ctx.reply(t(ctx.lang, "already_saved"), html);
     await ctx.replyWithChatAction("upload_video").catch(() => {});
     const { source, items } = await cobalt(env, url);
+    await withThumbs(env, items);
     const sent = await sendItems(ctx.api, ctx.chat!.id, items, { reply_parameters: { message_id: ctx.msg!.message_id } });
     const group = groupOf(sent);
-    for (const [i, msg] of sent.entries()) await receiveMedia(ctx, env, msg, { source, mediaGroupId: group, position: i });
+    for (const [i, msg] of sent.entries()) {
+      await receiveMedia(ctx, env, msg, { source, mediaGroupId: group, position: i, row: await stored(env, items[i]) });
+    }
   } catch (e) {
     console.error("link import failed", url, e);
     return ctx.reply(t(ctx.lang, "link_failed"), html);
@@ -114,10 +141,11 @@ export async function importLink(ctx: Ctx, env: Env, url: string) {
 export async function linkJob(env: Env, userId: number, url: string) {
   if (await linkSaved(env.DB, userId, url)) return;
   const { source, items } = await cobalt(env, url);
+  await withThumbs(env, items);
   const sent = await sendItems(botApi(env.BOT_TOKEN), userId, items, { disable_notification: true });
   const group = groupOf(sent);
   for (const [i, msg] of sent.entries()) {
-    const memeId = await insertMeme(env.DB, userId, { ...extractMedia(msg)!, caption: null, source, import_id: null });
+    const memeId = await insertMeme(env.DB, userId, { ...extractMedia(msg)!, caption: null, source, import_id: null, ...(await stored(env, items[i])) });
     if (!memeId) continue;
     await addToPost(env.DB, userId, { memeId, mediaGroupId: group, position: i });
     await env.JOBS.send({ type: "embed", memeId });

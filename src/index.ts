@@ -20,6 +20,7 @@ import { expireZipUploads, handleUpload, handleZipCallback } from "./zip";
 
 export { ZipImporter } from "./zip";
 export { DataExporter } from "./export";
+export { Thumbnailer } from "./thumb";
 
 let handler: ((req: Request) => Promise<Response>) | undefined;
 let synced: Promise<unknown> | undefined;

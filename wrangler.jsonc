@@ -32,17 +32,20 @@
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "memesave-media" }],
   "containers": [
     { "class_name": "ZipImporter", "image": "./container/Dockerfile", "instance_type": "standard-1", "max_instances": 5 },
-    { "class_name": "DataExporter", "image": "./container/Dockerfile", "instance_type": "standard-1", "max_instances": 3 }
+    { "class_name": "DataExporter", "image": "./container/Dockerfile", "instance_type": "standard-1", "max_instances": 3 },
+    { "class_name": "Thumbnailer", "image": "./thumb/Dockerfile", "instance_type": "basic", "max_instances": 1 }
   ],
   "durable_objects": {
     "bindings": [
       { "name": "ZIP", "class_name": "ZipImporter" },
-      { "name": "EXPORT", "class_name": "DataExporter" }
+      { "name": "EXPORT", "class_name": "DataExporter" },
+      { "name": "THUMB", "class_name": "Thumbnailer" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["ZipImporter"] },
-    { "tag": "v2", "new_sqlite_classes": ["DataExporter"] }
+    { "tag": "v2", "new_sqlite_classes": ["DataExporter"] },
+    { "tag": "v3", "new_sqlite_classes": ["Thumbnailer"] }
   ],
   "queues": {
     "producers": [{ "binding": "JOBS", "queue": "memesave-jobs" }],

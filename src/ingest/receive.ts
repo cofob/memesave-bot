@@ -129,7 +129,12 @@ async function albumStatus(db: D1Database, postId: string, send: () => Promise<n
 }
 
 /** Saves a forwarded meme row and starts stage 1. */
-export async function receiveMedia(ctx: Ctx, env: Env, msg: Message = ctx.msg!, link?: { source: string; mediaGroupId?: string; position?: number }) {
+export async function receiveMedia(
+  ctx: Ctx,
+  env: Env,
+  msg: Message = ctx.msg!,
+  link?: { source: string; mediaGroupId?: string; position?: number; row?: Partial<MemeRow> },
+) {
   const media = extractMedia(msg);
   if (!media) return;
   const db = env.DB;
@@ -145,6 +150,7 @@ export async function receiveMedia(ctx: Ctx, env: Env, msg: Message = ctx.msg!, 
     source: link?.source ?? describeOrigin(msg.forward_origin),
     import_id: importId,
     tg_meta: JSON.stringify(meta),
+    ...link?.row,
   });
 
   if (memeId && importId) {
