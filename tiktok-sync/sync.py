@@ -18,7 +18,9 @@ Environment (also read from .env in the current, the script's and its parent fol
   INTERVAL         seconds between syncs, default 1800; 0 = run once
   BACKFILL         likes to import on the first run, default 50 (older ones are skipped)
   FULL_BACKFILL    1: save every like of the account first (oldest first, resumable), then sync as usual;
-                   pauses BACKFILL_PAUSE s (default 20) between likes and BACKFILL_REST s (900) every BACKFILL_BATCH (50)
+                   waits between likes adapt: shorter while all goes well, down to BACKFILL_PAUSE s (default 10), twice
+                   as long after trouble, up to BACKFILL_PAUSE_MAX s (600); so do the rests after every BACKFILL_BATCH
+                   (50) likes: from BACKFILL_REST s (900), within BACKFILL_REST_MIN (120) and BACKFILL_REST_MAX (3600)
   BACKFILL_DIR     optional: the full backfill stores the files there (<id>/0.mp4, 0.jpg, …, meta.json with the upload
                    fields) instead of uploading them
   CHROMIUM         optional: path of a Chromium/Chrome binary instead of the playwright one
@@ -36,6 +38,7 @@ import json
 import os
 import random
 import re
+import socket
 import sys
 import time
 import urllib.error
@@ -45,7 +48,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
 CLIENT_UA = "memesave-tiktok-sync/1.0"  # Cloudflare blocks the urllib default (error 1010)
@@ -56,6 +59,11 @@ IDLE_SCROLLS = 6  # scrolls without new likes before the list counts as loaded
 NOCAPTCHA = "https://api.nocaptchaai.com"
 CAPTCHA_TRIES = 3
 PHOTO_MAX, VIDEO_MAX, THUMB_MAX = 10 << 20, 50 << 20, (1 << 20) - 1  # memesave upload limits
+
+
+def first_line(e):
+    """The message of an error without Playwright's call log (it holds the request headers with the session cookies)."""
+    return str(e).splitlines()[0] if str(e) else type(e).__name__
 
 
 def load_env():
@@ -76,7 +84,21 @@ def env(name, default=None):
     return value
 
 
+def drop_stale_lock(profile):
+    """Chromium refuses a profile locked by a browser that was killed (e.g. with its container); the lock names
+    "<host>-<pid>" of the owner."""
+    lock = Path(profile) / "SingletonLock"
+    if not lock.is_symlink():
+        return
+    host, _, pid = os.readlink(lock).rpartition("-")
+    if host == socket.gethostname() and Path(f"/proc/{pid}").exists():
+        return  # a running browser
+    for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        (Path(profile) / name).unlink(missing_ok=True)
+
+
 def browser(p):
+    drop_stale_lock(os.environ.get("PROFILE_DIR", "profile"))
     return p.chromium.launch_persistent_context(
         os.environ.get("PROFILE_DIR", "profile"),
         executable_path=os.environ.get("CHROMIUM") or None,
@@ -209,7 +231,7 @@ def handle_captcha(page):
         try:
             solve_rotate(page, *imgs)
         except Exception as e:  # noqa: BLE001 - closing still works
-            print(f"captcha not solved: {e}", file=sys.stderr)
+            print(f"captcha not solved: {first_line(e)}", file=sys.stderr)
             break
         page.wait_for_timeout(3000)  # a wrong answer brings a new captcha
     close = page.locator("#captcha_close_button")
@@ -349,9 +371,9 @@ def save_like(page, item, folder=None):
     try:
         files = like_files(page, item)
     except Exception as e:  # noqa: BLE001 - cobalt may still get it
-        print(f"download failed: {url}: {e}", file=sys.stderr)
+        print(f"download failed: {url}: {first_line(e)}", file=sys.stderr)
         if folder:
-            store_like(folder / item["id"], item, url, [], str(e))
+            store_like(folder / item["id"], item, url, [], first_line(e))
             return True
         return api("/app/api/import", json.dumps({"url": url}).encode(), "application/json")
     if folder:
@@ -445,49 +467,95 @@ def post_data(html):
 
 
 def like_post(page, like_id):
-    """A like with fresh CDN links: its page without the browser, or opened in it when the captcha is in the way."""
+    """A like with fresh CDN links: its page without the browser, or opened in it when the captcha is in the way;
+    and whether TikTok held the plain request back."""
     url = f"https://www.tiktok.com/@i/video/{like_id}"
     try:
-        return post_data(page.request.get(url).text())
+        return post_data(page.request.get(url, timeout=60_000).text()), False
     except (IndexError, KeyError, ValueError):
         page.goto(url)
         page.wait_for_timeout(5000)
         handle_captcha(page)
-        return post_data(page.content())
+        return post_data(page.content()), True
+
+
+class Pacer:
+    """Waits of the full backfill, AIMD: the wait between likes gets a little shorter after each saved like and twice
+    as long after trouble (a timeout, a held-back request); the rest after a batch gets shorter after a calm batch
+    and twice as long after one with trouble. Bounds: BACKFILL_PAUSE(_MAX), BACKFILL_REST_MIN/MAX."""
+
+    def __init__(self, low, high, rest, rest_low, rest_high):
+        self.low, self.high, self.delay = low, high, low * 2
+        self.rest, self.rest_low, self.rest_high, self.calm = rest, rest_low, rest_high, True
+
+    def ok(self):
+        self.delay = max(self.low, self.delay * 0.9)
+
+    def trouble(self, why):
+        self.delay, self.calm = min(self.high, self.delay * 2), False
+        print(f"backfill: {why}; waiting {self.delay:.0f} s between likes now", file=sys.stderr)
+
+    def next_rest(self):
+        self.rest = max(self.rest_low, self.rest * 0.7) if self.calm else min(self.rest_high, self.rest * 2)
+        self.calm = True
+        return self.rest
 
 
 def pause(seconds):
     time.sleep(seconds * random.uniform(0.5, 1.5))
 
 
+def env_int(name, default):
+    return int(os.environ.get(name, default))
+
+
 def backfill(path):
-    """FULL_BACKFILL: saves every like of the account, oldest first, with pauses; resumes from STATE_FILE."""
+    """FULL_BACKFILL: saves every like of the account, oldest first, in batches with pauses; resumes from STATE_FILE.
+    Every batch gets a fresh browser: a long-running one keeps growing."""
     state = load_state(path) or {"seen": []}
-    every, batch, rest = (int(os.environ.get(k, d)) for k, d in (("BACKFILL_PAUSE", "20"), ("BACKFILL_BATCH", "50"), ("BACKFILL_REST", "900")))
+    batch = env_int("BACKFILL_BATCH", 50)
+    pacer = Pacer(
+        env_int("BACKFILL_PAUSE", 10), env_int("BACKFILL_PAUSE_MAX", 600),
+        env_int("BACKFILL_REST", 900), env_int("BACKFILL_REST_MIN", 120), env_int("BACKFILL_REST_MAX", 3600),
+    )  # fmt: skip
     folder = Path(os.environ["BACKFILL_DIR"]) if os.environ.get("BACKFILL_DIR") else None
-    with session() as page:
-        if "queue" not in state:
+    if "queue" not in state:
+        with session() as page:
             seen = set(state["seen"])
             state["queue"] = [[i, at] for i, at in reversed(all_likes(page)) if i not in seen]
-            save_state(path, state)
-        print(f"backfill: {len(state['queue'])} likes left")
-        done = 0
-        while state["queue"]:
-            like_id, saved_at = state["queue"][0]
-            try:
-                item = like_post(page, like_id)
-            except (IndexError, KeyError, ValueError):
-                raise RuntimeError(f"no post data for {like_id} (captcha?)") from None
-            if item and not save_like(page, {**item, "_saved_at": saved_at}, folder):
-                return  # the next run retries this like
-            state["seen"].append(state["queue"].pop(0)[0])
-            save_state(path, state)
-            done += 1
-            if done % batch == 0:
-                print(f"backfill: {done} saved, {len(state['queue'])} left, resting")
-                pause(rest)
-            else:
-                pause(every)
+        save_state(path, state)
+    print(f"backfill: {len(state['queue'])} likes left")
+    done = 0
+    while state["queue"]:
+        with session() as page:
+            for n in range(min(batch, len(state["queue"]))):
+                like_id, saved_at = state["queue"][0]
+                for attempt in range(1, 4):  # network hiccups: wait and retry instead of losing the run
+                    try:
+                        item, held_back = like_post(page, like_id)
+                        break
+                    except (IndexError, KeyError, ValueError):
+                        raise RuntimeError(f"no post data for {like_id} (captcha?)") from None
+                    except PlaywrightError as e:
+                        if attempt == 3:
+                            raise
+                        pacer.trouble(f"{like_id}: {first_line(e)}")
+                        pause(pacer.delay)
+                if held_back:
+                    pacer.trouble(f"{like_id}: the post page needed the browser")
+                else:
+                    pacer.ok()
+                if item and not save_like(page, {**item, "_saved_at": saved_at}, folder):
+                    return  # the next run retries this like
+                state["seen"].append(state["queue"].pop(0)[0])
+                save_state(path, state)
+                done += 1
+                if n < batch - 1:
+                    pause(pacer.delay)
+        if state["queue"]:
+            rest = pacer.next_rest()
+            print(f"backfill: {done} saved, {len(state['queue'])} left; {pacer.delay:.0f} s between likes, resting {rest:.0f} s")
+            pause(rest)
     state.pop("queue")
     state["backfill_done"] = True
     save_state(path, state)
@@ -541,7 +609,7 @@ def main():
             else:
                 sync(path)
         except Exception as e:  # noqa: BLE001 - a long-running service logs and tries again
-            print(f"sync failed: {e}", file=sys.stderr)
+            print(f"sync failed: {first_line(e)}", file=sys.stderr)
             if not interval:
                 sys.exit(1)
         if not interval:
