@@ -32,6 +32,7 @@ export const DESCRIBE_MODELS = { max: "google/gemini-4-argon", medium: "openai/g
 // Tier of new accounts. The DB column default stays "max" (SQLite cannot change it), so inserts set it.
 export const DEFAULT_TIER = "medium";
 export const DESCRIBE_FALLBACKS = ["openai/gpt-6-luna", "deepseek/deepseek-v4.1-flash-1017"]; // photos a provider blocks
+export const DESCRIBE_VIDEO_FALLBACKS = ["google/gemini-4-argon", "qwen/qwen3.8-omni-flash"]; // video + audio input
 
 // MCP: OAuth scopes and the request body limit (base64 of a 10 MB photo).
 export const MCP_SCOPES = { read: "memes:read", write: "memes:write" } as const;

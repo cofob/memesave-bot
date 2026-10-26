@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { addToPost } from "../src/channels";
 import type { Env } from "../src/env";
-import { describeStage, docText, parseJson, toDescription, toDescriptions, topTags, type Description } from "../src/ingest/describe";
+import { describeStage, docText, isTransient, parseJson, toDescription, toDescriptions, topTags, type Description } from "../src/ingest/describe";
 
 describe("parseJson", () => {
   it("parses plain, fenced and prose-wrapped JSON", () => {
@@ -86,5 +86,13 @@ describe("album describe", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     jobs.length = 0;
+  });
+});
+
+describe("isTransient", () => {
+  it("switches the model on provider errors, not on bad requests", () => {
+    expect(isTransient(new Error('OpenRouter /chat/completions 500 (global key): {"message":"Internal Server Error"}'))).toBe(true);
+    expect(isTransient(new Error("OpenRouter /chat/completions 429 (user key): {}"))).toBe(true);
+    expect(isTransient(new Error("OpenRouter /chat/completions 400 (user key): {}"))).toBe(false);
   });
 });

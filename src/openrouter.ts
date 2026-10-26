@@ -24,7 +24,10 @@ export type ChatMessage =
   | AssistantMessage
   | { role: "tool"; tool_call_id: string; content: string };
 
-async function post(env: Env, path: string, body: { model: string } & Record<string, unknown>, spend: Spend, signal?: AbortSignal) {
+/** Rate limits and provider errors: worth one more try. */
+const transient = (status: number) => status === 408 || status === 429 || status >= 500;
+
+async function post(env: Env, path: string, body: { model: string } & Record<string, unknown>, spend: Spend, signal?: AbortSignal, retries = 1) {
   const { key, source } = await apiKey(env, spend.userId);
   const res = await fetch(BASE + path, {
     method: "POST",
@@ -39,6 +42,10 @@ async function post(env: Env, path: string, body: { model: string } & Record<str
   });
   const data = await res.json<any>().catch(() => ({}));
   if (!res.ok || data.error) {
+    if (retries > 0 && transient(Number(data.error?.code) || res.status) && !signal?.aborted) {
+      await new Promise((r) => setTimeout(r, 1000));
+      return post(env, path, body, spend, signal, retries - 1);
+    }
     throw new Error(`OpenRouter ${path} ${res.status} (${source} key): ${JSON.stringify(data.error ?? data).slice(0, 500)}`);
   }
   await recordSpend(env, spend, body.model, source, data.usage ?? {});

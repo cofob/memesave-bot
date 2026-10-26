@@ -1,5 +1,5 @@
 import { botApi } from "../botapi";
-import { DEFAULT_TIER, DESCRIBE_FALLBACKS, DESCRIBE_MODELS, MODELS, VIDEO_INLINE_MAX_BYTES } from "../config";
+import { DEFAULT_TIER, DESCRIBE_FALLBACKS, DESCRIBE_MODELS, DESCRIBE_VIDEO_FALLBACKS, MODELS, VIDEO_INLINE_MAX_BYTES } from "../config";
 import { getMeme, getUser, setStatus, userLang, type Meme } from "../db";
 import { ALBUM_WAIT, albumPhotos, queuePosts } from "../channels";
 import type { Env } from "../env";
@@ -136,10 +136,12 @@ export const userTier = async (db: D1Database, userId: number): Promise<Tier> =>
 
 /** Models to try in order: the tier's model, then cheaper ones when a provider blocks the photo. Videos have one. */
 export const describeModels = (m: Pick<Meme, "kind">, tier: Tier) =>
-  m.kind === "photo" ? [...new Set([DESCRIBE_MODELS[tier], ...DESCRIBE_FALLBACKS])] : [MODELS.describeVideo];
+  m.kind === "photo" ? [...new Set([DESCRIBE_MODELS[tier], ...DESCRIBE_FALLBACKS])] : [MODELS.describeVideo, ...DESCRIBE_VIDEO_FALLBACKS];
 
 /** A provider's safety filter refused the request (an error, or an empty answer). */
 export const isBlocked = (e: unknown) => /SAFETY|content.?(policy|filter)|PROHIBITED|blocked|moderation|empty answer/i.test(String(e));
+/** OpenRouter or the provider failed after the retry: another model may work. */
+export const isTransient = (e: unknown) => /OpenRouter \S+ (408|429|5\d\d) |fetch failed/i.test(String(e));
 
 export function describeRequest(m: Meme, usedTags: string[], media: Part[], tier: Tier = DEFAULT_TIER) {
   const context = [
@@ -198,7 +200,7 @@ const fromRow = (m: Meme): Description => ({
 
 /**
  * Stage 2: describes the meme with web tools, then finishes it. A retry skips the paid call when the description is saved.
- * When a provider blocks the photo, the next model in describeModels tries it; `from` skips models that already refused.
+ * When a provider blocks the meme or fails, the next model in describeModels tries it; `from` skips models that already refused.
  */
 export async function describeStage(env: Env, memeId: string, from = 0, single = false) {
   const m = await getMeme(env.DB, memeId);
@@ -251,8 +253,8 @@ async function describeGroup(env: Env, m: Meme, group: Meme[], from: number) {
       await Promise.all(group.slice(1).map((g) => env.JOBS.send({ type: "finish", memeId: g.id })));
       break;
     } catch (e) {
-      if (i + 1 >= models.length || !isBlocked(e)) throw e;
-      console.warn("describe blocked, next model", memeId, models[i], String(e).slice(0, 200));
+      if (i + 1 >= models.length || !(isBlocked(e) || isTransient(e))) throw e;
+      console.warn("describe failed, next model", memeId, models[i], String(e).slice(0, 200));
     }
   }
 }
