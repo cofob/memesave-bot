@@ -44,6 +44,7 @@
           [s.context, meme.meme_context],
           [s.meaning, meme.cultural_meaning],
           [s.source, meme.source],
+          [s.savedAt, meme.saved_at && new Date(meme.saved_at * 1000).toLocaleString()],
         ].filter(([, value]) => value)
       : [],
   );

@@ -17,6 +17,10 @@ Environment (also read from .env in the current, the script's and its parent fol
   STATE_FILE       default: state.json (ids of imported likes)
   INTERVAL         seconds between syncs, default 1800; 0 = run once
   BACKFILL         likes to import on the first run, default 50 (older ones are skipped)
+  FULL_BACKFILL    1: save every like of the account first (oldest first, resumable), then sync as usual;
+                   pauses BACKFILL_PAUSE s (default 20) between likes and BACKFILL_REST s (900) every BACKFILL_BATCH (50)
+  BACKFILL_DIR     optional: the full backfill stores the files there (<id>/0.mp4, 0.jpg, …, meta.json with the upload
+                   fields) instead of uploading them
   CHROMIUM         optional: path of a Chromium/Chrome binary instead of the playwright one
   NOCAPTCHAAI_KEY  optional: nocaptchaai.com key, solves the rotate captcha (else it is closed)
   HEADLESS         0 runs a normal browser window, default 1. TikTok rejects even right captcha answers from
@@ -35,15 +39,18 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
 CLIENT_UA = "memesave-tiktok-sync/1.0"  # Cloudflare blocks the urllib default (error 1010)
-SEEN_MAX = 5000  # likes are newest first: the first seen one ends a sync
+SEEN_MAX = 200_000  # ids of saved likes kept in the state (all of them for a full backfill)
+SYNC_MAX = 5000  # likes are newest first: the first seen one ends a sync
 LOGIN_WAIT = 300  # seconds
 IDLE_SCROLLS = 6  # scrolls without new likes before the list counts as loaded
 NOCAPTCHA = "https://api.nocaptchaai.com"
@@ -211,9 +218,21 @@ def handle_captcha(page):
         page.wait_for_timeout(1500)
 
 
-def new_likes(page, seen, limit):
-    """Likes after the newest seen one, newest first, at most `limit`: scrolls the Liked tab and reads its API answers."""
-    items, state = {}, {"more": True}  # dict: answers may repeat, insertion keeps the order
+def stamp(data, prev):
+    """The items of an item_list answer with their like time: the cursor of a page is the like time (ms) of its last
+    item; the items between it and the previous page (or now) are spread evenly, but not before the post itself."""
+    page_items, cursor = data.get("itemList") or [], int(data.get("cursor") or 0)
+    prev = prev or time.time() * 1000
+    for i, item in enumerate(page_items):
+        at = prev - (prev - cursor) * (i + 1) / len(page_items) if cursor else None
+        item["_saved_at"] = max(int(at / 1000), item.get("createTime") or 0) if at else None
+    return page_items
+
+
+def new_likes(page, seen, limit, idle_max=IDLE_SCROLLS):
+    """Likes after the newest seen one, newest first, at most `limit`, and whether the list ended:
+    scrolls the Liked tab and reads its API answers."""
+    items, state = {}, {"more": True, "cursor": None}  # dict: answers may repeat, insertion keeps the order
 
     def on_response(res):
         if "/api/favorite/item_list" not in res.url:
@@ -222,9 +241,9 @@ def new_likes(page, seen, limit):
             data = res.json()
         except Exception:  # noqa: BLE001 - an empty anti-bot answer
             return
-        for item in data.get("itemList") or []:
+        for item in stamp(data, state["cursor"]):
             items.setdefault(item["id"], item)
-        state["more"] = bool(data.get("hasMore"))
+        state["more"], state["cursor"] = bool(data.get("hasMore")), int(data.get("cursor") or 0) or state["cursor"]
 
     page.on("response", on_response)
     info = page.request.get("https://www.tiktok.com/passport/web/account/info/?aid=1459").json()
@@ -237,7 +256,7 @@ def new_likes(page, seen, limit):
     page.locator('[data-e2e="liked-tab"]').click(timeout=30_000)
 
     idle, count = 0, 0
-    while state["more"] and idle < IDLE_SCROLLS and len(items) < limit and not seen.intersection(items):
+    while state["more"] and idle < idle_max and len(items) < limit and not seen.intersection(items):
         handle_captcha(page)
         page.mouse.wheel(0, 5000)
         page.wait_for_timeout(1500)
@@ -250,7 +269,7 @@ def new_likes(page, seen, limit):
         if item["id"] in seen:
             break
         found.append(item)
-    return found[:limit]
+    return found[:limit], not state["more"]
 
 
 def fetch(page, urls, mime, limit):
@@ -323,19 +342,56 @@ def upload(fields):
     return api("/app/api/upload", b"".join(parts) + f"--{boundary}--\r\n".encode(), f"multipart/form-data; boundary={boundary}")
 
 
-def save_like(page, item):
-    """Uploads the files of a like (a carousel as one album); falls back to the link import through cobalt."""
+def save_like(page, item, folder=None):
+    """Uploads the files of a like (a carousel as one album); falls back to the link import through cobalt.
+    With a folder, stores them there instead (<folder>/<like id>/), for an import later."""
     url = f"https://www.tiktok.com/@{item['author']['uniqueId']}/video/{item['id']}"
     try:
         files = like_files(page, item)
     except Exception as e:  # noqa: BLE001 - cobalt may still get it
-        print(f"download failed, importing the link: {url}: {e}", file=sys.stderr)
+        print(f"download failed: {url}: {e}", file=sys.stderr)
+        if folder:
+            store_like(folder / item["id"], item, url, [], str(e))
+            return True
         return api("/app/api/import", json.dumps({"url": url}).encode(), "application/json")
+    if folder:
+        store_like(folder / item["id"], item, url, files)
+        return True
     album = f"tiktok:{item['id']}" if len(files) > 1 else None
-    return all(upload({**f, "source": url, "album": album, "position": i}) for i, f in enumerate(files))
+    meta = {"source": url, "saved_at": item.get("_saved_at"), "album": album}
+    return all(upload({**f, **meta, "position": i}) for i, f in enumerate(files))
+
+
+EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic", "video/mp4": "mp4"}
+
+
+def store_like(path, item, url, files, error=None):
+    """<path>/0.mp4 (+ 0.thumb.jpg) or 0.jpg, 1.jpg, … and meta.json: the fields of POST /app/api/upload per file."""
+    path.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for i, f in enumerate(files):
+        entry = {"position": i, "file": f"{i}.{EXT.get(f['file'][1], 'bin')}", "mime": f["file"][1]}
+        (path / entry["file"]).write_bytes(f["file"][0])
+        if f.get("thumb"):
+            entry["thumb"] = f"{i}.thumb.{EXT.get(f['thumb'][1], 'jpg')}"
+            (path / entry["thumb"]).write_bytes(f["thumb"][0])
+        entries.append({**entry, **{k: f.get(k) for k in ("width", "height", "duration")}})
+    meta = {
+        "id": item["id"],
+        "source": url,
+        "saved_at": item.get("_saved_at"),
+        "created_at": int(item.get("createTime") or 0) or None,  # the post itself
+        "author": item["author"]["uniqueId"],
+        "desc": item.get("desc"),
+        "album": f"tiktok:{item['id']}" if len(files) > 1 else None,
+        "files": entries,
+        "error": error,  # no files: import the source link instead
+    }
+    (path / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1))
 
 
 def load_state(path):
+    """{"seen": ids of saved likes, "queue": [id, like time] left for the full backfill, oldest first, "backfill_done": true}."""
     try:
         with open(path) as f:
             return json.load(f)
@@ -343,34 +399,132 @@ def load_state(path):
         return None
 
 
-def save_state(path, seen):
+def save_state(path, state):
+    state["seen"] = state["seen"][-SEEN_MAX:]
     with open(path + ".tmp", "w") as f:
-        json.dump({"seen": seen[-SEEN_MAX:]}, f)
+        json.dump(state, f)
     os.replace(path + ".tmp", path)
 
 
-def sync():
-    path = os.environ.get("STATE_FILE", "state.json")
-    state = load_state(path)
-    seen = state["seen"] if state else []
+@contextmanager
+def session():
+    """The page of a logged-in browser."""
     with sync_playwright() as p:
         ctx = browser(p)
         try:
             if not logged_in(ctx):
                 sys.exit("not logged in: run ./sync.py login")
-            page = ctx.pages[0] if ctx.pages else ctx.new_page()
-            # The first run imports the newest BACKFILL likes (at least one is read: it marks where the next sync stops).
-            likes = new_likes(page, set(seen), SEEN_MAX if state else max(1, int(os.environ.get("BACKFILL", "50"))))
-            imports = len(likes) if state else int(os.environ.get("BACKFILL", "50"))
-            # Oldest first, so the library keeps the like order.
-            for i, item in reversed(list(enumerate(likes))):
-                if i < imports and not save_like(page, item):
-                    break  # newer likes stay unseen: the next sync retries from this one
-                seen.append(item["id"])
-                save_state(path, seen)
+            yield ctx.pages[0] if ctx.pages else ctx.new_page()
         finally:
             ctx.close()
+
+
+def sync(path):
+    state = load_state(path)
+    first = state is None
+    state = state or {"seen": []}
+    with session() as page:
+        # The first run imports the newest BACKFILL likes (at least one is read: it marks where the next sync stops).
+        likes, _ = new_likes(page, set(state["seen"]), max(1, int(os.environ.get("BACKFILL", "50"))) if first else SYNC_MAX)
+        imports = int(os.environ.get("BACKFILL", "50")) if first else len(likes)
+        # Oldest first, so the library keeps the like order.
+        for i, item in reversed(list(enumerate(likes))):
+            if i < imports and not save_like(page, item):
+                break  # newer likes stay unseen: the next sync retries from this one
+            state["seen"].append(item["id"])
+            save_state(path, state)
     print(f"synced: {min(len(likes), imports)} new likes")
+
+
+def post_data(html):
+    """The post in a TikTok post page (what cobalt reads); None when it is gone, KeyError/ValueError without data."""
+    raw = html.split('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">')[1].split("</script>")[0]
+    detail = json.loads(raw)["__DEFAULT_SCOPE__"]["webapp.video-detail"]
+    item = (detail.get("itemInfo") or {}).get("itemStruct")
+    return None if detail.get("statusMsg") or not item or not item.get("author") else item
+
+
+def like_post(page, like_id):
+    """A like with fresh CDN links: its page without the browser, or opened in it when the captcha is in the way."""
+    url = f"https://www.tiktok.com/@i/video/{like_id}"
+    try:
+        return post_data(page.request.get(url).text())
+    except (IndexError, KeyError, ValueError):
+        page.goto(url)
+        page.wait_for_timeout(5000)
+        handle_captcha(page)
+        return post_data(page.content())
+
+
+def pause(seconds):
+    time.sleep(seconds * random.uniform(0.5, 1.5))
+
+
+def backfill(path):
+    """FULL_BACKFILL: saves every like of the account, oldest first, with pauses; resumes from STATE_FILE."""
+    state = load_state(path) or {"seen": []}
+    every, batch, rest = (int(os.environ.get(k, d)) for k, d in (("BACKFILL_PAUSE", "20"), ("BACKFILL_BATCH", "50"), ("BACKFILL_REST", "900")))
+    folder = Path(os.environ["BACKFILL_DIR"]) if os.environ.get("BACKFILL_DIR") else None
+    with session() as page:
+        if "queue" not in state:
+            seen = set(state["seen"])
+            state["queue"] = [[i, at] for i, at in reversed(all_likes(page)) if i not in seen]
+            save_state(path, state)
+        print(f"backfill: {len(state['queue'])} likes left")
+        done = 0
+        while state["queue"]:
+            like_id, saved_at = state["queue"][0]
+            try:
+                item = like_post(page, like_id)
+            except (IndexError, KeyError, ValueError):
+                raise RuntimeError(f"no post data for {like_id} (captcha?)") from None
+            if item and not save_like(page, {**item, "_saved_at": saved_at}, folder):
+                return  # the next run retries this like
+            state["seen"].append(state["queue"].pop(0)[0])
+            save_state(path, state)
+            done += 1
+            if done % batch == 0:
+                print(f"backfill: {done} saved, {len(state['queue'])} left, resting")
+                pause(rest)
+            else:
+                pause(every)
+    state.pop("queue")
+    state["backfill_done"] = True
+    save_state(path, state)
+    print("backfill: done")
+
+
+def all_likes(page):
+    """[id, like time] of every like, newest first. Scrolling thousands of likes fills the memory, so after the first
+    page the Liked tab's own request is repeated page by page with the next cursor: TikTok's script signs page fetches."""
+    requests = []
+    page.on("request", lambda r: "/api/favorite/item_list" in r.url and requests.append(r.url))
+    new_likes(page, set(), 1)
+    url = urllib.parse.urlsplit(requests[0])
+    query = {k: v for k, v in urllib.parse.parse_qsl(url.query) if k not in ("X-Bogus", "X-Gnarly", "_signature", "msToken")}
+    likes, cursor, prev = {}, "0", None
+    while True:
+        for attempt in range(5):
+            text = page.evaluate("u => fetch(u, {credentials: 'include'}).then(r => r.text())", url._replace(query=urllib.parse.urlencode({**query, "cursor": cursor})).geturl())
+            try:
+                data = json.loads(text)
+                if data.get("statusCode", 0) == 0:
+                    break
+            except ValueError:
+                pass
+            handle_captcha(page)
+            pause(30 * (attempt + 1))
+        else:
+            raise RuntimeError(f"the like list stopped loading after {len(likes)} likes; retrying later")
+        before = len(likes)
+        for item in stamp(data, prev):
+            likes.setdefault(item["id"], [item["id"], item["_saved_at"]])
+        if not data.get("hasMore") or not data.get("itemList"):
+            return list(likes.values())
+        cursor, prev = str(data["cursor"]), int(data["cursor"])
+        if len(likes) // 500 > before // 500:
+            print(f"backfill: {len(likes)} likes listed")
+        pause(1.5)
 
 
 def main():
@@ -378,10 +532,14 @@ def main():
     sys.stdout.reconfigure(line_buffering=True)  # logs of a service
     if sys.argv[1:] == ["login"]:
         return login()
+    path = os.environ.get("STATE_FILE", "state.json")
     interval = int(os.environ.get("INTERVAL", "1800"))
     while True:
         try:
-            sync()
+            if os.environ.get("FULL_BACKFILL") == "1" and not (load_state(path) or {}).get("backfill_done"):
+                backfill(path)
+            else:
+                sync(path)
         except Exception as e:  # noqa: BLE001 - a long-running service logs and tries again
             print(f"sync failed: {e}", file=sys.stderr)
             if not interval:

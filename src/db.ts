@@ -53,6 +53,7 @@ export interface Meme {
   r2_file: string | null; // permanent copy in MEDIA ("" = cannot be downloaded from Telegram)
   r2_preview: string | null;
   tg_meta: string | null; // Telegram message JSON without media fields
+  saved_at: number | null; // when the user saved it at the source (e.g. the TikTok like)
   created_at: number;
 }
 

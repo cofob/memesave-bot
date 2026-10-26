@@ -22,6 +22,7 @@ export interface MemeBrief {
 export interface MemeDetail extends MemeBrief {
   caption: string | null;
   source: string | null;
+  saved_at: number | null; // when it was saved at the source (e.g. the TikTok like)
   description: string | null;
   ocr_text: string | null;
   speech_text: string | null;

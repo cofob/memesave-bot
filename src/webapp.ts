@@ -74,6 +74,7 @@ export async function detail(env: Env, m: Meme) {
     ...(await brief(env, m)),
     caption: m.caption,
     source: m.source,
+    saved_at: m.saved_at,
     description: m.description,
     ocr_text: m.ocr_text,
     speech_text: m.speech_text,
@@ -162,7 +163,7 @@ export const kindOf = (mime: string): Kind | null =>
 const str = (v: File | string | null, max: number) => (typeof v === "string" && v ? v.slice(0, max) : null);
 const num = (v: File | string | null) => (typeof v === "string" && v ? Math.round(Number(v)) || null : null);
 
-/** POST /app/api/upload (multipart: file, thumb?, width?, height?, duration?, source?, album?, position?) — stored in R2 until the first send. */
+/** POST /app/api/upload (multipart: file, thumb?, width?, height?, duration?, source?, saved_at?, album?, position?) — stored in R2 until the first send. */
 async function upload(env: Env, user: User, req: Request) {
   const form = await req.formData();
   const file = form.get("file");
@@ -174,6 +175,7 @@ async function upload(env: Env, user: User, req: Request) {
     height: num(form.get("height")),
     duration: num(form.get("duration")),
     source: str(form.get("source"), 500),
+    saved_at: num(form.get("saved_at")),
     // One album per client id: the files of a carousel uploaded one by one, in position order.
     post: album ? { mediaGroupId: `api:${album}`, position: num(form.get("position")) ?? 0 } : undefined,
   });
@@ -186,6 +188,7 @@ type UploadMeta = {
   height?: number | null;
   duration?: number | null;
   source?: string | null;
+  saved_at?: number | null;
   post?: { mediaGroupId: string; position: number };
 };
 
@@ -199,7 +202,10 @@ export async function saveUpload(env: Env, user: User, file: File, meta: UploadM
   const bytes = await file.arrayBuffer();
   const sha256 = hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
   const existing = await env.DB.prepare("SELECT id FROM memes WHERE user_id = ? AND sha256 = ?").bind(user.id, sha256).first<string>("id");
-  if (existing) return { id: existing, duplicate: true };
+  if (existing) {
+    if (meta.post) await addToPost(env.DB, user.id, { memeId: existing, ...meta.post }); // a saved file is still part of this album
+    return { id: existing, duplicate: true };
+  }
 
   const base = `u/${user.id}/${sha256}`;
   const key = fileKey(base, file.type);
@@ -225,6 +231,7 @@ export async function saveUpload(env: Env, user: User, file: File, meta: UploadM
     duration: meta.duration ?? null,
     caption: null,
     source: meta.source ?? null,
+    saved_at: meta.saved_at ?? null,
     import_id: importId,
     sha256,
   });

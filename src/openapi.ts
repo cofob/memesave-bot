@@ -73,6 +73,7 @@ const schemas = {
         properties: {
           caption: nullable("string", "The user's Telegram caption."),
           source: nullable("string", "Where it came from: the imported link or the forward origin."),
+          saved_at: nullable("integer", "Unix time when the user saved it at the source (e.g. the TikTok like), when the uploader sent it."),
           description: nullable("string", "AI description of the content."),
           ocr_text: nullable("string", "Text on the image."),
           speech_text: nullable("string", "Speech in the video."),
@@ -290,6 +291,7 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
                 height: { type: "integer" },
                 duration: { type: "integer", description: "Seconds." },
                 source: { type: "string", maxLength: 500, description: "Where the file comes from, e.g. the post URL; shown as the meme source." },
+                saved_at: { type: "integer", description: "Unix time when the user saved it at the source, e.g. the TikTok like." },
                 album: {
                   type: "string",
                   maxLength: 100,

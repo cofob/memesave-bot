@@ -47,13 +47,15 @@ export async function addToPost(db: D1Database, userId: number, p: { memeId: str
 }
 
 /** Photos of the meme's media group in album order (with the album's last change); empty without a group. */
-/** All memes of the media group of `memeId` in album order; empty when it did not come in an album. */
+/** All memes of the media group of `memeId` in album order (its newest one, when a saved file came again in another album); empty when it did not come in an album. */
 export async function albumMemes(db: D1Database, memeId: string) {
   const { results } = await db
     .prepare(
       `SELECT m.*, p.updated_at AS album_updated FROM post_items i JOIN posts p ON p.id = i.post_id
        JOIN post_items a ON a.post_id = p.id JOIN memes m ON m.id = a.meme_id
-       WHERE i.meme_id = ? AND p.media_group_id IS NOT NULL ORDER BY a.position`,
+       WHERE i.meme_id = ? AND p.media_group_id IS NOT NULL
+         AND p.id = (SELECT q.id FROM post_items j JOIN posts q ON q.id = j.post_id WHERE j.meme_id = i.meme_id AND q.media_group_id IS NOT NULL ORDER BY q.created_at DESC, q.rowid DESC LIMIT 1)
+       ORDER BY a.position`,
     )
     .bind(memeId)
     .all<Meme & { album_updated: number }>();
