@@ -2,6 +2,7 @@ import { type Api, InputFile, InputMediaBuilder } from "grammy";
 import type { Message } from "grammy/types";
 import type { Ctx } from "../bot";
 import { botApi } from "../botapi";
+import { sha256hex } from "../cache";
 import { addToPost } from "../channels";
 import type { Kind } from "../db";
 import type { Env } from "../env";
@@ -21,6 +22,7 @@ export interface Item {
   mime: string;
   bytes: Uint8Array;
   thumb?: Thumb; // videos and GIFs: ffmpeg preview and size
+  sha256?: string;
 }
 export interface Fetched {
   source: string;
@@ -99,6 +101,19 @@ async function sendItems(api: Api, chatId: number, items: Item[], other: { reply
 /** One group id for all chunks keeps the order in one post. */
 const groupOf = (sent: Message[]) => (sent.length > 1 ? `link:${crypto.randomUUID()}` : undefined);
 
+/**
+ * Items the user does not have yet, by SHA-256 of the downloaded bytes (the same file as an API upload).
+ * Telegram may recompress photos, so the hash of these bytes is the one saved.
+ */
+async function fresh(db: D1Database, userId: number, items: Item[]) {
+  const out: Item[] = [];
+  for (const it of items) {
+    it.sha256 = await sha256hex(it.bytes);
+    if (!(await db.prepare("SELECT 1 FROM memes WHERE user_id = ? AND sha256 = ?").bind(userId, it.sha256).first())) out.push(it);
+  }
+  return out;
+}
+
 /** Adds ffmpeg previews to videos and GIFs; without one the item still goes, as before. */
 const withThumbs = (env: Env, items: Item[]) =>
   Promise.all(
@@ -110,12 +125,12 @@ const withThumbs = (env: Env, items: Item[]) =>
 /** Keeps the downloaded bytes and the preview in R2: the bot cannot download files over 20 MB from Telegram. */
 async function stored(env: Env, it: Item): Promise<Partial<MemeRow>> {
   const base = `link/${crypto.randomUUID().replaceAll("-", "")}`;
-  const r2_file = fileKey(base, it.mime);
-  await env.MEDIA.put(r2_file, it.bytes, { httpMetadata: { contentType: it.mime } });
-  if (!it.thumb) return { r2_file };
+  const row = { r2_file: fileKey(base, it.mime), sha256: it.sha256 };
+  await env.MEDIA.put(row.r2_file, it.bytes, { httpMetadata: { contentType: it.mime } });
+  if (!it.thumb) return row;
   const { jpeg, ...size } = it.thumb;
   await env.MEDIA.put(previewKey(base), jpeg, { httpMetadata: { contentType: "image/jpeg" } });
-  return { r2_file, ...size, r2_preview: previewKey(base) };
+  return { ...row, ...size, r2_preview: previewKey(base) };
 }
 
 /** Downloads media of a link, sends it to the user and saves it like forwarded media; an album becomes one post. */
@@ -124,7 +139,9 @@ export async function importLink(ctx: Ctx, env: Env, url: string) {
   try {
     if (await linkSaved(env.DB, ctx.user.id, url)) return ctx.reply(t(ctx.lang, "already_saved"), html);
     await ctx.replyWithChatAction("upload_video").catch(() => {});
-    const { source, items } = await cobalt(env, url);
+    const { source, items: all } = await cobalt(env, url);
+    const items = await fresh(env.DB, ctx.user.id, all);
+    if (!items.length) return ctx.reply(t(ctx.lang, "already_saved"), html);
     await withThumbs(env, items);
     const sent = await sendItems(ctx.api, ctx.chat!.id, items, { reply_parameters: { message_id: ctx.msg!.message_id } });
     const group = groupOf(sent);
@@ -140,7 +157,9 @@ export async function importLink(ctx: Ctx, env: Env, url: string) {
 /** Queue job of the API import: like importLink, but silent and without status messages. */
 export async function linkJob(env: Env, userId: number, url: string) {
   if (await linkSaved(env.DB, userId, url)) return;
-  const { source, items } = await cobalt(env, url);
+  const { source, items: all } = await cobalt(env, url);
+  const items = await fresh(env.DB, userId, all);
+  if (!items.length) return;
   await withThumbs(env, items);
   const sent = await sendItems(botApi(env.BOT_TOKEN), userId, items, { disable_notification: true });
   const group = groupOf(sent);
