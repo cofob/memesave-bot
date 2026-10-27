@@ -1,7 +1,7 @@
 package main
 
 // Data export (MODE=export): reads the user's rows, embeddings and media from the Worker, writes
-// one .zip and uploads it to R2 in parts. /batch_zip restores such an archive (readMemesave).
+// one .zip and streams it to R2 in parts. /batch_zip restores such an archive (readMemesave).
 
 import (
 	"archive/zip"
@@ -9,10 +9,8 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -21,7 +19,6 @@ import (
 
 const (
 	manifestName = "memesave-export.json"
-	exportPath   = "/tmp/export.zip"
 	partSize     = 50 << 20 // R2 multipart part, under the Worker request body limit
 )
 
@@ -191,12 +188,11 @@ func writeStored(zw *zip.Writer, name string, data []byte) error {
 }
 
 func runExport() error {
-	f, err := os.Create(exportPath)
-	if err != nil {
+	if err := callback("/start", map[string]any{}, nil); err != nil {
 		return err
 	}
-	defer f.Close()
-	zw := zip.NewWriter(f)
+	pw := &partWriter{buf: make([]byte, 0, partSize)}
+	zw := zip.NewWriter(pw)
 	manifest, _ := json.Marshal(map[string]any{"format": "memesave-export", "version": 1, "created_at": time.Now().Unix()})
 	if err := writeStored(zw, manifestName, manifest); err != nil {
 		return err
@@ -222,11 +218,10 @@ func runExport() error {
 	if err := zw.Close(); err != nil {
 		return err
 	}
-	size, err := upload(f)
-	if err != nil {
+	if err := pw.complete(); err != nil {
 		return fmt.Errorf("upload: %w", err)
 	}
-	return callback("/done", map[string]int64{"size": size, "files": int64(files), "failed": int64(failed)}, nil)
+	return callback("/done", map[string]int64{"size": pw.size, "files": int64(files), "failed": int64(failed)}, nil)
 }
 
 // exportMemes writes media and embeddings of each meme and adds the "file" and "preview" columns.
@@ -298,34 +293,51 @@ func exportMemes(zw *zip.Writer, cols []string, rows [][]string) ([]string, [][]
 	return append(cols, "file", "preview"), rows, files, failed, nil
 }
 
-// upload sends the finished archive to R2 as a multipart upload through the Worker.
-func upload(f *os.File) (int64, error) {
-	info, err := f.Stat()
+// partWriter streams the archive to R2 as a multipart upload through the Worker,
+// one partSize part at a time, so the archive is never stored on disk.
+type partWriter struct {
+	buf   []byte
+	parts []any
+	size  int64
+}
+
+func (w *partWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		k := min(len(p), partSize-len(w.buf))
+		w.buf, p = append(w.buf, p[:k]...), p[k:]
+		if len(w.buf) == partSize {
+			if err := w.flush(); err != nil {
+				return 0, err
+			}
+		}
+	}
+	return n, nil
+}
+
+func (w *partWriter) flush() error {
+	n := len(w.parts) + 1
+	var part map[string]any
+	err := withRetry(func() (*http.Response, error) {
+		req, _ := http.NewRequest("PUT", env.apiURL+"/part?n="+strconv.Itoa(n), bytes.NewReader(w.buf))
+		req.Header.Set("Authorization", "Bearer "+env.token)
+		return http.DefaultClient.Do(req)
+	}, &part)
 	if err != nil {
-		return 0, err
+		return fmt.Errorf("part %d: %w", n, err)
 	}
-	if err := callback("/start", map[string]any{}, nil); err != nil {
-		return 0, err
-	}
-	parts := []any{}
-	buf := make([]byte, partSize)
-	for n, off := 1, int64(0); off < info.Size(); n, off = n+1, off+partSize {
-		read, err := f.ReadAt(buf, off)
-		if err != nil && err != io.EOF {
-			return 0, err
+	w.parts, w.size, w.buf = append(w.parts, part), w.size+int64(len(w.buf)), w.buf[:0]
+	return nil
+}
+
+// complete sends the last part and finishes the upload.
+func (w *partWriter) complete() error {
+	if len(w.buf) > 0 {
+		if err := w.flush(); err != nil {
+			return err
 		}
-		var part map[string]any
-		err = withRetry(func() (*http.Response, error) {
-			req, _ := http.NewRequest("PUT", env.apiURL+"/part?n="+strconv.Itoa(n), bytes.NewReader(buf[:read]))
-			req.Header.Set("Authorization", "Bearer "+env.token)
-			return http.DefaultClient.Do(req)
-		}, &part)
-		if err != nil {
-			return 0, fmt.Errorf("part %d: %w", n, err)
-		}
-		parts = append(parts, part)
 	}
-	return info.Size(), callback("/complete", map[string]any{"parts": parts}, nil)
+	return callback("/complete", map[string]any{"parts": w.parts}, nil)
 }
 
 // readMemesave reads the memes of a memesave export (memes.csv next to the manifest).
