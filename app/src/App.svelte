@@ -350,13 +350,13 @@
             removable
             removeLabel={s.filtersReset}
             onRemove={() => (filters = { ...filters, [g]: filters[g].filter((x) => x !== v) })}
-            >{g === "lang" ? v.toUpperCase() : ((s as Record<string, string>)[`f_${g}_${v}`] ?? v)}</Tag
+            >{g === "lang" ? v.toUpperCase() : ((s as unknown as Record<string, string>)[`f_${g}_${v}`] ?? v)}</Tag
           >
         {/each}
       {/each}
       {#if filters.added}
         <Tag tone="accent" removable removeLabel={s.filtersReset} onRemove={() => (filters = { ...filters, added: "" })}
-          >{(s as Record<string, string>)[`f_added_${filters.added}`]}</Tag
+          >{(s as unknown as Record<string, string>)[`f_added_${filters.added}`]}</Tag
         >
       {/if}
       <span class="spacer"></span>

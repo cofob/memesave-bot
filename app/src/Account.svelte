@@ -94,7 +94,7 @@
   async function adminAction(kind: "grant" | "revoke", who: string) {
     await act(async () => {
       const res = kind === "grant" ? await api.grant(who, role) : await api.revoke(who);
-      const text = fill((s as Record<string, string>)[`adminResult_${res.result}`] ?? res.result, { target: res.target });
+      const text = fill((s as unknown as Record<string, string>)[`adminResult_${res.result}`] ?? res.result, { target: res.target });
       message = { tone: res.result.startsWith("grant") || res.result === "revoked" ? "success" : "danger", text };
       if (res.result === "granted" || res.result === "granted_pending" || res.result === "revoked") {
         target = "";

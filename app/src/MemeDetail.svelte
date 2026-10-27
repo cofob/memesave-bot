@@ -197,12 +197,14 @@
 {/snippet}
 
 {#if wide}
-  <Dialog open {title} closeLabel={s.close} class="viewer" footer={actions} onOpenChange={(open) => !open && onClose()}>
+  <Dialog open {title} closeLabel={s.close} class="viewer" onOpenChange={(open) => !open && onClose()}>
     {@render body()}
+    {#snippet footer()}{@render actions()}{/snippet}
   </Dialog>
 {:else}
-  <Drawer open {title} side="bottom" closeLabel={s.close} class="viewer-sheet" footer={actions} onOpenChange={(open) => !open && onClose()}>
+  <Drawer open {title} side="bottom" closeLabel={s.close} class="viewer-sheet" onOpenChange={(open) => !open && onClose()}>
     {@render body()}
+    {#snippet footer()}{@render actions()}{/snippet}
   </Drawer>
 {/if}
 

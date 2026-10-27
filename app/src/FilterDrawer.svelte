@@ -27,7 +27,7 @@
   const values = (g: Group) => (g === "lang" ? (facets?.languages.map((l) => l.value) ?? []) : options[g]);
   const count = (g: Group, v: string) =>
     g === "lang" ? facets?.languages.find((l) => l.value === v)?.count : facets?.counts[`${g}:${v}`];
-  const label = (g: Group, v: string) => (g === "lang" ? v.toUpperCase() : ((s as Record<string, string>)[`f_${g}_${v}`] ?? v));
+  const label = (g: Group, v: string) => (g === "lang" ? v.toUpperCase() : ((s as unknown as Record<string, string>)[`f_${g}_${v}`] ?? v));
 
   function toggle(g: Group, v: string) {
     const on = filters[g].includes(v);
@@ -46,7 +46,7 @@
     {#each groups as g (g)}
       {#if values(g).length}
         <section class="group">
-          <h3>{(s as Record<string, string>)[`f_${g}`]}</h3>
+          <h3>{(s as unknown as Record<string, string>)[`f_${g}`]}</h3>
           <Inline gap="xs" wrap>
             {#each values(g) as v (v)}
               <button class="chip" aria-pressed={filters[g].includes(v)} onclick={() => toggle(g, v)}>

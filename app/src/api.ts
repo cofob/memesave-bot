@@ -19,7 +19,7 @@ export interface MemeBrief {
   album?: number; // memes in its media group (browsing shows an album as its first meme)
 }
 
-export interface MemeDetail extends MemeBrief {
+export interface MemeDetail extends Omit<MemeBrief, "album"> {
   caption: string | null;
   source: string | null;
   saved_at: number | null; // when it was saved at the source (e.g. the TikTok like)
