@@ -178,5 +178,6 @@ export async function receiveMedia(
     .prepare("UPDATE memes SET status = 'embedding', error = NULL, status_msg_id = COALESCE(?, status_msg_id), updated_at = unixepoch() WHERE id = ?")
     .bind(statusId, memeId)
     .run();
-  await env.JOBS.send({ type: "embed", memeId });
+  // A link import without an ffmpeg preview makes it first (src/thumb.ts).
+  await env.JOBS.send({ type: link && media.kind !== "photo" && !link.row?.r2_preview ? "thumb" : "embed", memeId });
 }

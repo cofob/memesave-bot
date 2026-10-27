@@ -9,10 +9,11 @@ import { rekeyStage } from "./rekey";
 import { postJob } from "./channels";
 import { linkJob } from "./ingest/link";
 import { failSearch, searchJob } from "./search/chat";
+import { thumbStage } from "./thumb";
 
 export type SearchJob = { type: "search"; userId: number; messageId: number; placeholderId: number; query: string; lang: Lang };
 export type Job =
-  | { type: "embed" | "finish" | "hash" | "rekey"; memeId: string }
+  | { type: "embed" | "finish" | "hash" | "rekey" | "thumb"; memeId: string }
   | { type: "describe"; memeId: string; from?: number; single?: boolean } // from: index in describeModels (1 after a blocked batch request); single: not with its album
   | { type: "batch_submit"; importId: string }
   | { type: "batch_poll" }
@@ -45,6 +46,8 @@ async function run(env: Env, job: Job) {
       return purgeStage(env, job.userId, job.before);
     case "link":
       return linkJob(env, job.userId, job.url);
+    case "thumb":
+      return thumbStage(env, job.memeId);
   }
 }
 
@@ -52,6 +55,7 @@ async function fail(env: Env, job: Job, error: unknown) {
   if (job.type === "search") return failSearch(env, job);
   if (job.type === "batch_submit") return failImport(env, job.importId, error);
   if (job.type === "batch_poll" || job.type === "hash" || job.type === "rekey") return; // cron runs them again
+  if (job.type === "thumb") return env.JOBS.send({ type: "embed", memeId: job.memeId }); // goes on without a preview
   if (job.type === "purge" || job.type === "post" || job.type === "link") return; // idempotent: the dead letter queue keeps it for a manual re-run
   return failIngest(env, job.memeId, error);
 }

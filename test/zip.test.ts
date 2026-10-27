@@ -44,6 +44,16 @@ describe("zip import", () => {
     expect((await handleUpload(new Request(zip.button.url.replace(/s=.*/, "s=bad")), e, ctx)).status).toBe(403);
   });
 
+  it("allows one running import per user", async () => {
+    const { e } = setup();
+    const [a, b] = [await createZipImport(e, 33, "en"), await createZipImport(e, 33, "en")];
+    await e.DB.prepare("UPDATE zip_imports SET status = 'running' WHERE id = ?").bind(a.id).run();
+    await e.DB.prepare("UPDATE zip_imports SET upload_id = 'x' WHERE id = ?").bind(b.id).run();
+    const complete = new Request(b.button.url.replace("?", "/complete?"), { method: "POST", body: "{}" });
+    const res = await handleUpload(complete, e, { waitUntil: () => {} } as unknown as ExecutionContext);
+    expect(res.status).toBe(409);
+  });
+
   it("dedupes by sha256, routes photos to the batch and finishes", async () => {
     const { e, jobs, telegram } = setup();
     const zip = await createZipImport(e, 32, "en");

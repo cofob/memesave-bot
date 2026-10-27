@@ -187,6 +187,9 @@ export async function handleUpload(req: Request, env: Env, ctx: ExecutionContext
     return json(part);
   }
   if (action === "complete" && req.method === "POST") {
+    // One running container per user: a user cannot take all instances from other users.
+    const busy = await env.DB.prepare("SELECT 1 FROM zip_imports WHERE user_id = ? AND status = 'running'").bind(zip.user_id).first();
+    if (busy) return json({ error: "another import is running" }, 409);
     const { parts } = await req.json<{ parts: R2UploadedPart[] }>();
     await upload.complete(parts);
     await env.DB.prepare("UPDATE zip_imports SET status = 'running', updated_at = unixepoch() WHERE id = ?").bind(id).run();

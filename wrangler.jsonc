@@ -33,7 +33,7 @@
   "containers": [
     { "class_name": "ZipImporter", "image": "./container/Dockerfile", "instance_type": "standard-1", "max_instances": 5 },
     { "class_name": "DataExporter", "image": "./container/Dockerfile", "instance_type": "standard-1", "max_instances": 3 },
-    { "class_name": "Thumbnailer", "image": "./thumb/Dockerfile", "instance_type": "basic", "max_instances": 1 }
+    { "class_name": "Thumbnailer", "image": "./thumb/Dockerfile", "instance_type": "basic", "max_instances": 20 }
   ],
   "durable_objects": {
     "bindings": [

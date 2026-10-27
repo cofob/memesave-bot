@@ -114,11 +114,11 @@ async function fresh(db: D1Database, userId: number, items: Item[]) {
   return out;
 }
 
-/** Adds ffmpeg previews to videos and GIFs; without one the item still goes, as before. */
-const withThumbs = (env: Env, items: Item[]) =>
+/** Adds ffmpeg previews to videos and GIFs; without one the item still goes, and a "thumb" job makes it later. */
+const withThumbs = (env: Env, userId: number, items: Item[]) =>
   Promise.all(
     items.map(async (it) => {
-      if (it.kind !== "photo") it.thumb = await thumbnail(env, it.bytes).catch((e) => (console.error("thumbnail failed", e), undefined));
+      if (it.kind !== "photo") it.thumb = await thumbnail(env, userId, it.bytes).catch((e) => (console.error("thumbnail failed", e), undefined));
     }),
   );
 
@@ -142,7 +142,7 @@ export async function importLink(ctx: Ctx, env: Env, url: string) {
     const { source, items: all } = await cobalt(env, url);
     const items = await fresh(env.DB, ctx.user.id, all);
     if (!items.length) return ctx.reply(t(ctx.lang, "already_saved"), html);
-    await withThumbs(env, items);
+    await withThumbs(env, ctx.user.id, items);
     const sent = await sendItems(ctx.api, ctx.chat!.id, items, { reply_parameters: { message_id: ctx.msg!.message_id } });
     const group = groupOf(sent);
     for (const [i, msg] of sent.entries()) {
@@ -160,13 +160,13 @@ export async function linkJob(env: Env, userId: number, url: string) {
   const { source, items: all } = await cobalt(env, url);
   const items = await fresh(env.DB, userId, all);
   if (!items.length) return;
-  await withThumbs(env, items);
+  await withThumbs(env, userId, items);
   const sent = await sendItems(botApi(env.BOT_TOKEN), userId, items, { disable_notification: true });
   const group = groupOf(sent);
   for (const [i, msg] of sent.entries()) {
     const memeId = await insertMeme(env.DB, userId, { ...extractMedia(msg)!, caption: null, source, import_id: null, ...(await stored(env, items[i])) });
     if (!memeId) continue;
     await addToPost(env.DB, userId, { memeId, mediaGroupId: group, position: i });
-    await env.JOBS.send({ type: "embed", memeId });
+    await env.JOBS.send({ type: items[i].kind === "photo" || items[i].thumb ? "embed" : "thumb", memeId });
   }
 }
