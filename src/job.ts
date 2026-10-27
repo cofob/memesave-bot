@@ -56,6 +56,15 @@ export abstract class JobContainer extends Container<Env> {
     if (!this.ctx.container?.running && (await this.ctx.storage.get("finished"))) await this.ctx.storage.deleteAll();
   }
 
+  /** Deletes the storage of a job that finished before the cleanup in alarm; returns the number of deleted keys. */
+  async purge() {
+    if (this.ctx.container?.running) return -1;
+    const n = (await this.ctx.storage.list()).size;
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+    return n;
+  }
+
   async restart() {
     const envVars = await this.ctx.storage.get<Record<string, string>>("envVars");
     await this.start({ envVars, enableInternet: true }).catch((e) => this.restartOrFail(true, `restart: ${e}`));

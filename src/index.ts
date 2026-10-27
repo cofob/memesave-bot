@@ -64,6 +64,14 @@ export default {
   fetch: (req, env, ctx) => (oauth ??= new OAuthProvider(oauthOptions(env, app))).fetch(req, env, ctx),
   queue: handleBatch,
   async scheduled(_, env) {
+    // TEMP: one-time cleanup of finished job DOs, remove after one run.
+    const { results } = await env.DB.prepare(
+      "SELECT 'e' t, id FROM exports WHERE status != 'running' UNION ALL SELECT 'z', id FROM zip_imports WHERE status IN ('done', 'failed') AND COALESCE(error, '') != 'upload expired'",
+    ).all<{ t: string; id: string }>();
+    for (const { t, id } of results) {
+      const ns = t === "e" ? env.EXPORT : env.ZIP;
+      console.log("purge", t, id, await ns.get(ns.idFromName(id)).purge().catch(String));
+    }
     await expireZipUploads(env.DB);
     await expireExports(env.DB);
     await queueHashBackfill(env);
