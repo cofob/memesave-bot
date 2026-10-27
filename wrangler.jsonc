@@ -50,7 +50,7 @@
   "queues": {
     "producers": [{ "binding": "JOBS", "queue": "memesave-jobs" }],
     "consumers": [
-      { "queue": "memesave-jobs", "max_batch_size": 5, "max_batch_timeout": 1, "max_retries": 3, "max_concurrency": 10, "dead_letter_queue": "memesave-dlq" }
+      { "queue": "memesave-jobs", "max_batch_size": 5, "max_batch_timeout": 1, "max_retries": 10, "max_concurrency": 10, "dead_letter_queue": "memesave-dlq" }
     ]
   }
 }

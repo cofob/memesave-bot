@@ -1,4 +1,4 @@
-import { MAX_JOB_ATTEMPTS } from "./config";
+import { MAX_BUSY_ATTEMPTS, MAX_JOB_ATTEMPTS } from "./config";
 import type { Env } from "./env";
 import type { Lang } from "./i18n";
 import { failImport, pollImports, submitImport } from "./batch";
@@ -51,6 +51,13 @@ async function run(env: Env, job: Job) {
   }
 }
 
+/** A rate limit or a busy database (Vectorize 429, D1 during an import): the job works later. */
+export const isBusy = (e: unknown) => /too many requests|\b429\b|rate.?limit|long-running import|overloaded/i.test(String(e));
+
+/** Seconds before the next attempt: 30 s steps; busy errors back off exponentially (1 min … 1 h) with jitter. */
+export const retryDelay = (attempts: number, busy: boolean) =>
+  busy ? Math.round(Math.min(60 * 2 ** (attempts - 1), 3600) * (0.75 + Math.random() / 2)) : 30 * attempts;
+
 async function fail(env: Env, job: Job, error: unknown) {
   if (job.type === "search") return failSearch(env, job, error);
   if (job.type === "batch_submit") return failImport(env, job.importId, error);
@@ -68,12 +75,13 @@ export async function handleBatch(batch: MessageBatch<Job>, env: Env) {
         msg.ack();
       } catch (e) {
         console.error("job failed", msg.body, e);
+        const busy = isBusy(e);
         // Search must not repeat: a partial answer may already be sent.
-        if (msg.body.type === "search" || msg.attempts >= MAX_JOB_ATTEMPTS) {
+        if (msg.body.type === "search" || msg.attempts >= (busy ? MAX_BUSY_ATTEMPTS : MAX_JOB_ATTEMPTS)) {
           await fail(env, msg.body, e).catch(console.error);
           msg.ack();
         } else {
-          msg.retry({ delaySeconds: 30 * msg.attempts });
+          msg.retry({ delaySeconds: retryDelay(msg.attempts, busy) });
         }
       }
     }),

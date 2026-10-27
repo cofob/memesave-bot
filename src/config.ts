@@ -16,6 +16,7 @@ export const AGENT_MAX_STEPS = 6;
 export const AGENT_MAX_VIEWS = 12;
 export const FAST_LLM_TIMEOUT_MS = 3500;
 export const MAX_JOB_ATTEMPTS = 3;
+export const MAX_BUSY_ATTEMPTS = 10; // rate limits and busy D1 retry longer, with backoff (queue max_retries is 10)
 
 // Billing for the "paid" role. Prices in USD; Telegram Stars at STAR_USD, rounded up to 10⭐.
 export const STAR_USD = 0.013;
