@@ -164,7 +164,7 @@ export const kindOf = (mime: string): Kind | null =>
 const str = (v: File | string | null, max: number) => (typeof v === "string" && v ? v.slice(0, max) : null);
 const num = (v: File | string | null) => (typeof v === "string" && v ? Math.round(Number(v)) || null : null);
 
-/** POST /app/api/upload (multipart: file, thumb?, width?, height?, duration?, source?, saved_at?, album?, position?, description?) — stored in R2 until the first send. */
+/** POST /app/api/upload (multipart: file, thumb?, width?, height?, duration?, source?, saved_at?, caption?, album?, position?, description?) — stored in R2 until the first send. */
 async function upload(env: Env, user: User, req: Request) {
   const form = await req.formData();
   const file = form.get("file");
@@ -184,6 +184,7 @@ async function upload(env: Env, user: User, req: Request) {
     duration: num(form.get("duration")),
     source: str(form.get("source"), 500),
     saved_at: num(form.get("saved_at")),
+    caption: str(form.get("caption"), 4096),
     // One album per client id: the files of a carousel uploaded one by one, in position order.
     post: album ? { mediaGroupId: `api:${album}`, position: num(form.get("position")) ?? 0 } : undefined,
     description,
@@ -198,6 +199,7 @@ type UploadMeta = {
   duration?: number | null;
   source?: string | null;
   saved_at?: number | null;
+  caption?: string | null;
   post?: { mediaGroupId: string; position: number };
   description?: Description; // ready description: the describe stage skips the AI call
 };
@@ -239,7 +241,7 @@ export async function saveUpload(env: Env, user: User, file: File, meta: UploadM
     width: meta.width ?? null,
     height: meta.height ?? null,
     duration: meta.duration ?? null,
-    caption: null,
+    caption: meta.caption ?? null,
     source: meta.source ?? null,
     saved_at: meta.saved_at ?? null,
     import_id: importId,

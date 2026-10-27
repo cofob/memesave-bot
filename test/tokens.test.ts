@@ -73,6 +73,7 @@ describe("uploads with an album", () => {
       form.set("file", new File([name], `${name}.jpg`, { type: "image/jpeg" }));
       form.set("source", "https://www.tiktok.com/@u/video/1");
       form.set("saved_at", "1790000000");
+      form.set("caption", "#cat");
       form.set("album", album);
       form.set("position", String(position));
       const res = (await handleApp(new Request("https://m.example/app/api/upload", { method: "POST", body: form, headers: { Authorization: `Bearer ${token}` } }), e, ctx))!;
@@ -83,11 +84,11 @@ describe("uploads with an album", () => {
     const first = await up("a", 0);
     expect(first).toBe(earlier);
     const { results } = await e.DB.prepare(
-      "SELECT m.id, m.source, m.saved_at FROM post_items i JOIN posts p ON p.id = i.post_id JOIN memes m ON m.id = i.meme_id WHERE p.media_group_id = 'api:tiktok:1' ORDER BY i.position",
-    ).all<{ id: string; source: string; saved_at: number }>();
+      "SELECT m.id, m.source, m.saved_at, m.caption FROM post_items i JOIN posts p ON p.id = i.post_id JOIN memes m ON m.id = i.meme_id WHERE p.media_group_id = 'api:tiktok:1' ORDER BY i.position",
+    ).all<{ id: string; source: string; saved_at: number; caption: string }>();
     expect(results).toEqual([
-      { id: first, source: "https://www.tiktok.com/@u/video/1", saved_at: 1790000000 },
-      { id: second, source: "https://www.tiktok.com/@u/video/1", saved_at: 1790000000 },
+      { id: first, source: "https://www.tiktok.com/@u/video/1", saved_at: 1790000000, caption: "#cat" },
+      { id: second, source: "https://www.tiktok.com/@u/video/1", saved_at: 1790000000, caption: "#cat" },
     ]);
     expect((await albumMemes(e.DB, first)).map((m) => m.id)).toEqual([first, second]); // the newest album, not both
   });

@@ -292,6 +292,7 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
                 duration: { type: "integer", description: "Seconds." },
                 source: { type: "string", maxLength: 500, description: "Where the file comes from, e.g. the post URL; shown as the meme source." },
                 saved_at: { type: "integer", description: "Unix time when the user saved it at the source, e.g. the TikTok like." },
+                caption: { type: "string", maxLength: 4096, description: "Text that came with the file, e.g. the TikTok post caption; the AI uses it as context." },
                 album: {
                   type: "string",
                   maxLength: 100,
