@@ -26,21 +26,31 @@ export abstract class JobContainer extends Container<Env> {
   }
 
   override async onStop({ exitCode }: StopParams) {
+    await this.restartOrFail(exitCode === EXIT_RESTART, `container stopped, exit code ${exitCode}`);
+  }
+
+  /** The library calls only this, not onStop, when the container is lost without an exit code (for example in a rollout). */
+  override async onError(error: unknown) {
+    console.error("Container error:", error);
+    await this.restartOrFail(true, `container error: ${error}`);
+  }
+
+  private async restartOrFail(restart: boolean, error: string) {
     const s = await this.ctx.storage.get<any>([this.key, "restarts", "timedOut"]);
     const id: string | undefined = s.get(this.key);
     const restarts: number = s.get("restarts") ?? MAX_RESTARTS;
     if (!id) return;
-    if (exitCode === EXIT_RESTART && !s.get("timedOut") && restarts < MAX_RESTARTS) {
+    if (restart && !s.get("timedOut") && restarts < MAX_RESTARTS) {
       await this.ctx.storage.put("restarts", restarts + 1);
       await this.schedule(1, "restart");
       return;
     }
     // No-op when the container already reported done or fail.
-    await this.fail(id, `container stopped, exit code ${exitCode}`);
+    await this.fail(id, error);
   }
 
   async restart() {
-    const s = await this.ctx.storage.get<any>([this.key, "envVars"]);
-    await this.start({ envVars: s.get("envVars"), enableInternet: true }).catch((e) => this.fail(s.get(this.key), `restart: ${e}`));
+    const envVars = await this.ctx.storage.get<Record<string, string>>("envVars");
+    await this.start({ envVars, enableInternet: true }).catch((e) => this.restartOrFail(true, `restart: ${e}`));
   }
 }
