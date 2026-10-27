@@ -1,8 +1,8 @@
-import { Container, type StopParams } from "@cloudflare/containers";
 import { botApi } from "./botapi";
 import { getMeme, userLang } from "./db";
 import type { Env } from "./env";
 import { t, type Key } from "./i18n";
+import { JobContainer } from "./job";
 import { memeMedia, sign, signedQuery, tmpKey, variantOf, verify, verifyQuery } from "./media";
 
 const DAY = 86400;
@@ -54,21 +54,10 @@ const TABLES: Record<string, { from: string; where: string; cols: string }> = {
   exports: { from: "exports", where: "user_id = ?", cols: "id, status, size, files, failed, error, created_at" },
 };
 
-/** One-shot job container (same image as the importer, MODE=export): builds one export and exits. */
-export class DataExporter extends Container<Env> {
-  sleepAfter = "4h";
-  enableInternet = true;
-
-  async run(exportId: string, envVars: Record<string, string>) {
-    await this.ctx.storage.put("exportId", exportId);
-    await this.start({ envVars, enableInternet: true });
-  }
-
-  override async onStop({ exitCode }: StopParams) {
-    const exportId = await this.ctx.storage.get<string>("exportId");
-    // No-op when the container already reported done or fail.
-    if (exportId) await failExport(this.env, exportId, `container stopped, exit code ${exitCode}`);
-  }
+/** Job container (same image as the importer, MODE=export): builds one export. */
+export class DataExporter extends JobContainer {
+  protected key = "exportId";
+  protected fail = (id: string, error: string) => failExport(this.env, id, error);
 }
 
 const getExport = (db: D1Database, id: string) => db.prepare("SELECT * FROM exports WHERE id = ?").bind(id).first<Export>();
@@ -194,6 +183,8 @@ export async function handleExport(req: Request, env: Env): Promise<Response> {
   }
 
   if (action === "start" && req.method === "POST") {
+    // A restarted container (rollout) uploads the archive again.
+    if (ex.upload_id) await env.MEDIA.resumeMultipartUpload(exportKey(id), ex.upload_id).abort().catch(console.error);
     const upload = await env.MEDIA.createMultipartUpload(exportKey(id), { httpMetadata: { contentType: "application/zip" } });
     await env.DB.prepare("UPDATE exports SET upload_id = ?, updated_at = unixepoch() WHERE id = ?").bind(upload.uploadId, id).run();
     return json({ ok: true });

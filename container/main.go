@@ -16,8 +16,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -52,7 +54,17 @@ type Item struct {
 	Restore  *Restore `json:"restore,omitempty"`
 }
 
+// exitRestart tells the Worker (src/job.ts) to start the job again: SIGTERM comes from a platform rollout.
+const exitRestart = 75
+
 func main() {
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM)
+	go func() {
+		<-stop
+		log.Print("SIGTERM, exit for restart")
+		os.Exit(exitRestart)
+	}()
 	do := run
 	if os.Getenv("MODE") == "export" {
 		do = runExport

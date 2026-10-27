@@ -1,10 +1,10 @@
 import { botApi } from "./botapi";
 import { EMBED_DIMS } from "./config";
-import { Container, type StopParams } from "@cloudflare/containers";
 import { userLang, type Kind } from "./db";
 import type { Env } from "./env";
 import { t, type Key, type Lang } from "./i18n";
 import { namespace, upsertVectors } from "./ingest/embed";
+import { JobContainer } from "./job";
 import { insertMeme } from "./ingest/receive";
 import { fileKey, previewKey, sign, signedQuery, tmpKey, verify, verifyQuery } from "./media";
 import type { Job } from "./queue";
@@ -27,21 +27,10 @@ interface ZipImport {
   format: string | null;
 }
 
-/** One-shot job container: unpacks one export and exits. `sleepAfter` is the hard timeout. */
-export class ZipImporter extends Container<Env> {
-  sleepAfter = "4h";
-  enableInternet = true;
-
-  async run(zipId: string, envVars: Record<string, string>) {
-    await this.ctx.storage.put("zipId", zipId);
-    await this.start({ envVars, enableInternet: true });
-  }
-
-  override async onStop({ exitCode }: StopParams) {
-    const zipId = await this.ctx.storage.get<string>("zipId");
-    // No-op when the container already reported done or fail.
-    if (zipId) await failZip(this.env, zipId, `container stopped, exit code ${exitCode}`);
-  }
+/** Job container: unpacks one export. */
+export class ZipImporter extends JobContainer {
+  protected key = "zipId";
+  protected fail = (id: string, error: string) => failZip(this.env, id, error);
 }
 
 interface ZipItem {
@@ -240,14 +229,16 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
       results.forEach((r) => known.add(r.sha256));
     }
     const fresh = hashes.filter((h) => !known.has(h));
-    const skipped = Number(body.found ?? hashes.length) - fresh.length;
+    // After a restart (rollout) the memes imported before it are known: they still count as imported.
+    const total = fresh.length + zip.imported;
+    const skipped = Number(body.found ?? hashes.length) - total;
     const formats = ["memesave", "telegram_json", "telegram_html", "files"];
     const format = ((body.formats ?? []) as string[]).filter((f) => formats.includes(f)).join(",") || null;
     await db.prepare("UPDATE zip_imports SET total = ?, skipped = ?, format = ?, updated_at = unixepoch() WHERE id = ?")
-      .bind(fresh.length, skipped, format, id)
+      .bind(total, skipped, format, id)
       .run();
     zip.format = format;
-    await progress(env, zip, { found: body.found ?? hashes.length, total: fresh.length, skipped, done: 0 });
+    await progress(env, zip, { found: body.found ?? hashes.length, total, skipped, done: zip.imported });
     return json({ new: fresh });
   }
 
