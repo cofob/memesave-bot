@@ -3,6 +3,7 @@ import { CHAT_LIMIT } from "../config";
 import { getUser } from "../db";
 import type { Env } from "../env";
 import { t } from "../i18n";
+import { errorNote } from "../openrouter";
 import type { SearchJob } from "../queue";
 import { agentSearch } from "./agent";
 import { sendResults } from "./deliver";
@@ -20,6 +21,7 @@ export async function searchJob(env: Env, job: SearchJob) {
   await sendResults(env, api, job.userId, job.messageId, memes, job.lang);
 }
 
-export async function failSearch(env: Env, job: SearchJob) {
-  await botApi(env.BOT_TOKEN).editMessageText(job.userId, job.placeholderId, t(job.lang, "search_failed"), { parse_mode: "HTML" });
+export async function failSearch(env: Env, job: SearchJob, error: unknown) {
+  const text = t(job.lang, "search_failed", { error: errorNote(error) });
+  await botApi(env.BOT_TOKEN).editMessageText(job.userId, job.placeholderId, text, { parse_mode: "HTML" });
 }

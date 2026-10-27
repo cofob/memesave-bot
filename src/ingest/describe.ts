@@ -5,7 +5,7 @@ import { ALBUM_WAIT, albumPhotos, queuePosts } from "../channels";
 import type { Env } from "../env";
 import { esc, t, type Lang } from "../i18n";
 import { memeMedia, toDataUrl, variantOf } from "../media";
-import { chat, embed, type Part } from "../openrouter";
+import { chat, embed, errorNote, type Part } from "../openrouter";
 import { namespace, upsertVectors } from "./embed";
 
 export interface Description {
@@ -309,6 +309,6 @@ export async function failIngest(env: Env, memeId: string, error: unknown) {
   const m = await getMeme(env.DB, memeId);
   if (!m) return;
   await setStatus(env.DB, memeId, "failed", String(error).slice(0, 1000));
-  await editStatus(env, m, t(await userLang(env.DB, m.user_id), "index_failed"));
+  await editStatus(env, m, t(await userLang(env.DB, m.user_id), "index_failed", { error: errorNote(error) }));
   await queuePosts(env, memeId); // the media is fine: post it anyway
 }

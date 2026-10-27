@@ -52,7 +52,7 @@ async function run(env: Env, job: Job) {
 }
 
 async function fail(env: Env, job: Job, error: unknown) {
-  if (job.type === "search") return failSearch(env, job);
+  if (job.type === "search") return failSearch(env, job, error);
   if (job.type === "batch_submit") return failImport(env, job.importId, error);
   if (job.type === "batch_poll" || job.type === "hash" || job.type === "rekey") return; // cron runs them again
   if (job.type === "thumb") return env.JOBS.send({ type: "embed", memeId: job.memeId }); // goes on without a preview

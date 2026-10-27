@@ -1,5 +1,6 @@
 import { EMBED_DIMS, MODELS } from "./config";
 import type { Env } from "./env";
+import { esc } from "./i18n";
 import { recordSpend, type Spend } from "./spend";
 import { apiKey, keyFor } from "./userkey";
 
@@ -24,6 +25,35 @@ export type ChatMessage =
   | AssistantMessage
   | { role: "tool"; tool_call_id: string; content: string };
 
+/** An OpenRouter error; `reason` is safe to show to the user. */
+export class OpenRouterError extends Error {
+  constructor(message: string, readonly reason: string) {
+    super(message);
+  }
+}
+
+/** The error as HTML for a bot message: OpenRouter errors only, other errors are internal. */
+export const errorNote = (e: unknown) => (e instanceof OpenRouterError ? `\n<code>${esc(e.reason)}</code>` : "");
+
+/** Parses the body; a non-JSON body (e.g. an HTML 502 page) becomes an error. */
+async function parse(res: Response): Promise<any> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: { message: text.slice(0, 200) || res.statusText || "empty response" } };
+  }
+}
+
+function fail(path: string, status: number, error: any, source?: KeySource): never {
+  const raw = error?.metadata?.raw;
+  const reason = [error?.message ?? JSON.stringify(error), error?.metadata?.provider_name, typeof raw === "string" ? raw : raw && JSON.stringify(raw)]
+    .filter(Boolean)
+    .join(" — ");
+  const key = source ? ` (${source} key)` : "";
+  throw new OpenRouterError(`OpenRouter ${path} ${status}${key}: ${JSON.stringify(error).slice(0, 500)}`, `OpenRouter ${status}: ${reason.slice(0, 300)}`);
+}
+
 /** Rate limits and provider errors: worth one more try. */
 const transient = (status: number) => status === 408 || status === 429 || status >= 500;
 
@@ -40,13 +70,16 @@ async function post(env: Env, path: string, body: { model: string } & Record<str
     body: JSON.stringify({ ...body, user: String(spend.userId) }),
     signal,
   });
-  const data = await res.json<any>().catch(() => ({}));
-  if (!res.ok || data.error) {
-    if (retries > 0 && transient(Number(data.error?.code) || res.status) && !signal?.aborted) {
+  const data = await parse(res);
+  // A provider error can also come with status 200, inside the choice.
+  const error = data.error ?? data.choices?.[0]?.error ?? (!res.ok && data);
+  if (error) {
+    const status = Number(error.code) || res.status;
+    if (retries > 0 && transient(status) && !signal?.aborted) {
       await new Promise((r) => setTimeout(r, 1000));
       return post(env, path, body, spend, signal, retries - 1);
     }
-    throw new Error(`OpenRouter ${path} ${res.status} (${source} key): ${JSON.stringify(data.error ?? data).slice(0, 500)}`);
+    fail(path, status, error, source);
   }
   await recordSpend(env, spend, body.model, source, data.usage ?? {});
   return data;
@@ -59,7 +92,9 @@ export async function chat(
   signal?: AbortSignal,
 ): Promise<AssistantMessage> {
   const data = await post(env, "/chat/completions", body, spend, signal);
-  return data.choices[0].message;
+  const message = data.choices?.[0]?.message;
+  if (!message) fail("/chat/completions", 502, { message: "no message in response" });
+  return message;
 }
 
 export type EmbedInput = string | { content: Part[] };
@@ -97,8 +132,8 @@ async function batchFetch(key: string, path: string, init: RequestInit = {}): Pr
     ...init,
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "X-Title": "memesave-bot" },
   });
-  const data = await res.json<any>().catch(() => ({}));
-  if (!res.ok) throw new Error(`OpenRouter batches ${res.status}: ${JSON.stringify(data.error ?? data).slice(0, 500)}`);
+  const data = await parse(res);
+  if (!res.ok) fail("batches", res.status, data.error ?? data);
   return data;
 }
 

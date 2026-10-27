@@ -7,7 +7,7 @@ import { describeRequest, isBlocked, parseJson, saveDescription, toDescription, 
 import { hasExt, memeMedia, signedMediaUrl } from "./media";
 import { presignedR2Url } from "./presign";
 import { rekeyStage } from "./rekey";
-import { createBatch, getBatch, type Batch, type KeySource } from "./openrouter";
+import { createBatch, errorNote, getBatch, type Batch, type KeySource } from "./openrouter";
 import type { Job } from "./queue";
 import { recordSpend } from "./spend";
 
@@ -264,7 +264,7 @@ export async function failImport(env: Env, importId: string, error: unknown) {
   if (!imp) return;
   const memes = await pending(env.DB, importId);
   await sendJobs(env, describeJobs(memes));
-  await notify(env, imp, "batch_failed", { n: memes.length });
+  await notify(env, imp, "batch_failed", { n: memes.length, error: errorNote(error) });
 }
 
 /** Checks all submitted imports; called by the OpenRouter webhook and by cron. */
