@@ -14,6 +14,7 @@ import { sendMeme } from "./search/deliver";
 import { keywordSearch } from "./search/hybrid";
 import { cachedFastSearch } from "./search/inline";
 import { userStats } from "./stats";
+import { toDescription } from "./ingest/describe";
 import { brief, detail, downloadLinks, kindOf, LIMITS, listMemes, ownMemes, retryMeme, saveUpload, tagCounts } from "./webapp";
 
 // MCP server for outside AI agents: the user's library over OAuth (src/oauth.ts).
@@ -229,6 +230,22 @@ function buildServer(env: Env, user: User, scopes: string[]) {
         data: z.string().optional().describe("base64 file content (needs mime_type)"),
         mime_type: z.string().optional().describe("e.g. image/jpeg, image/gif, video/mp4"),
         filename: z.string().optional(),
+        description: z
+          .object({
+            title: z.string(),
+            ocr_text: z.string().optional(),
+            speech_text: z.string().optional(),
+            language: z.string().optional(),
+            description: z.string().optional(),
+            meme_context: z.string().optional(),
+            cultural_meaning: z.string().optional(),
+            tags: z.array(z.string()).optional(),
+            search_phrases: z.array(z.string()).optional(),
+          })
+          .optional()
+          .describe(
+            "Do NOT fill this: a separate model recognizes the text, speech and meaning of every upload automatically. Only for a ready description from another memesave library (export).",
+          ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -237,7 +254,7 @@ function buildServer(env: Env, user: User, scopes: string[]) {
       if (denied) return denied;
       const file = await uploadFile(a);
       if (typeof file === "string") return fail(file);
-      const res = await saveUpload(env, user, file);
+      const res = await saveUpload(env, user, file, { description: a.description && toDescription(a.description, "") });
       return "error" in res ? fail(res.error) : ok(res);
     },
   );

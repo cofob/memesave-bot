@@ -92,3 +92,20 @@ describe("uploads with an album", () => {
     expect((await albumMemes(e.DB, first)).map((m) => m.id)).toEqual([first, second]); // the newest album, not both
   });
 });
+
+describe("uploads with a ready description", () => {
+  it("saves the description and rejects bad JSON", async () => {
+    await e.DB.prepare("INSERT INTO users (id, role) VALUES (94, 'admin')").run();
+    const token = (await createToken(e.DB, 94, "sync", true))!.token;
+    const up = (description: string) => {
+      const form = new FormData();
+      form.set("file", new File(["v"], "v.mp4", { type: "video/mp4" }));
+      form.set("description", description);
+      return handleApp(new Request("https://m.example/app/api/upload", { method: "POST", body: form, headers: { Authorization: `Bearer ${token}` } }), e, ctx);
+    };
+    expect((await up("{"))!.status).toBe(400);
+    const { id } = await (await up(JSON.stringify({ title: "Cat coffee", speech_text: "Nooo", tags: ["Cat", "coffee"] })))!.json<{ id: string }>();
+    const m = await e.DB.prepare("SELECT title, speech_text, tags, status FROM memes WHERE id = ?").bind(id).first();
+    expect(m).toEqual({ title: "Cat coffee", speech_text: "Nooo", tags: "cat\ncoffee", status: "embedding" });
+  });
+});

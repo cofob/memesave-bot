@@ -3,6 +3,7 @@ import type { User as TgUser } from "grammy/types";
 import { resolveUser } from "./auth";
 import { deleteMeme, deleteMemes, getMeme, getUser, type Kind, type Meme, type User } from "./db";
 import { insertMeme } from "./ingest/receive";
+import { parseJson, saveDescription, toDescription, type Description } from "./ingest/describe";
 import { collectingImport } from "./batch";
 import { MODELS } from "./config";
 import { handleAccount } from "./webaccount";
@@ -163,12 +164,19 @@ export const kindOf = (mime: string): Kind | null =>
 const str = (v: File | string | null, max: number) => (typeof v === "string" && v ? v.slice(0, max) : null);
 const num = (v: File | string | null) => (typeof v === "string" && v ? Math.round(Number(v)) || null : null);
 
-/** POST /app/api/upload (multipart: file, thumb?, width?, height?, duration?, source?, saved_at?, album?, position?) — stored in R2 until the first send. */
+/** POST /app/api/upload (multipart: file, thumb?, width?, height?, duration?, source?, saved_at?, album?, position?, description?) — stored in R2 until the first send. */
 async function upload(env: Env, user: User, req: Request) {
   const form = await req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) return json({ error: "file required" }, 400);
   const album = str(form.get("album"), 100);
+  const raw = str(form.get("description"), 100_000);
+  let description: Description | undefined;
+  try {
+    description = raw ? toDescription(parseJson(raw), raw) : undefined;
+  } catch {
+    return json({ error: "bad description" }, 400);
+  }
   const res = await saveUpload(env, user, file, {
     thumb: form.get("thumb"),
     width: num(form.get("width")),
@@ -178,6 +186,7 @@ async function upload(env: Env, user: User, req: Request) {
     saved_at: num(form.get("saved_at")),
     // One album per client id: the files of a carousel uploaded one by one, in position order.
     post: album ? { mediaGroupId: `api:${album}`, position: num(form.get("position")) ?? 0 } : undefined,
+    description,
   });
   return "error" in res ? json({ error: res.error }, res.status) : json(res);
 }
@@ -190,6 +199,7 @@ type UploadMeta = {
   source?: string | null;
   saved_at?: number | null;
   post?: { mediaGroupId: string; position: number };
+  description?: Description; // ready description: the describe stage skips the AI call
 };
 
 /** Saves an uploaded file as a new meme (the app and MCP). */
@@ -215,7 +225,7 @@ export async function saveUpload(env: Env, user: User, file: File, meta: UploadM
   if (hasThumb) await env.MEDIA.put(previewKey(base), await thumb.arrayBuffer(), { httpMetadata: { contentType: "image/jpeg" } });
 
   // Photos join an open batch import (/batch), like forwards in the bot.
-  const importId = kind === "photo" ? await collectingImport(env.DB, user.id) : null;
+  const importId = kind === "photo" && !meta.description ? await collectingImport(env.DB, user.id) : null;
   const id = await insertMeme(env.DB, user.id, {
     kind,
     file_id: "",
@@ -237,6 +247,7 @@ export async function saveUpload(env: Env, user: User, file: File, meta: UploadM
   });
   if (!id) return fail("already saved", 409);
   if (!importId || meta.post) await addToPost(env.DB, user.id, { memeId: id, ...meta.post });
+  if (meta.description) await saveDescription(env.DB, id, meta.description, "embedding").run();
   await env.JOBS.send({ type: "embed", memeId: id });
   return { id, duplicate: false, batched: importId !== null };
 }

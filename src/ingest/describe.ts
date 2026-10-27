@@ -167,11 +167,11 @@ const WEB_TOOLS = [
 ];
 
 /** Saves description fields (FTS updates by trigger); the meme stays 'describing' until finishStage. */
-export const saveDescription = (db: D1Database, memeId: string, d: Description) =>
+export const saveDescription = (db: D1Database, memeId: string, d: Description, status: Meme["status"] = "describing") =>
   db
     .prepare(
       `UPDATE memes SET title = ?, ocr_text = ?, speech_text = ?, language = ?, description = ?, meme_context = ?,
-        cultural_meaning = ?, tags = ?, search_phrases = ?, updated_at = unixepoch() WHERE id = ? AND status = 'describing'`,
+        cultural_meaning = ?, tags = ?, search_phrases = ?, updated_at = unixepoch() WHERE id = ? AND status = ?`,
     )
     .bind(
       d.title.slice(0, 120),
@@ -184,6 +184,7 @@ export const saveDescription = (db: D1Database, memeId: string, d: Description) 
       d.tags.join("\n"),
       d.search_phrases.join("\n"),
       memeId,
+      status,
     );
 
 const fromRow = (m: Meme): Description => ({

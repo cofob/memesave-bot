@@ -299,6 +299,12 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
                   example: "tiktok:7300000000000000000",
                 },
                 position: { type: "integer", description: "Place of the file in its album, from 0." },
+                description: {
+                  type: "string",
+                  description:
+                    "Optional ready description as JSON: `title` (required), `ocr_text`, `speech_text`, `language`, `description`, `meme_context`, `cultural_meaning`, `tags` and `search_phrases` (string arrays). With it the AI description step is skipped and only embeddings are computed. Leave it out to let the AI describe the meme.",
+                  example: '{"title":"Cat begs not to be turned into coffee","speech_text":"Noooo don\'t turn me into a coffee!","tags":["cat","latte art"]}',
+                },
               },
               required: ["file"],
             },
@@ -307,6 +313,7 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
           responses: {
             "200": ok("Saved; processing runs in the background.", ref("Upload")),
             "409": err("Already saved."),
+            "400": err("Bad description JSON."),
             "413": err("File too large."),
             "415": err("Not a photo, video or GIF."),
             ...PAID,
