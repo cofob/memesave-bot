@@ -89,6 +89,7 @@ Every AI request cost is saved to your /stats. /export downloads all your data, 
   stats: `${E.stats} <b>Your stats</b>
 Memes: {total} (photos {photo}, videos {video}, GIFs {animation})
 Processing: {pending}, failed: {failed}
+Storage: {bytes}
 Spend total: {spend} (bot key {global}, own key {own})
 Last 30 days: {spend30}
 Average per meme: {avg}`,
@@ -374,6 +375,7 @@ const ru: Record<Key, string> = {
   stats: `${E.stats} <b>Ваша статистика</b>
 Мемов: {total} (фото {photo}, видео {video}, GIF {animation})
 В обработке: {pending}, ошибок: {failed}
+Место: {bytes}
 Расходы всего: {spend} (ключ бота {global}, свой ключ {own})
 За 30 дней: {spend30}
 В среднем на мем: {avg}`,
@@ -599,3 +601,8 @@ export const t = (lang: Lang, key: Key, params: Record<string, string | number> 
 export const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 export const usd = (x: number) => `$${x.toFixed(4)}`;
+/** 1536 → "1.5 KB" (powers of 1024). */
+export const fileSize = (n: number) => {
+  const i = n > 0 ? Math.min(4, Math.floor(Math.log(n) / Math.log(1024))) : 0;
+  return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${["B", "KB", "MB", "GB", "TB"][i]}`;
+};

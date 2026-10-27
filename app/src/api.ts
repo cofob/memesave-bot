@@ -136,6 +136,7 @@ export interface Stats {
   animation: number;
   pending: number;
   failed: number;
+  bytes: number;
   spend: number;
   global: number;
   own: number;

@@ -4,7 +4,7 @@ import type { Ctx } from "./bot";
 import { DESCRIBE_MODELS, MODELS } from "./config";
 import { deleteMeme, type User } from "./db";
 import type { Env } from "./env";
-import { EMOJI, esc, t, usd, type Lang } from "./i18n";
+import { EMOJI, esc, fileSize, t, usd, type Lang } from "./i18n";
 import { oauthUrl, setUserKey } from "./userkey";
 import { allStats, userStats } from "./stats";
 import { batchProgress, cancelImport, collectingImport, countMemes, finishImport, retryFailed, startImport } from "./batch";
@@ -47,6 +47,7 @@ async function statsText(env: Env, user: User, lang: Lang) {
     own: usd(st.own),
     spend30: usd(st.spend30),
     avg: usd(st.avg),
+    bytes: fileSize(st.bytes),
     kinds: "",
   });
   if (st.kinds.length) text += t(lang, "stats_kinds", { lines: st.kinds.map((k) => `${k.kind}: ${usd(k.cost)} (${k.count})`).join("\n") });

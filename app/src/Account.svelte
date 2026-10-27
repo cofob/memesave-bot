@@ -2,7 +2,7 @@
   import { Alert, Button, Drawer, Heading, Inline, Progress, Select, Spinner, Stack, Tabs, Text, TextField } from "@cofob2/design-system-svelte";
   import { Archive } from "@lucide/svelte";
   import { api, type AllStats, type ExportStatus, type ImportRow, type Me, type Stats, type UsersList } from "./api";
-  import { fill, s, usd } from "./strings";
+  import { fileSize, fill, s, usd } from "./strings";
   import { confirm, openExternal, tg } from "./telegram";
   import { addFiles } from "./uploads.svelte";
   import Billing from "./Billing.svelte";
@@ -124,6 +124,7 @@
                 <dt>{s.statPhotos} / {s.statVideos} / {s.statGifs}</dt><dd>{stats.photo} / {stats.video} / {stats.animation}</dd>
                 <dt>{s.statPending}</dt><dd>{stats.pending}</dd>
                 <dt>{s.statFailed}</dt><dd>{stats.failed}</dd>
+                <dt>{s.statStorage}</dt><dd>{fileSize(stats.bytes)}</dd>
                 <dt>{s.statSpend}</dt><dd>{usd(stats.spend)} <small>({s.statBotKey} {usd(stats.global)}, {s.statOwnKey} {usd(stats.own)})</small></dd>
                 <dt>{s.statSpend30}</dt><dd>{usd(stats.spend30)}</dd>
                 <dt>{s.statAvg}</dt><dd>{usd(stats.avg)}</dd>

@@ -215,7 +215,7 @@ function buildServer(env: Env, user: User, scopes: string[]) {
     }),
   );
 
-  server.registerTool("get_stats", { description: "Meme counts by kind and status, and AI spend in USD.", annotations: readOnly }, async () =>
+  server.registerTool("get_stats", { description: "Meme counts by kind and status, storage used (bytes) and AI spend in USD.", annotations: readOnly }, async () =>
     ok(await userStats(env, user)),
   );
 

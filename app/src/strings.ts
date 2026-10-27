@@ -182,6 +182,7 @@ const en = {
   statGifs: "GIFs",
   statPending: "Processing",
   statFailed: "Failed",
+  statStorage: "Storage",
   statSpend: "AI spend",
   statBotKey: "bot key",
   statOwnKey: "own key",
@@ -431,6 +432,7 @@ const ru: Strings = {
   statGifs: "GIF",
   statPending: "В обработке",
   statFailed: "С ошибкой",
+  statStorage: "Место",
   statSpend: "Расходы на ИИ",
   statBotKey: "ключ бота",
   statOwnKey: "свой ключ",
@@ -504,3 +506,8 @@ export const s: Strings = isRu ? ru : en;
 export const fmt = (text: string, n: number) => text.replace("{n}", String(n));
 export const fill = (text: string, params: Record<string, string | number>) => text.replace(/\{(\w+)\}/g, (m, k) => String(params[k] ?? m));
 export const usd = (x: number) => `$${x.toFixed(4)}`;
+/** 1536 → "1.5 KB" (powers of 1024). */
+export const fileSize = (n: number) => {
+  const i = n > 0 ? Math.min(4, Math.floor(Math.log(n) / Math.log(1024))) : 0;
+  return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${["B", "KB", "MB", "GB", "TB"][i]}`;
+};

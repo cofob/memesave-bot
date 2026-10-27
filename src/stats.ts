@@ -10,6 +10,7 @@ export interface UserStats {
   animation: number;
   pending: number;
   failed: number;
+  bytes: number; // file sizes of the user's memes
   spend: number;
   global: number;
   own: number;
@@ -21,7 +22,7 @@ export interface UserStats {
 /** Memes and AI spend of one user (/stats and the app). */
 export async function userStats(env: Env, user: User): Promise<UserStats> {
   const [counts, spend30, kinds, sources] = await env.DB.batch<any>([
-    env.DB.prepare("SELECT kind, status, COUNT(*) AS n FROM memes WHERE user_id = ? GROUP BY kind, status").bind(user.id),
+    env.DB.prepare("SELECT kind, status, COUNT(*) AS n, COALESCE(SUM(file_size), 0) AS b FROM memes WHERE user_id = ? GROUP BY kind, status").bind(user.id),
     env.DB.prepare("SELECT COALESCE(SUM(cost), 0) AS s FROM transactions WHERE user_id = ? AND created_at > unixepoch() - 30 * 86400").bind(
       user.id,
     ),
@@ -39,6 +40,7 @@ export async function userStats(env: Env, user: User): Promise<UserStats> {
     animation: by((r) => r.kind === "animation"),
     pending: by((r) => r.status === "embedding" || r.status === "describing"),
     failed: by((r) => r.status === "failed"),
+    bytes: counts.results.reduce((a, r) => a + r.b, 0),
     spend: user.total_cost,
     global: bySource("global"),
     own: bySource("user"),
