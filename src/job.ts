@@ -47,6 +47,13 @@ export abstract class JobContainer extends Container<Env> {
     }
     // No-op when the container already reported done or fail.
     await this.fail(id, error);
+    await this.ctx.storage.put("finished", true);
+  }
+
+  /** The library writes its state after onStop, so the finished job's storage is deleted only after its alarm. */
+  override async alarm(props?: AlarmInvocationInfo) {
+    await super.alarm(props);
+    if (!this.ctx.container?.running && (await this.ctx.storage.get("finished"))) await this.ctx.storage.deleteAll();
   }
 
   async restart() {
