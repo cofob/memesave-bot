@@ -194,6 +194,18 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
           responses: { "200": ok("Queued."), "409": err("The meme has not failed."), ...PAID, ...COMMON, ...NOT_FOUND },
         }),
       },
+      "/memes/{id}/link": {
+        post: memeOps("Public links", "Makes the meme public and returns its page (/s/) and file (/d/) links; the same links on every call. Needs a write token.", {
+          responses: {
+            "200": ok("The links (file is null for Telegram-only files over 20 MB).", {
+              type: "object",
+              properties: { page: { type: "string" }, file: nullable("string") },
+            }),
+            ...COMMON,
+            ...NOT_FOUND,
+          },
+        }),
+      },
       "/memes/{id}/send": { post: memeOps("Send a meme", "Sends the meme to the user's chat with the bot. Needs a write token.") },
       "/memes/{id}/send_album": {
         post: memeOps("Send an album", "Sends the whole album of the meme (or the meme alone) to the user's chat with the bot, in albums of 10. Needs a write token."),

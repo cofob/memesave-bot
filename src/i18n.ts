@@ -302,6 +302,18 @@ To see or revoke connections, open the app: Account → Settings.`,
   cmd_grant: "Give access",
   cmd_revoke: "Remove access",
   cmd_users: "List users",
+  share_photo: "Photo",
+  share_video: "Video",
+  share_animation: "GIF",
+  share_text: "Text",
+  share_speech: "Speech",
+  share_description: "Description",
+  share_context: "Context",
+  share_meaning: "Meaning",
+  share_source: "Source",
+  share_saved: "Saved at the source",
+  share_download: "Download",
+  share_footer: "Saved with memereserve",
 };
 export type Key = keyof typeof en;
 
@@ -588,6 +600,18 @@ const ru: Record<Key, string> = {
   cmd_grant: "Дать доступ",
   cmd_revoke: "Забрать доступ",
   cmd_users: "Список пользователей",
+  share_photo: "Фото",
+  share_video: "Видео",
+  share_animation: "GIF",
+  share_text: "Текст",
+  share_speech: "Речь",
+  share_description: "Описание",
+  share_context: "Контекст",
+  share_meaning: "Смысл",
+  share_source: "Источник",
+  share_saved: "Сохранено в источнике",
+  share_download: "Скачать",
+  share_footer: "Сохранено в memereserve",
 };
 
 export const dict: Record<Lang, Record<Key, string>> = { en, ru };

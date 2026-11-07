@@ -105,12 +105,16 @@ export async function signedQuery(env: Env, scope: string, ttlSeconds: number) {
  * Media behind a signed URL never changes, so it is cached until the URL expires: by the browser,
  * by Telegram and by Cloudflare's edge cache (repeat requests skip R2 and Telegram).
  */
-export async function cachedMedia(req: Request, ctx: ExecutionContext, load: () => Promise<Response | null>): Promise<Response> {
+export async function cachedMedia(
+  req: Request,
+  ctx: ExecutionContext,
+  load: () => Promise<Response | null>,
+  maxAge = Math.max(0, Number(new URL(req.url).searchParams.get("e")) - Math.floor(Date.now() / 1000)),
+): Promise<Response> {
   const hit = await caches.default.match(req);
   if (hit) return hit;
   const res = await load();
   if (!res) return new Response("Not found", { status: 404 });
-  const maxAge = Math.max(0, Number(new URL(req.url).searchParams.get("e")) - Math.floor(Date.now() / 1000));
   res.headers.set("Cache-Control", `public, max-age=${maxAge}, immutable`);
   ctx.waitUntil(caches.default.put(req, res.clone()));
   return res;

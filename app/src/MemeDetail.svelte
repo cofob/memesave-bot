@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button, Dialog, Drawer, Heading, Inline, Spinner, Stack, Tag, Text, VideoPlayer } from "@cofob2/design-system-svelte";
-  import { Layers, RefreshCw, Send, Share2, Trash2 } from "@lucide/svelte";
+  import { Check, FileDown, Layers, Link, RefreshCw, Send, Share2, Trash2 } from "@lucide/svelte";
   import { onMount, untrack } from "svelte";
   import { api, type MemeDetail } from "./api";
   import { s } from "./strings";
@@ -32,7 +32,8 @@
   });
   const kindLabel = $derived(meme ? (meme.kind === "photo" ? s.f_kind_photo : meme.kind === "video" ? s.video : s.gif) : "");
   const title = $derived(meme?.title ?? kindLabel);
-  let busy = $state<"share" | "send" | "album" | "delete" | "retry" | null>(null);
+  let busy = $state<"share" | "link" | "fileLink" | "send" | "album" | "delete" | "retry" | null>(null);
+  let copied = $state<"link" | "fileLink" | null>(null);
   let failed = $state(false);
 
   const sections = $derived(
@@ -67,6 +68,15 @@
       if (!tg?.isVersionAtLeast("8.0")) return send();
       const { id: prepared } = await api.share(id);
       tg.shareMessage(prepared);
+    });
+
+  // The first copy makes the meme public: /s/<id> page and /d/<id>.<ext> file.
+  const copyLink = (kind: "link" | "fileLink") =>
+    run(kind, async () => {
+      const { page, file } = await api.link(id);
+      await navigator.clipboard.writeText(kind === "link" ? page : (file ?? page));
+      copied = kind;
+      setTimeout(() => copied === kind && (copied = null), 2000);
     });
 
   const send = () =>
@@ -177,6 +187,16 @@
       <Button onclick={share} loading={busy === "share"} disabled={!meme}>
         {#snippet leading()}<Share2 size={16} aria-hidden="true" />{/snippet}
         {s.share}
+      </Button>
+    {/if}
+    <Button variant="secondary" onclick={() => copyLink("link")} loading={busy === "link"} disabled={!meme}>
+      {#snippet leading()}{#if copied === "link"}<Check size={16} aria-hidden="true" />{:else}<Link size={16} aria-hidden="true" />{/if}{/snippet}
+      {copied === "link" ? s.copied : s.copyLink}
+    </Button>
+    {#if meme?.file}
+      <Button variant="secondary" onclick={() => copyLink("fileLink")} loading={busy === "fileLink"}>
+        {#snippet leading()}{#if copied === "fileLink"}<Check size={16} aria-hidden="true" />{:else}<FileDown size={16} aria-hidden="true" />{/if}{/snippet}
+        {copied === "fileLink" ? s.copied : s.copyFileLink}
       </Button>
     {/if}
     <Button variant="secondary" onclick={send} loading={busy === "send"} disabled={!meme}>

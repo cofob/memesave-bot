@@ -20,6 +20,7 @@
     "@modelcontextprotocol/server": "^2.4.0",
     "aws4fetch": "^1.0.20",
     "grammy": "^1.46.0",
+    "workers-og": "^0.0.27",
     "zod": "^4.6.7"
   },
   "devDependencies": {

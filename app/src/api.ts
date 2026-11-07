@@ -264,6 +264,7 @@ export const api = {
   tags: () => call<{ tag: string; count: number }[]>("tags"),
   get: (id: string) => call<MemeDetail>(`memes/${id}`),
   share: (id: string) => call<{ id: string }>(`memes/${id}/share`, { method: "POST" }),
+  link: (id: string) => post<{ page: string; file: string | null }>(`memes/${id}/link`),
   send: (id: string) => call<{ ok: true }>(`memes/${id}/send`, { method: "POST" }),
   sendAlbum: (id: string) => call<{ ok: true }>(`memes/${id}/send_album`, { method: "POST" }),
   remove: (id: string) => call<{ ok: true }>(`memes/${id}`, { method: "DELETE" }),

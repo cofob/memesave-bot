@@ -17,6 +17,7 @@ import type { Env } from "./env";
 import { cachedMedia, extOf, fileKey, memeMedia, previewKey, signedQuery, verifyQuery } from "./media";
 import { sendAlbum, sendMeme, toInlineResult } from "./search/deliver";
 import { agentSearch } from "./search/agent";
+import { shareLinks } from "./share";
 import { keywordSearch } from "./search/hybrid";
 import { cachedFastSearch } from "./search/inline";
 
@@ -49,7 +50,7 @@ export async function checkInitData(botToken: string, initData: string, maxAgeSe
 
 const base = (env: Env) => env.PUBLIC_URL.replace(/\/$/, "");
 // Telegram-only files over 20 MB cannot be downloaded by the bot; R2 copies always can be served.
-const fileFits = (m: Meme) => !!m.r2_file || m.kind === "photo" || (m.file_size ?? Infinity) <= FILE_MAX;
+export const fileFits = (m: Meme) => !!m.r2_file || m.kind === "photo" || (m.file_size ?? Infinity) <= FILE_MAX;
 
 export async function brief(env: Env, m: Meme) {
   return {
@@ -382,6 +383,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   if (action === "retry" && req.method === "POST") {
     return (await retryMeme(env, meme)) ? json({ ok: true }) : json({ error: "not failed" }, 409);
   }
+  if (action === "link" && req.method === "POST") return json(await shareLinks(env, meme));
   const api = botApi(env.BOT_TOKEN);
   if (action === "share" && req.method === "POST") {
     // The Mini App opens Telegram's chat picker with WebApp.shareMessage(id).

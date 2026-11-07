@@ -54,6 +54,7 @@ export interface Meme {
   r2_preview: string | null;
   tg_meta: string | null; // Telegram message JSON without media fields
   saved_at: number | null; // when the user saved it at the source (e.g. the TikTok like)
+  share_id: string | null; // public short id of /s/ and /d/ links, set on the first share
   created_at: number;
 }
 

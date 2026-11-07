@@ -17,6 +17,7 @@ import { serveOpenapi } from "./openapi";
 import { billingNotices } from "./billing";
 import { handleBtcpay } from "./crypto";
 import { expireZipUploads, handleUpload, handleZipCallback } from "./zip";
+import { handleShare } from "./share";
 
 export { ZipImporter } from "./zip";
 export { DataExporter } from "./export";
@@ -35,6 +36,7 @@ const app = {
     if (req.method === "GET" && url.pathname === "/oauth/callback") return oauthCallback(req, env);
     if (url.pathname === "/oauth/authorize") return handleAuthorize(req, env);
     if (req.method === "GET" && url.pathname.startsWith("/media/")) return serveMedia(req, env, ctx);
+    if (req.method === "GET" && /^\/[sd]\//.test(url.pathname)) return handleShare(req, env, ctx);
     if (url.pathname.startsWith("/upload/")) return handleUpload(req, env, ctx);
     if (url.pathname.startsWith("/app")) return (await handleApp(req, env, ctx)) ?? new Response("Not found", { status: 404 });
     if (url.pathname.startsWith("/auth/")) return (await handleLogin(req, env)) ?? new Response("Not found", { status: 404 });
