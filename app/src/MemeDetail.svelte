@@ -258,6 +258,17 @@
     max-block-size: none;
     object-fit: contain;
   }
+  /* The player's frame has a fixed 16:9 ratio and its own border: here it fills the stage instead. */
+  .split .stage :global(.cf-video-player) {
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .split .stage :global(.cf-video-player__frame) {
+    aspect-ratio: auto;
+    block-size: 100%;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
   .side {
     min-block-size: 0;
     overflow-y: auto;
