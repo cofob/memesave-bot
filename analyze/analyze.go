@@ -192,9 +192,19 @@ func topKeys(score map[string]float64, k int) []string {
 }
 
 // duplicates are near-identical images the sha256 dedupe missed (re-encoded, resized, cropped):
-// kNN candidates, checked on the full vectors. When both memes have descriptions, they must match too:
-// different videos with the same preview frame (often a black first frame) have the same image vector.
+// kNN candidates, checked on the full vectors. Two guards against a placeholder picture (a black first frame
+// of a video, a blank cover): when both memes have descriptions, they must match too; and a picture with many
+// identical neighbours is a placeholder, not a meme with copies.
 func duplicates(s, text *space) [][3]any {
+	const same, placeholder = 0.995, 4 // 4+ identical neighbours: a placeholder
+	twins := make([]int, len(s.ids))
+	for i, ids := range s.idx {
+		for _, j := range ids {
+			if dot(s.x.row(i), s.x.row(j)) >= same {
+				twins[i]++
+			}
+		}
+	}
 	textOf := map[string]int{}
 	for i, id := range text.ids {
 		textOf[id] = i
@@ -217,6 +227,9 @@ func duplicates(s, text *space) [][3]any {
 				continue
 			}
 			seen[[2]int{a, b}] = true
+			if twins[a] >= placeholder || twins[b] >= placeholder {
+				continue
+			}
 			if sim := dot(s.x.row(a), s.x.row(b)); sim >= 0.97 && sameText(s.ids[a], s.ids[b]) {
 				pairs = append(pairs, pair{a, b, sim})
 			}

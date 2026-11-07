@@ -45,6 +45,12 @@ func synthetic(n, k, d int) ([]meme, map[string][]float32, []int) {
 	if n > 3 {
 		vectors["m3:i"] = append([]float32(nil), vectors["m2:i"]...)
 	}
+	// m10..m60: videos without descriptions sharing one black preview: a placeholder, not 6 copies.
+	if n > 60 {
+		for k := 20; k <= 60; k += 10 {
+			vectors[fmt.Sprintf("m%d:i", k)] = append([]float32(nil), vectors["m10:i"]...)
+		}
+	}
 	return memes, vectors, truth
 }
 
