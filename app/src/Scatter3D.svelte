@@ -112,8 +112,9 @@
       const dx = e.clientX - drag.x;
       const dy = e.clientY - drag.y;
       if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
-      yaw += dx * 0.008;
-      pitch = Math.max(-1.5, Math.min(1.5, pitch + dy * 0.008));
+      // The near side follows the pointer (the camera looks at the side with negative depth).
+      yaw -= dx * 0.008;
+      pitch = Math.max(-1.5, Math.min(1.5, pitch - dy * 0.008));
       drag.x = e.clientX;
       drag.y = e.clientY;
       tip = null;
