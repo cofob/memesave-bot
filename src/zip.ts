@@ -1,6 +1,6 @@
 import { botApi } from "./botapi";
 import { EMBED_DIMS } from "./config";
-import { userLang, type Kind } from "./db";
+import { storageFull, userLang, type Kind } from "./db";
 import type { Env } from "./env";
 import { t, type Key, type Lang } from "./i18n";
 import { namespace, upsertVectors } from "./ingest/embed";
@@ -243,6 +243,10 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
   }
 
   if (action === "items") {
+    if (await storageFull(db, zip.user_id)) {
+      await failZip(env, id, "storage limit reached");
+      return json({ error: "storage full" }, 403);
+    }
     // Photos go to the archive's own batch; videos and GIFs use the normal pipeline; exported memes are restored.
     const jobs: { body: Job }[] = [];
     let restored = 0;
@@ -267,6 +271,7 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
         source: item.source || null,
         import_id: item.kind === "photo" && !item.restore ? zip.import_id : null,
         sha256: item.sha256,
+        added_via: "zip",
       });
       if (!memeId) continue;
       if (await restoreMeme(env, zip.user_id, memeId, item.kind, item.restore)) restored++;

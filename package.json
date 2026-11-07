@@ -31,6 +31,7 @@
     "@lucide/svelte": "^1.61.0",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@types/node": "^26.6.5",
+    "echarts": "^6.1.0",
     "minisearch": "^7.2.0",
     "svelte": "^5.57.2",
     "typescript": "^7.0.2",

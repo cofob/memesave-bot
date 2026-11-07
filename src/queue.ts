@@ -8,8 +8,10 @@ import { purgeStage } from "./purge";
 import { rekeyStage } from "./rekey";
 import { postJob } from "./channels";
 import { linkJob } from "./ingest/link";
+import type { AddedVia } from "./ingest/receive";
 import { failSearch, searchJob } from "./search/chat";
 import { thumbStage } from "./thumb";
+import { reportFailed, sendReport } from "./analysisreport";
 
 export type SearchJob = { type: "search"; userId: number; messageId: number; placeholderId: number; query: string; lang: Lang };
 export type Job =
@@ -19,13 +21,16 @@ export type Job =
   | { type: "batch_poll" }
   | { type: "post"; postId: string }
   | { type: "purge"; userId: number; before: number }
-  | { type: "link"; userId: number; url: string } // API import (src/ingest/link.ts)
+  | { type: "link"; userId: number; url: string; via?: AddedVia } // API import (src/ingest/link.ts)
+  | { type: "analysis_report"; analysisId: string; msgId?: number } // bot report of an embedding analysis
   | SearchJob;
 
 async function run(env: Env, job: Job) {
   switch (job.type) {
     case "search":
       return searchJob(env, job);
+    case "analysis_report":
+      return sendReport(env, job.analysisId, job.msgId);
     case "batch_submit":
       return submitImport(env, job.importId);
     case "batch_poll":
@@ -45,7 +50,7 @@ async function run(env: Env, job: Job) {
     case "purge":
       return purgeStage(env, job.userId, job.before);
     case "link":
-      return linkJob(env, job.userId, job.url);
+      return linkJob(env, job.userId, job.url, job.via);
     case "thumb":
       return thumbStage(env, job.memeId);
   }
@@ -63,6 +68,7 @@ async function fail(env: Env, job: Job, error: unknown) {
   if (job.type === "batch_submit") return failImport(env, job.importId, error);
   if (job.type === "batch_poll" || job.type === "hash" || job.type === "rekey") return; // cron runs them again
   if (job.type === "thumb") return env.JOBS.send({ type: "embed", memeId: job.memeId }); // goes on without a preview
+  if (job.type === "analysis_report") return reportFailed(env, job.analysisId, error);
   if (job.type === "purge" || job.type === "post" || job.type === "link") return; // idempotent: the dead letter queue keeps it for a manual re-run
   return failIngest(env, job.memeId, error);
 }

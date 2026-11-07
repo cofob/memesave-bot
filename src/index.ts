@@ -5,6 +5,7 @@ import { createBot } from "./bot";
 import { syncCommands } from "./botcommands";
 import type { Env } from "./env";
 import { expireExports, handleExport } from "./export";
+import { expireAnalyses, handleAnalysis } from "./analysis";
 import { queueHashBackfill } from "./ingest/embed";
 import { queueRekey } from "./rekey";
 import { handleBatch, type Job } from "./queue";
@@ -22,6 +23,7 @@ import { handleShare } from "./share";
 export { ZipImporter } from "./zip";
 export { DataExporter } from "./export";
 export { Thumbnailer } from "./thumb";
+export { Analyzer } from "./analysis";
 
 let handler: ((req: Request) => Promise<Response>) | undefined;
 let synced: Promise<unknown> | undefined;
@@ -43,6 +45,7 @@ const app = {
     if (url.pathname.startsWith("/zip/")) return handleZipCallback(req, env);
     if (req.method === "POST" && url.pathname === "/pay/btcpay") return handleBtcpay(req, env);
     if (url.pathname.startsWith("/export/")) return handleExport(req, env);
+    if (url.pathname.startsWith("/analysis/")) return handleAnalysis(req, env);
     if (req.method === "POST" && url.pathname === "/batch/webhook") {
       // Only a hint: the poll re-reads every batch from OpenRouter with our key.
       await env.JOBS.send({ type: "batch_poll" });
@@ -68,6 +71,7 @@ export default {
   async scheduled(_, env) {
     await expireZipUploads(env.DB);
     await expireExports(env.DB);
+    await expireAnalyses(env.DB);
     await queueHashBackfill(env);
     await queueRekey(env);
     await billingNotices(env);

@@ -4,7 +4,7 @@ import { registerAdmin } from "./admin";
 import { resolveUser } from "./auth";
 import { setCommandScope } from "./botcommands";
 import { registerCommands } from "./commands";
-import type { User } from "./db";
+import { recordUse, type User } from "./db";
 import type { Env } from "./env";
 import { langOf, t, type Lang } from "./i18n";
 import { receiveMedia } from "./ingest/receive";
@@ -43,6 +43,8 @@ export function createBot(env: Env) {
   });
 
   bot.on("inline_query", (ctx) => handleInline(ctx, env));
+  // Needs inline feedback turned on in BotFather (/setinlinefeedback).
+  bot.on("chosen_inline_result", (ctx) => recordUse(env.DB, ctx.user.id, ctx.chosenInlineResult.result_id, "inline"));
   registerPayments(bot, env);
   bot.on("my_chat_member", (ctx) => onBotMembership(env, ctx.myChatMember));
 

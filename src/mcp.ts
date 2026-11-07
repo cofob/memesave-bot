@@ -5,7 +5,7 @@ import { z } from "zod";
 import { billingStatus, canUseAi } from "./billing";
 import { botApi } from "./botapi";
 import { MCP_BODY_MAX, MCP_SCOPES } from "./config";
-import { deleteMemes, getMeme, getUser, type Meme, type User } from "./db";
+import { deleteMemes, getMeme, getUser, recordUse, type Meme, type User } from "./db";
 import type { Env } from "./env";
 import { filterSql, facets } from "./filters";
 import { memeMedia } from "./media";
@@ -199,6 +199,7 @@ function buildServer(env: Env, user: User, scopes: string[]) {
       const m = await own(id);
       if (!m) return fail("meme not found");
       await sendMeme(env, botApi(env.BOT_TOKEN), user.id, m);
+      await recordUse(env.DB, user.id, m.id, "send");
       return ok({ sent: true });
     },
   );
@@ -254,7 +255,7 @@ function buildServer(env: Env, user: User, scopes: string[]) {
       if (denied) return denied;
       const file = await uploadFile(a);
       if (typeof file === "string") return fail(file);
-      const res = await saveUpload(env, user, file, { description: a.description && toDescription(a.description, "") });
+      const res = await saveUpload(env, user, file, { description: a.description && toDescription(a.description, ""), via: "mcp" });
       return "error" in res ? fail(res.error) : ok(res);
     },
   );

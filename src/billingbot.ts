@@ -159,7 +159,7 @@ export function registerBilling<C extends Ctx>(bot: Composer<C>, env: Env) {
     ctx.reply(await balanceText(env, ctx.user, ctx.lang), { ...html, reply_markup: kb([[topupButton(ctx.lang), subscribeButton(ctx.lang)]]) }),
   );
   bot.command("paysupport", (ctx) =>
-    ctx.reply(t(ctx.lang, "paysupport", { contact: `<a href="tg://user?id=${env.ADMIN_ID}">admin</a>` }), html),
+    ctx.reply(t(ctx.lang, "paysupport", { contact: "@cofob" }), html),
   );
   bot.command("terms", (ctx) => ctx.reply(t(ctx.lang, "terms"), html));
 

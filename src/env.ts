@@ -2,6 +2,7 @@ import type { Job } from "./queue";
 import type { ZipImporter } from "./zip";
 import type { DataExporter } from "./export";
 import type { Thumbnailer } from "./thumb";
+import type { Analyzer } from "./analysis";
 
 export interface Env {
   DB: D1Database;
@@ -12,6 +13,7 @@ export interface Env {
   ZIP: DurableObjectNamespace<ZipImporter>;
   EXPORT: DurableObjectNamespace<DataExporter>;
   THUMB: DurableObjectNamespace<Thumbnailer>;
+  ANALYZE: DurableObjectNamespace<Analyzer>;
   ADMIN_ID: string;
   PUBLIC_URL: string; // base URL of this Worker, e.g. https://memereserve.cfb.wtf
   MEDIA_URL?: string; // base URL for media links when R2 API keys are not set

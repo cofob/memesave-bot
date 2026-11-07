@@ -2,6 +2,7 @@ import { botApi } from "./botapi";
 import { getMeme, userLang } from "./db";
 import type { Env } from "./env";
 import { t, type Key } from "./i18n";
+import { memeVectors } from "./ingest/embed";
 import { JobContainer } from "./job";
 import { memeMedia, sign, signedQuery, tmpKey, variantOf, verify, verifyQuery } from "./media";
 
@@ -162,14 +163,7 @@ export async function handleExport(req: Request, env: Env): Promise<Response> {
   if (action === "table" && req.method === "GET") return tablePage(env.DB, ex.user_id, arg, Number(url.searchParams.get("after")) || 0);
 
   if (action === "vectors" && req.method === "GET") {
-    const ids = (url.searchParams.get("ids") ?? "").split(",").filter(Boolean).slice(0, 10);
-    if (!ids.length) return json([]);
-    const { results } = await env.DB.prepare(`SELECT id FROM memes WHERE user_id = ? AND id IN (${ids.map(() => "?").join(",")})`)
-      .bind(ex.user_id, ...ids)
-      .all<{ id: string }>();
-    if (!results.length) return json([]);
-    const vectors = await env.VECTORS.getByIds(results.flatMap((r) => [`${r.id}:i`, `${r.id}:t`]));
-    return json(vectors.map((v) => ({ id: v.id, values: Array.from(v.values), metadata: v.metadata ?? null })));
+    return json(await memeVectors(env, ex.user_id, url.searchParams.get("ids") ?? ""));
   }
 
   if (action === "media" && req.method === "GET") {

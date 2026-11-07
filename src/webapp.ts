@@ -1,8 +1,8 @@
 import { botApi } from "./botapi";
 import type { User as TgUser } from "grammy/types";
 import { resolveUser } from "./auth";
-import { deleteMeme, deleteMemes, getMeme, getUser, type Kind, type Meme, type User } from "./db";
-import { insertMeme } from "./ingest/receive";
+import { deleteMeme, deleteMemes, getMeme, getUser, recordUse, storageFull, type Kind, type Meme, type User } from "./db";
+import { insertMeme, type AddedVia } from "./ingest/receive";
 import { parseJson, saveDescription, toDescription, type Description } from "./ingest/describe";
 import { collectingImport } from "./batch";
 import { MODELS } from "./config";
@@ -143,20 +143,20 @@ export async function tagCounts(env: Env, user: User) {
 }
 
 /** Mini App: `Authorization: tma <initData>`; scripts: `Bearer <API token>`; web: the session cookie from Telegram Login. */
-async function authUser(req: Request, env: Env): Promise<{ user: User; token?: { write: boolean } } | null> {
+async function authUser(req: Request, env: Env): Promise<{ user: User; token?: { write: boolean }; via: AddedVia } | null> {
   const header = req.headers.get("Authorization") ?? "";
   if (header.startsWith(`Bearer ${TOKEN_PREFIX}`)) {
     const t = await tokenUser(env.DB, header.slice(7));
-    return t && { user: t.user, token: { write: t.write } };
+    return t && { user: t.user, token: { write: t.write }, via: "api" };
   }
   if (header.startsWith("tma ")) {
     const from = await checkInitData(env.BOT_TOKEN, header.slice(4));
     const user = from && (await resolveUser(env, from))?.user;
-    return user ? { user } : null;
+    return user ? { user, via: "miniapp" } : null;
   }
   const userId = await readSession(env, getCookie(req, "session"));
   const user = userId && (await getUser(env.DB, userId));
-  return user ? { user } : null;
+  return user ? { user, via: "web" } : null;
 }
 
 export const LIMITS: Record<Kind, number> = { photo: 10 << 20, video: 50 << 20, animation: 50 << 20 }; // Bot API send limits
@@ -166,7 +166,7 @@ const str = (v: File | string | null, max: number) => (typeof v === "string" && 
 const num = (v: File | string | null) => (typeof v === "string" && v ? Math.round(Number(v)) || null : null);
 
 /** POST /app/api/upload (multipart: file, thumb?, width?, height?, duration?, source?, saved_at?, caption?, album?, position?, description?) — stored in R2 until the first send. */
-async function upload(env: Env, user: User, req: Request) {
+async function upload(env: Env, user: User, req: Request, via: AddedVia) {
   const form = await req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) return json({ error: "file required" }, 400);
@@ -189,11 +189,13 @@ async function upload(env: Env, user: User, req: Request) {
     // One album per client id: the files of a carousel uploaded one by one, in position order.
     post: album ? { mediaGroupId: `api:${album}`, position: num(form.get("position")) ?? 0 } : undefined,
     description,
+    via,
   });
   return "error" in res ? json({ error: res.error }, res.status) : json(res);
 }
 
 type UploadMeta = {
+  via?: AddedVia;
   thumb?: File | string | null;
   width?: number | null;
   height?: number | null;
@@ -219,6 +221,7 @@ export async function saveUpload(env: Env, user: User, file: File, meta: UploadM
     if (meta.post) await addToPost(env.DB, user.id, { memeId: existing, ...meta.post }); // a saved file is still part of this album
     return { id: existing, duplicate: true };
   }
+  if (await storageFull(env.DB, user.id, file.size)) return fail("storage full", 507);
 
   const base = `u/${user.id}/${sha256}`;
   const key = fileKey(base, file.type);
@@ -247,6 +250,7 @@ export async function saveUpload(env: Env, user: User, file: File, meta: UploadM
     saved_at: meta.saved_at ?? null,
     import_id: importId,
     sha256,
+    added_via: meta.via ?? null,
   });
   if (!id) return fail("already saved", 409);
   if (!importId || meta.post) await addToPost(env.DB, user.id, { memeId: id, ...meta.post });
@@ -278,7 +282,7 @@ export async function retryMeme(env: Env, meme: Meme) {
 async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   const auth = await authUser(req, env);
   if (!auth) return json({ error: "no access" }, 403);
-  const { user, token } = auth;
+  const { user, token, via } = auth;
   if (token && !token.write && req.method !== "GET") return json({ error: "read-only token" }, 403);
 
   const [, , , resource = "", id = "", action = ""] = url.pathname.split("/");
@@ -309,12 +313,12 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   // API tokens cannot change the account (tokens, keys, billing, deletion).
   const account = token && m !== "GET" ? null : await handleAccount(req, env, user, [resource, id, action]);
   if (account) return account;
-  if (resource === "upload" && req.method === "POST") return upload(env, user, req);
+  if (resource === "upload" && req.method === "POST") return upload(env, user, req, via);
   if (resource === "import" && req.method === "POST") {
     // Media of a link (any cobalt service), saved in the background like a link sent to the bot.
     const { url: link = "" } = await req.json<{ url?: string }>();
     if (!/^https?:\/\/\S+$/i.test(link)) return json({ error: "url required" }, 400);
-    await env.JOBS.send({ type: "link", userId: user.id, url: link });
+    await env.JOBS.send({ type: "link", userId: user.id, url: link, via });
     return json({ queued: true }, 202);
   }
   if (resource === "status" && req.method === "GET") {
@@ -395,15 +399,18 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
       allow_group_chats: true,
       allow_channel_chats: true,
     });
+    await recordUse(env.DB, user.id, meme.id, "share");
     return json({ id: prepared.id });
   }
   if (action === "send" && req.method === "POST") {
     await sendMeme(env, api, user.id, meme);
+    await recordUse(env.DB, user.id, meme.id, "send");
     return json({ ok: true });
   }
   if (action === "send_album" && req.method === "POST") {
     const album = await albumMemes(env.DB, meme.id);
     await sendAlbum(env, api, user.id, album.length ? album : [meme]);
+    await recordUse(env.DB, user.id, meme.id, "send");
     return json({ ok: true });
   }
   return json({ error: "not found" }, 404);

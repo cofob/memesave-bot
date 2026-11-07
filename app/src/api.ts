@@ -151,6 +151,109 @@ export interface AllStats {
   global: number;
 }
 
+type Count = { k: string | null; n: number };
+
+export interface Analytics {
+  timeline: { day: string; kind: Kind; n: number }[];
+  saved: { day: string; n: number }[];
+  heatmap: { wd: number; h: number; n: number }[]; // UTC weekday (0 = Sunday) and hour
+  kinds: Count[];
+  statuses: Count[];
+  languages: Count[];
+  sizes: Count[];
+  durations: Count[];
+  aspect: Count[];
+  tags: {
+    top: { tag: string; count: number }[];
+    perMeme: { tags: number; n: number }[];
+    cooc: { tags: string[]; matrix: number[][] };
+    trend: { tags: string[]; months: { month: string; counts: Record<string, number> }[] };
+  };
+  spend: {
+    days: { day: string; kind: string; cost: number }[];
+    models: { model: string; cost: number; n: number; prompt: number; completion: number }[];
+    keys: { k: string; cost: number }[];
+    covered: { allowance: number; balance: number; total: number };
+    perMeme: { kind: string; per_meme: number }[];
+  };
+  albums: { size: number; n: number }[];
+  stats: Stats; // the /stats numbers of the same snapshot
+  origins: {
+    kinds: { kind: OriginKind; n: number }[];
+    top: { name: string; kind: OriginKind; n: number; uses: number }[];
+    months: { month: string; counts: Partial<Record<OriginKind, number>> }[];
+  };
+  uses: {
+    days: { day: string; via: "inline" | "share" | "send"; n: number }[];
+    favorites: { id: string; title: string | null; n: number; last: number }[];
+    forgotten: { id: string; title: string | null; created_at: number }[];
+    ready: number;
+    never: number;
+    since: number | null; // the first counted use (counting started with this feature)
+  };
+  added: { month: string; via: AddedVia | "unknown"; n: number }[]; // how memes were saved
+}
+
+export type AddedVia = "bot" | "web" | "miniapp" | "api" | "mcp" | "zip";
+
+export type OriginKind = "channel" | "group" | "user" | "link" | "direct";
+
+export interface AdminAnalytics {
+  users: { day: string; role: string; n: number }[];
+  memes: { day: string; kind: Kind; n: number }[];
+  statuses: Count[];
+  errors: Count[];
+  spend: { day: string; model: string; cost: number }[];
+  keys: { k: string; cost: number }[];
+  payments: { month: string; method: string; usd: number; n: number }[];
+  table: AllStats;
+}
+
+export interface AnalysisRun {
+  id: string;
+  status: "running" | "done" | "failed";
+  stage: string | null;
+  done: number;
+  total: number;
+  error: string | null;
+  labeled: boolean; // clusters have LLM names
+  created_at: number;
+  fresh_until: number;
+}
+
+interface Histogram {
+  edges: number[];
+  counts: number[];
+}
+
+export interface Cluster {
+  id: number;
+  size: number;
+  x: number;
+  y: number;
+  tags: string[];
+  sample: string[];
+  name?: string; // LLM name and summary (left out when the AI is unavailable)
+  summary?: string;
+}
+
+export interface AnalysisResult {
+  created_at: number;
+  count: number;
+  memes: [id: string, kind: Kind, created_at: number, language: string][];
+  image: { ids: string[]; xy: [number, number][]; xyz?: [number, number, number][] };
+  text: { ids: string[]; xy: [number, number][]; xyz?: [number, number, number][]; labels: number[] };
+  clusters: Cluster[];
+  pca: { image: number[]; text: number[] };
+  duplicates: [a: string, b: string, sim: number][];
+  outliers: string[];
+  alignment: { hist: Histogram; worst: [id: string, sim: number][] };
+  similarity: { image: Histogram; text: Histogram };
+  tagmap: { tag: string; x: number; y: number; n: number }[];
+  trends: { months: string[]; clusters: number[][]; other: number[]; total: number[]; rising: number[]; fading: number[] };
+  analytics: Analytics; // SQL stats snapshot taken with this analysis
+}
+
 export interface ImportRow {
   id: string;
   status: string;
@@ -222,6 +325,10 @@ export const api = {
   me: () => call<Me>("me"),
   stats: () => call<Stats>("stats"),
   allStats: () => call<AllStats>("stats?all=1"),
+  adminAnalytics: () => call<AdminAnalytics>("analytics?all=1"),
+  analysis: () => call<{ current: AnalysisRun | null; ready: AnalysisRun | null }>("analysis"),
+  analysisStart: (llm: boolean) => post<AnalysisRun>("analysis", { llm }),
+  analysisResult: () => call<AnalysisResult>("analysis/result"),
   setSettings: (settings: Partial<Pick<Me, "search_mode" | "describe_tier">>) => call("settings", { method: "PUT", body: JSON.stringify(settings) }),
   channels: () => call<{ channels: Channel[]; addUrl: string }>("channels"),
   setChannel: (id: number, body: { enabled?: boolean; caption?: string }) => call(`channels/${id}`, { method: "PUT", body: JSON.stringify(body) }),

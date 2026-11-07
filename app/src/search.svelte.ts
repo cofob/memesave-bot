@@ -49,6 +49,9 @@ export function localSearch(query: string, limit = 60): MemeBrief[] {
   return findIds(index, query).slice(0, limit).flatMap((id) => docs.get(id) ?? []);
 }
 
+/** A meme of the loaded index (thumbnail and title for charts). */
+export const indexed = (id: string) => docs.get(id);
+
 export function forget(id: string) {
   if (index?.has(id)) index.discard(id);
   docs.delete(id);

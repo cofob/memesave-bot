@@ -37,16 +37,22 @@ export async function deleteAccount(env: Env, user: User) {
   if (user.sub_charge_id && user.sub_state === "active") {
     await botApi(env.BOT_TOKEN).editUserStarSubscription(user.id, user.sub_charge_id, true).catch(console.error);
   }
-  const [zips, exports] = await db.batch<{ id: string }>([
+  const [zips, exports, analyses] = await db.batch<{ id: string }>([
     db.prepare("SELECT id FROM zip_imports WHERE user_id = ?").bind(user.id),
     db.prepare("SELECT id FROM exports WHERE user_id = ?").bind(user.id),
+    db.prepare("SELECT id FROM analyses WHERE user_id = ?").bind(user.id),
   ]);
-  const archives = [...zips.results.map((r) => tmpKey(`zip/${r.id}.zip`)), ...exports.results.map((r) => tmpKey(`export/${r.id}.zip`))];
+  const archives = [
+    ...zips.results.map((r) => tmpKey(`zip/${r.id}.zip`)),
+    ...exports.results.map((r) => tmpKey(`export/${r.id}.zip`)),
+    ...analyses.results.map((r) => tmpKey(`analysis/${r.id}.json`)),
+  ];
+  for (const r of analyses.results) archives.push(...(await env.MEDIA.list({ prefix: tmpKey(`analysis/${r.id}/`) })).objects.map((o) => o.key)); // chart PNGs
   for (let i = 0; i < archives.length; i += 1000) await env.MEDIA.delete(archives.slice(i, i + 1000));
   const { results: channels } = await db.prepare("SELECT chat_id FROM channels WHERE user_id = ?").bind(user.id).all<{ chat_id: number }>();
   for (const ch of channels) await botApi(env.BOT_TOKEN).leaveChat(ch.chat_id).catch(() => {});
   await revokeConnections(env, user.id).catch(console.error);
-  const tables = ["transactions", "imports", "zip_imports", "exports", "payments", "crypto_invoices", "notices", "oauth_states", "channels", "posts", "api_tokens"];
+  const tables = ["transactions", "imports", "zip_imports", "exports", "analyses", "meme_uses", "payments", "crypto_invoices", "notices", "oauth_states", "channels", "posts", "api_tokens"];
   await db.batch([
     db.prepare("DELETE FROM post_items WHERE post_id IN (SELECT id FROM posts WHERE user_id = ?)").bind(user.id),
     db.prepare("UPDATE memes SET user_id = -user_id, status = 'failed', error = 'deleted', import_id = NULL WHERE user_id = ?").bind(user.id),

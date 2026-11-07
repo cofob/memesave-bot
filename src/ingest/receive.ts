@@ -1,6 +1,6 @@
 import type { Message, MessageOrigin } from "grammy/types";
 import type { Ctx } from "../bot";
-import type { Kind } from "../db";
+import { storageFull, type Kind } from "../db";
 import type { Env } from "../env";
 import { t } from "../i18n";
 import { collectingImport } from "../batch";
@@ -80,15 +80,19 @@ export type MemeRow = NewMeme & {
   r2_preview?: string | null;
   tg_meta?: string | null;
   saved_at?: number | null;
+  added_via?: AddedVia | null;
 };
+
+/** How a meme was saved (the analytics of sources). */
+export type AddedVia = "bot" | "web" | "miniapp" | "api" | "mcp" | "zip";
 
 /** Inserts a meme; returns its id, or null when the user already has this file. */
 export const insertMeme = (db: D1Database, userId: number, m: MemeRow) =>
   db
     .prepare(
       `INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, preview_file_id, preview_unique_id, mime, file_size,
-        width, height, duration, caption, source, import_id, sha256, r2_file, r2_preview, tg_meta, saved_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        width, height, duration, caption, source, import_id, sha256, r2_file, r2_preview, tg_meta, saved_at, added_via)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(user_id, file_unique_id) DO NOTHING RETURNING id`,
     )
     .bind(
@@ -112,6 +116,7 @@ export const insertMeme = (db: D1Database, userId: number, m: MemeRow) =>
       m.r2_preview ?? null,
       m.tg_meta ?? null,
       m.saved_at ?? null,
+      m.added_via ?? null,
     )
     .first<string>("id");
 
@@ -145,6 +150,7 @@ export async function receiveMedia(
   const importId = media.kind === "photo" ? await collectingImport(db, ctx.user.id) : null;
   const { photo, video, animation, ...meta } = msg;
   const group = link?.mediaGroupId ?? msg.media_group_id;
+  if (await storageFull(db, ctx.user.id, media.file_size ?? 0)) return ctx.reply(t(ctx.lang, "storage_full"), html);
 
   let memeId = await insertMeme(db, ctx.user.id, {
     ...media,
@@ -152,6 +158,7 @@ export async function receiveMedia(
     source: link?.source ?? describeOrigin(msg.forward_origin),
     import_id: importId,
     tg_meta: JSON.stringify(meta),
+    added_via: "bot",
     ...link?.row,
   });
 

@@ -26,7 +26,7 @@ describe("API tokens", () => {
     expect(await call(read, "import", post("https://x.com/a"))).toBe(403);
     expect(await call(write, "import", post("not a link"))).toBe(400);
     expect(await call(write, "import", post("https://x.com/a"))).toBe(202);
-    expect(jobs).toEqual([{ type: "link", userId: 91, url: "https://x.com/a" }]);
+    expect(jobs).toEqual([{ type: "link", userId: 91, url: "https://x.com/a", via: "api" }]);
     expect(await call(write, "tokens", { method: "POST", body: "{}" })).toBe(404);
     expect(await e.DB.prepare("SELECT COUNT(*) AS n FROM api_tokens WHERE used_at IS NOT NULL").first("n")).toBe(2);
   });

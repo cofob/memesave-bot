@@ -7,6 +7,7 @@ import type { Env } from "./env";
 import { EMOJI, esc, fileSize, t, usd, type Lang } from "./i18n";
 import { oauthUrl, setUserKey } from "./userkey";
 import { allStats, userStats } from "./stats";
+import { startAnalysis } from "./analysis";
 import { batchProgress, cancelImport, collectingImport, countMemes, finishImport, retryFailed, startImport } from "./batch";
 import { createZipImport, setZipStatusMessage } from "./zip";
 import { isActive } from "./billing";
@@ -117,7 +118,25 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
 
   bot.command("stats", async (ctx) => {
     const all = ctx.match.trim() === "all" && ctx.user.role === "admin";
-    await ctx.reply(all ? await allStatsText(env, ctx.lang) : await statsText(env, ctx.user, ctx.lang), html);
+    if (all) return ctx.reply(await allStatsText(env, ctx.lang), html);
+    const more = { inline_keyboard: [[{ text: t(ctx.lang, "stats_more"), callback_data: "analysis:ask" }]] };
+    await ctx.reply(await statsText(env, ctx.user, ctx.lang), { ...html, reply_markup: more });
+  });
+  bot.callbackQuery("analysis:ask", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const row = [
+      { text: t(ctx.lang, "analysis_run_llm"), callback_data: "analysis:run:llm" },
+      { text: t(ctx.lang, "analysis_run_plain"), callback_data: "analysis:run:plain" },
+    ];
+    await ctx.reply(t(ctx.lang, "analysis_ask"), { ...html, reply_markup: { inline_keyboard: [row] } });
+  });
+  bot.callbackQuery(/^analysis:run:(llm|plain)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const llm = ctx.match[1] === "llm";
+    if (llm && !(await allowAi(env, ctx))) return;
+    const msgId = ctx.callbackQuery.message?.message_id;
+    const run = await startAnalysis(env, ctx.user.id, { llm, chat: true, msgId });
+    await ctx.editMessageText(t(ctx.lang, run?.status === "done" ? "analysis_cached" : "analysis_started"), html).catch(() => {});
   });
 
   bot.command("delete", async (ctx) => {

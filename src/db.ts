@@ -1,4 +1,5 @@
 import type { Lang } from "./i18n";
+import { MAX_BYTES, MAX_MEMES } from "./config";
 
 export type Role = "admin" | "user" | "paid";
 export type Kind = "photo" | "video" | "animation";
@@ -64,6 +65,13 @@ export const userLang = async (db: D1Database, id: number): Promise<Lang> =>
 export const getUser = (db: D1Database, id: number) =>
   db.prepare("SELECT * FROM users WHERE id = ?").bind(id).first<User>();
 
+/** True when the user cannot save `size` more bytes (MAX_MEMES / MAX_BYTES). */
+export const storageFull = async (db: D1Database, userId: number, size = 0) =>
+  !!(await db
+    .prepare("SELECT COUNT(*) >= ? OR COALESCE(SUM(file_size), 0) + ? > ? AS f FROM memes WHERE user_id = ?")
+    .bind(MAX_MEMES, size, MAX_BYTES, userId)
+    .first<number>("f"));
+
 export const getMeme = (db: D1Database, id: string) =>
   db.prepare("SELECT * FROM memes WHERE id = ?").bind(id).first<Meme>();
 
@@ -89,6 +97,10 @@ export const recentMemes = async (db: D1Database, userId: number, limit: number)
       .all<Meme>()
   ).results;
 
+/** Counts a use of the user's own meme (favorite and forgotten memes in analytics). */
+export const recordUse = (db: D1Database, userId: number, memeId: string, via: "inline" | "share" | "send") =>
+  db.prepare("INSERT INTO meme_uses (user_id, meme_id, via) SELECT ?, id, ? FROM memes WHERE id = ? AND user_id = ?").bind(userId, via, memeId, userId).run();
+
 type MemeStores = { DB: D1Database; VECTORS: Vectorize; MEDIA: R2Bucket };
 
 /** Deletes memes with their vectors and R2 files (up to 100 ids: Vectorize and D1 bind limits). */
@@ -99,6 +111,7 @@ export async function deleteMemes(env: MemeStores, ids: string[]) {
     .bind(...ids)
     .all<{ r2_file: string | null; r2_preview: string | null }>();
   await env.DB.prepare(`DELETE FROM post_items WHERE meme_id IN (${ids.map(() => "?").join(",")})`).bind(...ids).run();
+  await env.DB.prepare(`DELETE FROM meme_uses WHERE meme_id IN (${ids.map(() => "?").join(",")})`).bind(...ids).run();
   const keys = results.flatMap((r) => [r.r2_file, r.r2_preview]).filter((k): k is string => !!k);
   if (keys.length) await env.MEDIA.delete(keys);
 }

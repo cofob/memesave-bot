@@ -5,6 +5,8 @@ import { botApi } from "./botapi";
 import type { User } from "./db";
 import type { Env } from "./env";
 import { allStats, userStats } from "./stats";
+import { adminAnalytics } from "./analytics";
+import { analysisResult, analysisStatus, startAnalysis } from "./analysis";
 import { BACKFILL_WHERE, queueHashBackfill } from "./ingest/embed";
 import { queueRekey, recoverLostKeys, REKEY_WHERE } from "./rekey";
 import { oauthUrl, setUserKey } from "./userkey";
@@ -29,6 +31,20 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
     const all = new URL(req.url).searchParams.has("all");
     if (all && user.role !== "admin") return json({ error: "admins only" }, 403);
     return json(all ? await allStats(env) : await userStats(env, user));
+  }
+
+  // The user's own charts come with the daily analysis snapshot (GET analysis/result); this is all users.
+  if (resource === "analytics" && m === "GET") {
+    if (user.role !== "admin") return json({ error: "admins only" }, 403);
+    return json(await adminAnalytics(env));
+  }
+  if (resource === "analysis") {
+    if (m === "GET" && id === "result") return analysisResult(env, user.id);
+    if (m === "GET" && !id) return json(await analysisStatus(env, user.id));
+    if (m === "POST" && !id) {
+      const { llm = true } = await req.json<{ llm?: boolean }>().catch(() => ({ llm: true }));
+      return json(await startAnalysis(env, user.id, { llm: !!llm }));
+    }
   }
 
   if (resource === "settings" && m === "PUT") {

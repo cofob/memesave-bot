@@ -16,7 +16,7 @@
     Tag,
     TextField,
   } from "@cofob2/design-system-svelte";
-  import { Bot, CircleCheck, CircleUser, Download, Layers, ListChecks, LogOut, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Upload, X } from "@lucide/svelte";
+  import { Bot, ChartNoAxesCombined, CircleCheck, CircleUser, Download, Layers, ListChecks, LogOut, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Upload, X } from "@lucide/svelte";
   import { onMount, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { api, ApiError, type Me, type MemeBrief, type Sort } from "./api";
@@ -36,6 +36,7 @@
   let auth = $state<"checking" | "ok" | "login" | "denied">("checking");
   let me = $state<Me | null>(null);
   let accountOpen = $state(false);
+  let view = $state<"grid" | "analytics">("grid"); // analytics: the charts mode (loaded on demand with ECharts)
   let accountTab = $state("stats");
   // Result of the OpenRouter connect redirect (?key=connected|failed), shown once.
   let notice = $state<{ tone: "success" | "danger"; text: string } | null>(null);
@@ -293,6 +294,24 @@
   <div class="sentinel"><Spinner label="Loading" /></div>
 {:else}
 
+{#if view === "analytics" && me}
+  <Container size="default" class="app">
+    {#await import("./Analytics.svelte") then { default: Analytics }}
+      <Analytics
+        {me}
+        onBack={() => (view = "grid")}
+        onTag={(t) => {
+          view = "grid";
+          pickTag(t);
+        }}
+        onOpen={(id) => (selected = id)}
+      />
+    {/await}
+  </Container>
+{/if}
+
+<!-- Hidden, not unmounted: the grid keeps its list, scroll observer and search while the charts are open. -->
+<div hidden={view === "analytics"}>
 <Container size="default" class="app">
   <Stack gap="md">
     <TextField
@@ -368,6 +387,7 @@
         {#snippet leading()}<Upload size={16} aria-hidden="true" />{/snippet}
         {s.upload}
       </Button>
+      <IconButton label={s.analytics} variant="ghost" size="sm" onclick={() => (view = "analytics")}><ChartNoAxesCombined size={18} /></IconButton>
       <IconButton label={s.account} variant="ghost" size="sm" onclick={() => (accountOpen = true)}><CircleUser size={18} /></IconButton>
       {#if !tg}
         <IconButton label={s.logout} variant="ghost" size="sm" onclick={logout}><LogOut size={16} /></IconButton>
@@ -461,6 +481,7 @@
     </div>
   </Stack>
 </Container>
+</div>
 
 <Drawer open={tagsOpen} title={s.tags} side="bottom" closeLabel={s.close} onOpenChange={(open) => (tagsOpen = open)}>
   {#if tagList === null}

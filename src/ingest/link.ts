@@ -4,12 +4,12 @@ import type { Ctx } from "../bot";
 import { botApi } from "../botapi";
 import { sha256hex } from "../cache";
 import { addToPost } from "../channels";
-import type { Kind } from "../db";
+import { storageFull, type Kind } from "../db";
 import type { Env } from "../env";
 import { t } from "../i18n";
 import { extOf, fileKey, previewKey } from "../media";
 import { type Thumb, thumbnail } from "../thumb";
-import { extractMedia, insertMeme, type MemeRow, receiveMedia } from "./receive";
+import { extractMedia, insertMeme, type AddedVia, type MemeRow, receiveMedia } from "./receive";
 
 // Media by link: any service of the cobalt API (github.com/imputnet/cobalt, COBALT_URL).
 
@@ -155,16 +155,16 @@ export async function importLink(ctx: Ctx, env: Env, url: string) {
 }
 
 /** Queue job of the API import: like importLink, but silent and without status messages. */
-export async function linkJob(env: Env, userId: number, url: string) {
+export async function linkJob(env: Env, userId: number, url: string, via: AddedVia = "api") {
   if (await linkSaved(env.DB, userId, url)) return;
   const { source, items: all } = await cobalt(env, url);
   const items = await fresh(env.DB, userId, all);
-  if (!items.length) return;
+  if (!items.length || (await storageFull(env.DB, userId))) return;
   await withThumbs(env, userId, items);
   const sent = await sendItems(botApi(env.BOT_TOKEN), userId, items, { disable_notification: true });
   const group = groupOf(sent);
   for (const [i, msg] of sent.entries()) {
-    const memeId = await insertMeme(env.DB, userId, { ...extractMedia(msg)!, caption: null, source, import_id: null, ...(await stored(env, items[i])) });
+    const memeId = await insertMeme(env.DB, userId, { ...extractMedia(msg)!, caption: null, source, import_id: null, added_via: via, ...(await stored(env, items[i])) });
     if (!memeId) continue;
     await addToPost(env.DB, userId, { memeId, mediaGroupId: group, position: i });
     await env.JOBS.send({ type: items[i].kind === "photo" || items[i].thumb ? "embed" : "thumb", memeId });
