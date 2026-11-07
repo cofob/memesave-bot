@@ -17,6 +17,7 @@ export interface Channel {
   username: string | null;
   enabled: number;
   caption: string;
+  storage: number; // 1: silent uploads for inline go here (src/search/tgupload.ts)
 }
 
 interface Post {
@@ -93,7 +94,7 @@ export function renderCaption(template: string, post: Pick<Post, "caption">, mem
 }
 
 /** The bot cannot post there any more: kicked, no rights, or the channel is gone. */
-const lostChannel = (e: unknown) =>
+export const lostChannel = (e: unknown) =>
   e instanceof GrammyError && (e.error_code === 403 || /chat not found|not enough rights|CHAT_WRITE_FORBIDDEN|have no rights/i.test(e.description));
 
 async function notifyOwner(env: Env, userId: number, text: (lang: Lang) => string, buttons: (lang: Lang) => InlineKeyboardButton[][] = () => []) {
@@ -180,14 +181,23 @@ export const listChannels = async (db: D1Database, userId: number) =>
 export const addChannelUrl = (botUsername: string) => `https://t.me/${botUsername}?startchannel&admin=post_messages`;
 
 /** Changes a channel of the user; false when it is not theirs. */
-export async function updateChannel(db: D1Database, userId: number, chatId: number, p: { enabled?: boolean; caption?: string }) {
+export async function updateChannel(db: D1Database, userId: number, chatId: number, p: { enabled?: boolean; caption?: string; storage?: boolean }) {
   const ch = await getChannel(db, userId, chatId);
   if (!ch) return false;
+  if (p.storage !== undefined) {
+    if (p.storage) await db.prepare("UPDATE channels SET storage = 0 WHERE user_id = ?").bind(userId).run();
+    await db.prepare("UPDATE channels SET storage = ? WHERE chat_id = ?").bind(p.storage ? 1 : 0, chatId).run();
+  }
   await db.prepare("UPDATE channels SET enabled = ?, caption = ? WHERE chat_id = ?")
     .bind(p.enabled === undefined ? ch.enabled : p.enabled ? 1 : 0, (p.caption ?? ch.caption).slice(0, 1024), chatId)
     .run();
   return true;
 }
+
+/** Chat for silent uploads: the user's storage channel, else the system one (null when not set). */
+export const storageChat = async (env: Env, userId: number) =>
+  (await env.DB.prepare("SELECT chat_id FROM channels WHERE user_id = ? AND storage = 1").bind(userId).first<number>("chat_id")) ??
+  (Number(env.STORAGE_CHAT_ID) || null);
 
 /** Unlinks a channel of the user and leaves it. */
 export async function removeChannel(env: Env, userId: number, chatId: number) {

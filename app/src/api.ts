@@ -87,6 +87,7 @@ export interface Channel {
   username: string | null;
   enabled: number;
   caption: string;
+  storage: number;
 }
 
 export interface Connection {
@@ -331,7 +332,7 @@ export const api = {
   analysisResult: () => call<AnalysisResult>("analysis/result"),
   setSettings: (settings: Partial<Pick<Me, "search_mode" | "describe_tier">>) => call("settings", { method: "PUT", body: JSON.stringify(settings) }),
   channels: () => call<{ channels: Channel[]; addUrl: string }>("channels"),
-  setChannel: (id: number, body: { enabled?: boolean; caption?: string }) => call(`channels/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  setChannel: (id: number, body: { enabled?: boolean; caption?: string; storage?: boolean }) => call(`channels/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   removeChannel: (id: number) => call(`channels/${id}`, { method: "DELETE" }),
   connections: () => call<{ mcp_url: string; items: Connection[] }>("connections"),
   revokeConnection: (id: string) => call(`connections/${encodeURIComponent(id)}`, { method: "DELETE" }),

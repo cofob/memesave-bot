@@ -19,6 +19,7 @@ import { billingNotices } from "./billing";
 import { handleBtcpay } from "./crypto";
 import { expireZipUploads, handleUpload, handleZipCallback } from "./zip";
 import { handleShare } from "./share";
+import { handleUploads, type UploadJob } from "./search/tgupload";
 
 export { ZipImporter } from "./zip";
 export { DataExporter } from "./export";
@@ -67,7 +68,8 @@ const app = {
 
 export default {
   fetch: (req, env, ctx) => (oauth ??= new OAuthProvider(oauthOptions(env, app))).fetch(req, env, ctx),
-  queue: handleBatch,
+  queue: (batch, env) =>
+    batch.queue === "memesave-tgupload" ? handleUploads(batch as unknown as MessageBatch<UploadJob>, env) : handleBatch(batch, env),
   async scheduled(_, env) {
     await expireZipUploads(env.DB);
     await expireExports(env.DB);

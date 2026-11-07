@@ -1,4 +1,5 @@
 import type { Job } from "./queue";
+import type { UploadJob } from "./search/tgupload";
 import type { ZipImporter } from "./zip";
 import type { DataExporter } from "./export";
 import type { Thumbnailer } from "./thumb";
@@ -9,12 +10,14 @@ export interface Env {
   VECTORS: Vectorize;
   MEDIA: R2Bucket; // permanent copies of all media; "tmp/" expires after 7 days
   JOBS: Queue<Job>;
+  UPLOADS: Queue<UploadJob>; // silent uploads of memes without a Telegram file id (src/search/tgupload.ts)
   OAUTH_KV: KVNamespace; // MCP OAuth grants and tokens
   ZIP: DurableObjectNamespace<ZipImporter>;
   EXPORT: DurableObjectNamespace<DataExporter>;
   THUMB: DurableObjectNamespace<Thumbnailer>;
   ANALYZE: DurableObjectNamespace<Analyzer>;
   ADMIN_ID: string;
+  STORAGE_CHAT_ID?: string; // system channel for silent uploads (the bot is its admin)
   PUBLIC_URL: string; // base URL of this Worker, e.g. https://memereserve.cfb.wtf
   MEDIA_URL?: string; // base URL for media links when R2 API keys are not set
   R2_ACCOUNT_ID?: string; // presigned R2 links for batch images (S3 API)

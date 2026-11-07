@@ -10,6 +10,7 @@ export const MIN_VECTOR_SCORE = 0.2;
 export const RRF_K = 60;
 export const INLINE_LIMIT = 50;
 export const INLINE_CACHE_SECONDS = 600;
+export const UPLOAD_GAP_MS = 3100; // between silent uploads: under ~20 messages/min per chat
 export const CHAT_LIMIT = 10;
 export const AGENT_INITIAL = 20;
 export const AGENT_MAX_STEPS = 6;

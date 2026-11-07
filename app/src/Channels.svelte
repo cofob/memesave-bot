@@ -27,6 +27,12 @@
       checked={!!ch.enabled}
       onCheckedChange={(on) => api.setChannel(ch.chat_id, { enabled: on }).then(load)}
     />
+    <Switch
+      label={s.channelsStorage}
+      description={s.channelsStorageHint}
+      checked={!!ch.storage}
+      onCheckedChange={(on) => api.setChannel(ch.chat_id, { storage: on }).then(load)}
+    />
     <Textarea label={s.channelsCaption} description={s.channelsCaptionHint} rows={2} bind:value={ch.caption} oninput={() => (saved = null)} />
     <Inline gap="sm" wrap>
       <Button size="sm" variant="secondary" onclick={() => save(ch)}>{saved === ch.chat_id ? s.stateReady : s.channelsSave}</Button>

@@ -67,17 +67,19 @@ async function withUploadFallback<T>(env: Env, memes: Meme[], send: (upload: boo
   try {
     const result = await send(needsUpload);
     if (needsUpload) await Promise.all(sent(result).map((msg, i) => adopt(env, memes[i], msg)));
+    return result;
   } catch (e) {
     if (needsUpload || !memes.every((m) => m.r2_file)) throw e;
     console.warn("file_id send failed, uploading from R2", e);
     const result = await send(true);
     await Promise.all(sent(result).map((msg, i) => adopt(env, memes[i], msg)));
+    return result;
   }
 }
 
 /** Sends one meme to a chat. */
 export async function sendMeme(env: Env, api: Api, chatId: number, m: Meme, other: object = {}) {
-  await withUploadFallback(
+  return withUploadFallback(
     env,
     [m],
     async (upload) => {

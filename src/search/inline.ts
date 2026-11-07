@@ -6,6 +6,7 @@ import type { Env } from "../env";
 import { tmpKey } from "../media";
 import { toInlineResult } from "./deliver";
 import { fastSearch } from "./fast";
+import { needUpload } from "./tgupload";
 import { canUseAi, type Gate } from "../billing";
 import { t } from "../i18n";
 
@@ -29,6 +30,8 @@ export async function handleInline(ctx: Ctx, env: Env) {
     return ctx.answerInlineQuery([], { cache_time: 30, is_personal: true, button: { text: t(ctx.lang, text), start_parameter: start } });
   }
   const memes = query.length < 2 ? await recentMemes(env.DB, ctx.user.id, INLINE_LIMIT) : await cachedFastSearch(env, ctx.user.id, query);
+  const missing = needUpload(memes);
+  if (missing.length) await env.UPLOADS.send({ userId: ctx.user.id, memeIds: missing }).catch(console.warn);
   const results = (await Promise.all(memes.map((m) => toInlineResult(env, m)))).filter((r) => r !== null);
   await ctx.answerInlineQuery(results, { cache_time: 30, is_personal: true });
 }

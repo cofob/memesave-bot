@@ -111,7 +111,7 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
       return json({ channels: await listChannels(env.DB, user.id), addUrl: addChannelUrl(me.username) });
     }
     if (m === "PUT" && id) {
-      const body = await req.json<{ enabled?: boolean; caption?: string }>();
+      const body = await req.json<{ enabled?: boolean; caption?: string; storage?: boolean }>();
       return (await updateChannel(env.DB, user.id, Number(id), body)) ? json({ ok: true }) : json({ error: "not found" }, 404);
     }
     if (m === "DELETE" && id) return (await removeChannel(env, user.id, Number(id))) ? json({ ok: true }) : json({ error: "not found" }, 404);

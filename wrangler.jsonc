@@ -18,7 +18,8 @@
     "BTCPAY_URL": "https://btcpay.cofob.dev",
     "BTCPAY_STORE_ID": "9rM3R2iTYdrsnqHkWiu9co4U79tLVLjAvusCLsvxQgoi",
     "BTCPAY_USDT": "Ethereum,Polygon,Plasma",
-    "COBALT_URL": "https://cobalt.cfb.wtf/"
+    "COBALT_URL": "https://cobalt.cfb.wtf/",
+    "STORAGE_CHAT_ID": "-1004422246528" // system storage chat for silent uploads (src/search/tgupload.ts)
   },
   "workers_dev": true,
   "preview_urls": false,
@@ -51,9 +52,14 @@
     { "tag": "v4", "new_sqlite_classes": ["Analyzer"] }
   ],
   "queues": {
-    "producers": [{ "binding": "JOBS", "queue": "memesave-jobs" }],
+    "producers": [
+      { "binding": "JOBS", "queue": "memesave-jobs" },
+      { "binding": "UPLOADS", "queue": "memesave-tgupload" }
+    ],
     "consumers": [
-      { "queue": "memesave-jobs", "max_batch_size": 5, "max_batch_timeout": 1, "max_retries": 10, "max_concurrency": 10, "dead_letter_queue": "memesave-dlq" }
+      { "queue": "memesave-jobs", "max_batch_size": 5, "max_batch_timeout": 1, "max_retries": 10, "max_concurrency": 10, "dead_letter_queue": "memesave-dlq" },
+      // One silent upload at a time (src/search/tgupload.ts): live traffic keeps the Telegram rate limits.
+      { "queue": "memesave-tgupload", "max_batch_size": 1, "max_batch_timeout": 1, "max_retries": 10, "max_concurrency": 1 }
     ]
   }
 }
