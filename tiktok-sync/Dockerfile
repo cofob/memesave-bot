@@ -13,7 +13,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends xvfb xauth tini fonts-noto-color-emoji \
- && pip install --no-cache-dir playwright==1.64.1 qrcode==8.2 \
+ && pip install --no-cache-dir playwright==1.64.1 qrcode==8.2 curl_cffi==0.17.0 rich==15.0.0 \
  && playwright install --with-deps chromium \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -m -u 1000 app \
