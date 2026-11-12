@@ -31,11 +31,11 @@ func TestReadMemesaveExport(t *testing.T) {
 	_ = writeStored(w, "export/"+manifestName, []byte(`{"format":"memesave-export","version":1}`))
 	_ = writeStored(w, "export/README.txt", []byte(readme))
 	_ = writeCSV(w, "export/memes.csv",
-		[]string{"id", "kind", "caption", "status", "title", "tags", "width", "created_at", "file", "preview"},
+		[]string{"id", "kind", "caption", "status", "title", "tags", "source_meta", "width", "created_at", "file", "preview"},
 		[][]string{
-			{"m1", "photo", "hi", "ready", "Cat", "cat\nfunny", "640", "1761350400", "media/m1.jpg", ""},
-			{"m2", "video", "", "failed", "", "", "", "1761350401", "media/m2.mp4", "media/m2.preview.jpg"},
-			{"m3", "photo", "", "ready", "Lost", "", "", "1", "", ""},
+			{"m1", "photo", "hi", "ready", "Cat", "cat\nfunny", `{"site":"e621"}`, "640", "1761350400", "media/m1.jpg", ""},
+			{"m2", "video", "", "failed", "", "", "", "", "1761350401", "media/m2.mp4", "media/m2.preview.jpg"},
+			{"m3", "photo", "", "ready", "Lost", "", "", "", "1", "", ""},
 		})
 	_ = writeStored(w, "export/media/m1.jpg", []byte("A"))
 	_ = writeStored(w, "export/media/m2.mp4", []byte("B"))
@@ -62,7 +62,7 @@ func TestReadMemesaveExport(t *testing.T) {
 		t.Fatal("failed meme must be processed again")
 	}
 	got := found[0].restore.withVectors()
-	want := &Restore{Title: "Cat", Tags: "cat\nfunny", CreatedAt: 1761350400, Image: []float32{1, 2}, Text: []float32{3, 4}, embedding: got.embedding}
+	want := &Restore{Title: "Cat", Tags: "cat\nfunny", SourceMeta: `{"site":"e621"}`, CreatedAt: 1761350400, Image: []float32{1, 2}, Text: []float32{3, 4}, embedding: got.embedding}
 	if !reflect.DeepEqual(got, want) || found[0].caption != "hi" || found[0].width != 640 {
 		t.Fatalf("restore: %+v", got)
 	}

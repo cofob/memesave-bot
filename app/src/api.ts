@@ -34,6 +34,8 @@ export interface MemeDetail extends Omit<MemeBrief, "album"> {
   file: string | null;
   audio: string | null; // sound of the photo, shared by its album
   album: FeedMedia[]; // the media group in order, empty for a single meme
+  layout?: Layout;
+  source_meta?: { site: string; tags: string[] } | null; // import source (Telegraph, e621, …)
 }
 
 export interface IndexItem extends MemeBrief {
@@ -50,7 +52,8 @@ export interface Page {
 }
 
 export type Sort = "new" | "old" | "title";
-export type FeedMode = "new" | "old" | "random" | "favorites" | "forgotten" | "time" | "unseen";
+export type Layout = "carousel" | "comic"; // an album: a swipe row, or pages top to bottom
+export type FeedMode = "new" | "old" | "random" | "favorites" | "forgotten" | "time" | "unseen" | "porn";
 /** A feed media: the file URL (null for Telegram-only files over 20 MB). */
 export interface FeedMedia extends MemeBrief {
   file: string | null;
@@ -61,6 +64,7 @@ export interface FeedItem extends FeedMedia {
   audio: string | null;
   uses: number;
   date: number;
+  layout?: Layout;
 }
 export type PairFeedMode = "mix" | "theirs" | "twins" | "rhymes" | "foryou" | "surprise" | "bridge" | "guess";
 export type Owner = "me" | "partner";
@@ -123,6 +127,15 @@ export interface Connection {
   domain: string | null;
   scope: string[];
   created_at: number;
+}
+
+export interface E621Status {
+  connected: boolean;
+  username?: string;
+  backfill_done?: boolean; // false: the first full import (or the daily rescan) is running
+  last_sync?: number;
+  imported?: number; // posts handled so far
+  error?: string | null; // unauthorized | payment required | storage full
 }
 
 export interface ApiToken {
@@ -461,6 +474,9 @@ export const api = {
   removeChannel: (id: number) => call(`channels/${id}`, { method: "DELETE" }),
   connections: () => call<{ mcp_url: string; items: Connection[] }>("connections"),
   revokeConnection: (id: string) => call(`connections/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  e621: () => call<E621Status>("e621"),
+  connectE621: (username: string, api_key: string) => call("e621", { method: "PUT", body: JSON.stringify({ username, api_key }) }),
+  disconnectE621: () => call("e621", { method: "DELETE" }),
   tokens: () => call<ApiToken[]>("tokens"),
   createToken: (name: string, write: boolean) => post<{ id: string; token: string }>("tokens", { name, write }),
   deleteToken: (id: string) => call(`tokens/${id}`, { method: "DELETE" }),
@@ -523,6 +539,7 @@ export const api = {
     if (file) body.set("audio", file);
     return call<{ audio: string | null }>(`memes/${id}/audio`, file ? { method: "POST", body } : { method: "DELETE" });
   },
+  setLayout: (id: string, layout: Layout) => post<{ layout: Layout }>(`memes/${id}/layout`, { layout }),
   remove: (id: string) => call<{ ok: true }>(`memes/${id}`, { method: "DELETE" }),
   /** Changes the given fields of a ready meme. */
   edit: (id: string, patch: Record<string, string | string[] | boolean>) => call<MemeDetail>(`memes/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),

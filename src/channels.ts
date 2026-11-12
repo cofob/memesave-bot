@@ -26,6 +26,7 @@ interface Post {
   user_id: number;
   media_group_id: string | null;
   caption: string | null;
+  layout: "carousel" | "comic";
   status: string;
   updated_at: number;
 }
@@ -33,14 +34,14 @@ interface Post {
 export const ALBUM_WAIT = 5; // seconds without new album items before posting
 
 /** Adds a meme to its post: one post per media group, a new post for a single message. */
-export async function addToPost(db: D1Database, userId: number, p: { memeId: string; mediaGroupId?: string | null; caption?: string | null; position?: number }) {
+export async function addToPost(db: D1Database, userId: number, p: { memeId: string; mediaGroupId?: string | null; caption?: string | null; position?: number; layout?: "comic" }) {
   const postId = await db
     .prepare(
-      `INSERT INTO posts (id, user_id, media_group_id, caption) VALUES (?, ?, ?, ?)
+      `INSERT INTO posts (id, user_id, media_group_id, caption, layout) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(user_id, media_group_id) DO UPDATE SET caption = COALESCE(posts.caption, excluded.caption), updated_at = unixepoch()
        RETURNING id`,
     )
-    .bind(crypto.randomUUID().replaceAll("-", ""), userId, p.mediaGroupId ?? null, p.caption || null)
+    .bind(crypto.randomUUID().replaceAll("-", ""), userId, p.mediaGroupId ?? null, p.caption || null, p.layout ?? "carousel")
     .first<string>("id");
   await db.prepare("INSERT INTO post_items (post_id, meme_id, position) VALUES (?, ?, ?) ON CONFLICT DO NOTHING")
     .bind(postId, p.memeId, p.position ?? 0)
@@ -53,14 +54,14 @@ export async function addToPost(db: D1Database, userId: number, p: { memeId: str
 export async function albumMemes(db: D1Database, memeId: string) {
   const { results } = await db
     .prepare(
-      `SELECT m.*, p.updated_at AS album_updated FROM post_items i JOIN posts p ON p.id = i.post_id
+      `SELECT m.*, p.updated_at AS album_updated, p.layout AS album_layout FROM post_items i JOIN posts p ON p.id = i.post_id
        JOIN post_items a ON a.post_id = p.id JOIN memes m ON m.id = a.meme_id
        WHERE i.meme_id = ? AND p.media_group_id IS NOT NULL
          AND p.id = (SELECT q.id FROM post_items j JOIN posts q ON q.id = j.post_id WHERE j.meme_id = i.meme_id AND q.media_group_id IS NOT NULL ORDER BY q.created_at DESC, q.rowid DESC LIMIT 1)
        ORDER BY a.position`,
     )
     .bind(memeId)
-    .all<Meme & { album_updated: number }>();
+    .all<Meme & { album_updated: number; album_layout: string }>();
   return results;
 }
 
@@ -120,7 +121,7 @@ export async function postJob(env: Env, postId: string) {
     return;
   }
   const { results: channels } = await db.prepare("SELECT * FROM channels WHERE user_id = ? AND enabled = 1").bind(post.user_id).all<Channel>();
-  if (!items.length || !channels.length) {
+  if (!items.length || !channels.length || post.layout === "comic") { // a comic has too many pages for a channel
     await db.prepare("UPDATE posts SET status = 'skipped', updated_at = unixepoch() WHERE id = ? AND status = 'pending'").bind(postId).run();
     return;
   }

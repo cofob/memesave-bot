@@ -3,13 +3,14 @@ import type { User as TgUser } from "grammy/types";
 import { resolveUser } from "./auth";
 import { ALBUM_FIRST, albumSizes, visible, deleteMeme, deleteMemes, getMeme, getUser, recordUse, storageFull, type Kind, type Meme, type User } from "./db";
 import { insertMeme, type AddedVia } from "./ingest/receive";
-import { parseJson, saveDescription, toDescription, type Description } from "./ingest/describe";
+import { parseJson, saveDescription, toDescription, type Description, type SourceMeta } from "./ingest/describe";
 import { collectingImport } from "./batch";
 import { MODELS } from "./config";
 import { handleAccount } from "./webaccount";
 import { addToPost, albumMemes } from "./channels";
 import { billingStatus, canUseAi, langOfUser } from "./billing";
 import { facets, filterSql, list } from "./filters";
+import { gallerySource, startGallery } from "./ingest/gallery";
 import { feedMode, feedPage, markSeen, type FeedMeme } from "./feed";
 import { getCookie, readSession } from "./session";
 import { TOKEN_PREFIX, tokenUser } from "./tokens";
@@ -98,14 +99,18 @@ async function feedItems(env: Env, memes: FeedMeme[]) {
   const sizes = await albumSizes(env.DB, memes.map((m) => m.id));
   const audio = await audioPosts(env.DB, memes.map((m) => m.id));
   return Promise.all(
-    memes.map(async (m) => ({
-      ...(await media(env, m)),
-      audio: await audioUrl(env, audio.get(m.id)),
-      uses: m.uses,
-      date: m.date,
-      album: (sizes.get(m.id) ?? 0) > 1 ? sizes.get(m.id) : undefined,
-      slides: (sizes.get(m.id) ?? 0) > 1 ? await Promise.all((await albumMemes(env.DB, m.id)).map((a) => media(env, a))) : undefined,
-    })),
+    memes.map(async (m) => {
+      const album = (sizes.get(m.id) ?? 0) > 1 ? await albumMemes(env.DB, m.id) : [];
+      return {
+        ...(await media(env, m)),
+        audio: await audioUrl(env, audio.get(m.id)),
+        uses: m.uses,
+        date: m.date,
+        album: album.length ? sizes.get(m.id) : undefined,
+        layout: album[0]?.album_layout ?? "carousel",
+        slides: album.length ? await Promise.all(album.map((a) => media(env, a))) : undefined,
+      };
+    }),
   );
 }
 
@@ -117,6 +122,7 @@ export async function detail(env: Env, row: Meme) {
     ...(await brief(env, m)),
     caption: m.caption,
     source: m.source,
+    source_meta: m.source_meta ? JSON.parse(m.source_meta) : null,
     saved_at: m.saved_at,
     description: m.description,
     ocr_text: m.ocr_text,
@@ -127,6 +133,7 @@ export async function detail(env: Env, row: Meme) {
     file: await fileUrl(env, m),
     audio: await audioUrl(env, await postOf(env.DB, m.id)),
     album: album.length > 1 ? await Promise.all(album.map((a) => media(env, a))) : [],
+    layout: album[0]?.album_layout ?? "carousel",
   };
 }
 
@@ -239,8 +246,9 @@ type UploadMeta = {
   source?: string | null;
   saved_at?: number | null;
   caption?: string | null;
-  post?: { mediaGroupId: string; position: number };
+  post?: { mediaGroupId: string; position: number; layout?: "comic" };
   description?: Description; // ready description: the describe stage skips the AI call
+  sourceMeta?: SourceMeta; // import source: tags, full data (memes.source_meta, up to 100 KB)
 };
 
 /** Saves an uploaded file as a new meme (the app and MCP). */
@@ -266,8 +274,11 @@ export async function saveUpload(env: Env, user: User, file: File, meta: UploadM
   const hasThumb = kind !== "photo" && thumb instanceof File && thumb.size > 0 && thumb.size < 1 << 20;
   if (hasThumb) await env.MEDIA.put(previewKey(base), await thumb.arrayBuffer(), { httpMetadata: { contentType: "image/jpeg" } });
 
+  const sm = meta.sourceMeta && JSON.stringify(meta.sourceMeta);
+  const source_meta = sm && sm.length > 100_000 ? JSON.stringify({ ...meta.sourceMeta, data: null }) : sm;
+
   // Photos join an open batch import (/batch), like forwards in the bot.
-  const importId = kind === "photo" && !meta.description ? await collectingImport(env.DB, user.id) : null;
+  const importId = kind === "photo" && !meta.description && meta.post?.layout !== "comic" ? await collectingImport(env.DB, user.id) : null;
   const id = await insertMeme(env.DB, user.id, {
     kind,
     file_id: "",
@@ -287,11 +298,12 @@ export async function saveUpload(env: Env, user: User, file: File, meta: UploadM
     import_id: importId,
     sha256,
     added_via: meta.via ?? null,
+    source_meta,
   });
   if (!id) return fail("already saved", 409);
   if (!importId || meta.post) await addToPost(env.DB, user.id, { memeId: id, ...meta.post });
-  if (meta.description) await saveDescription(env.DB, { id, gen: 0 }, meta.description, "embedding").run();
-  await env.JOBS.send({ type: "embed", memeId: id });
+  if (meta.description) await saveDescription(env.DB, { id, gen: 0, source_meta }, meta.description, "embedding").run();
+  await env.JOBS.send({ type: kind !== "photo" && !hasThumb ? "thumb" : "embed", memeId: id }); // a video without a preview gets one first
   return { id, duplicate: false, batched: importId !== null };
 }
 
@@ -452,6 +464,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
     ((resource === "upload" || resource === "import") && m === "POST") ||
     (resource === "search" && url.searchParams.get("mode") !== "fts") ||
     (resource === "zip" && m === "POST" && !id) ||
+    (resource === "e621" && m === "PUT") ||
     (resource === "batch" && m === "POST" && (id === "start" || id === "retry")) ||
     (action === "retry" && m === "POST");
   if (aiWork) {
@@ -464,10 +477,11 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   if (resource === "pairs") return token ? json({ error: "no access" }, 403) : pairsApi(req, env, user, auth.name ?? user.username, via, id, action);
   if (resource === "upload" && req.method === "POST") return upload(env, user, req, via);
   if (resource === "import" && req.method === "POST") {
-    // Media of a link (any cobalt service), saved in the background like a link sent to the bot.
+    // Media of a link (a gallery source, else any cobalt service), saved in the background like a link sent to the bot.
     const { url: link = "" } = await req.json<{ url?: string }>();
     if (!/^https?:\/\/\S+$/i.test(link)) return json({ error: "url required" }, 400);
-    await env.JOBS.send({ type: "link", userId: user.id, url: link, via });
+    if (gallerySource(link)) await startGallery(env, user.id, link, via);
+    else await env.JOBS.send({ type: "link", userId: user.id, url: link, via });
     return json({ queued: true }, 202);
   }
   if (resource === "status" && req.method === "GET") {
@@ -610,6 +624,16 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
     if (req.method === "POST" && !(file instanceof File)) return json({ error: "audio required" }, 400);
     const error = await attachAudio(env, meme, file as File | null);
     return error ? json({ error }, 415) : json({ audio: await audioUrl(env, await postOf(env.DB, meme.id)) });
+  }
+  if (action === "layout" && req.method === "POST") {
+    const layout = ((await req.json().catch(() => null)) as { layout?: unknown } | null)?.layout;
+    if (layout !== "carousel" && layout !== "comic") return json({ error: "layout must be carousel or comic" }, 400);
+    await env.DB.prepare(
+      "UPDATE posts SET layout = ? WHERE user_id = ? AND media_group_id IS NOT NULL AND id IN (SELECT post_id FROM post_items WHERE meme_id = ?)",
+    )
+      .bind(layout, meme.user_id, meme.id)
+      .run();
+    return json({ layout });
   }
   return json({ error: "not found" }, 404);
 }

@@ -108,6 +108,12 @@ const schemas = {
           cultural_meaning: nullable("string"),
           file: nullable("string", "Signed URL of the original file (null when Telegram cannot give it: videos over 20 MB without an R2 copy)."),
           album: { type: "array", items: ref("MemeBrief"), description: "All memes of its album in order, each with its file URL; empty for a single meme." },
+          layout: { type: "string", enum: ["carousel", "comic"], description: "How the album shows: a carousel, or a comic whose pages go top to bottom. A comic is not posted to channels." },
+          source_meta: {
+            type: ["object", "null"],
+            description: "Metadata of the import source (Telegraph, …): `site`, `tags` (merged into the meme tags) and `data` (the full source object). Null for other memes.",
+            properties: { site: { type: "string" }, tags: { type: "array", items: { type: "string" } }, data: {}, porn: { type: "boolean" } },
+          },
         },
       },
     ],
@@ -180,7 +186,8 @@ Uploads, imports, retries and AI search need an active plan or AI credit, else t
 **Media URLs** (\`thumb\`, \`file\`) are signed, need no auth and stay valid for at least 24 hours.
 
 **Albums.** Memes that came together (a Telegram media group, a slideshow link) form an album.
-Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size; \`GET /memes/{id}\` returns the whole album.`,
+Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size; \`GET /memes/{id}\` returns the whole album.
+An album has a \`layout\`: \`carousel\` or \`comic\` (pages top to bottom). A comic is described by the AI from its first 10 pages: the other pages get the description of page 1.`,
     },
     servers: [{ url: server }],
     security: [{ token: [] }],
@@ -220,8 +227,8 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
               name: "mode",
               in: "query",
               required: true,
-              schema: { type: "string", enum: ["new", "old", "random", "favorites", "forgotten", "time", "unseen"] },
-              description: "favorites: most used; forgotten: never used, oldest first; time: a timeline from the time in seed, older memes first (newer=1: the memes after it, oldest first); unseen: not seen in the feed.",
+              schema: { type: "string", enum: ["new", "old", "random", "favorites", "forgotten", "time", "unseen", "porn"] },
+              description: "favorites: most used; forgotten: never used, oldest first; time: a timeline from the time in seed, older memes first (newer=1: the memes after it, oldest first); unseen: not seen in the feed; porn: only porn memes, also when the hide porn setting is on.",
             },
             {
               name: "seed",
@@ -233,7 +240,7 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
             { name: "offset", in: "query", schema: { type: "integer", minimum: 0, default: 0 }, description: "next_offset of the previous page." },
           ],
           responses: {
-            "200": ok("A page of the feed: memes with file (null for Telegram-only files over 20 MB), uses, date and album size.", ref("Page")),
+            "200": ok("A page of the feed: memes with file (null for Telegram-only files over 20 MB), uses, date, album size and layout.", ref("Page")),
             ...COMMON,
           },
         },
@@ -283,6 +290,11 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
       },
       "/memes/{id}/clip_link": {
         post: memeOps("Video link", "Makes the video of the meme's photos with its audio (as send_clip, once) and answers `{ url }`: a signed download link, valid at least 24 hours. 409 without audio. Needs a write token."),
+      },
+      "/memes/{id}/layout": {
+        post: memeOps("Set album layout", "Sets how the album of the meme shows: `carousel` or `comic` (pages top to bottom). Answers `{ layout }`. 400 for another value. Needs a write token.", {
+          requestBody: body({ type: "object", properties: { layout: { type: "string", enum: ["carousel", "comic"] } }, required: ["layout"] }),
+        }),
       },
       "/memes/{id}/audio": {
         post: memeOps("Set audio", "Sets the sound of a saved photo (multipart field `audio`: mp3, m4a, ogg, up to 20 MB). One sound per album: it is shared by all photos of the album and replaces the old one. Needs a write token.", {
@@ -421,6 +433,8 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
           description: `Saves the media of a link from any service that cobalt supports (TikTok, Instagram, X, YouTube, Reddit, …).
 The import runs in the background: the media is downloaded (videos in 720p), sent silently to the user's chat with the bot and saved
 with \`source\` = the link. Slideshows and multi-media posts become one album in their order.
+A Telegraph page (telegra.ph, graph.org) is saved as a comic: all its images, with no page limit, and its metadata in \`source_meta\`.
+An e621 post (e621.net/posts/<id>) is saved as one meme, a pool (e621.net/pools/<id>) as a comic in pool order; \`source_meta\` has the full post.
 A link that is already saved (same \`source\`, not failed) is skipped. Failures are not reported back: check later with \`/memes\` or \`/index\`. Needs a write token.`,
           requestBody: body({ type: "object", properties: { url: { type: "string", format: "uri", example: "https://www.tiktok.com/@user/video/7300000000000000000" } }, required: ["url"] }),
           responses: { "202": ok("Queued.", { type: "object", properties: { queued: { type: "boolean", const: true } } }), "400": err("url required."), ...PAID, ...COMMON },

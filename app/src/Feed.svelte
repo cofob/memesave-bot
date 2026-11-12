@@ -1,8 +1,9 @@
 <script lang="ts">
   import { Badge, Button, EmptyState, IconButton, Select, Spinner, TextField } from "@cofob2/design-system-svelte";
-  import { BookmarkPlus, Check, ChevronLeft, ChevronRight, Info, Layers, RotateCcw, Send, Share, Share2, Volume2, VolumeX, X } from "@lucide/svelte";
+  import { BookmarkPlus, BookOpen, Check, ChevronLeft, ChevronRight, Info, Layers, RotateCcw, Send, Share, Share2, Volume2, VolumeX, X } from "@lucide/svelte";
   import { onMount, tick, untrack } from "svelte";
   import { api, ApiError, type FeedMode, type Owner, type PairFeedItem, type PairFeedMode } from "./api";
+  import ComicReader from "./ComicReader.svelte";
   import MemeDetail from "./MemeDetail.svelte";
   import { fill, locale, s } from "./strings";
   import { shareFiles } from "./share";
@@ -28,6 +29,7 @@
     { value: "forgotten", label: s.feedForgotten },
     { value: "time", label: s.feedTime },
     { value: "unseen", label: s.feedUnseen },
+    { value: "porn", label: s.feedPorn },
   ];
   // The pair feed: the modes available now come with each page.
   const p = untrack(() => pair);
@@ -223,7 +225,12 @@
     selected = null;
     setTimeout(() => tg?.BackButton.show()); // the detail hides it when it closes
   }
-  const back = () => !selected && onClose();
+  let reading = $state<PairFeedItem | null>(null); // the comic open in the reader
+  function closeReader() {
+    reading = null;
+    setTimeout(() => tg?.BackButton.show()); // the reader hides it when it closes
+  }
+  const back = () => !selected && !reading && onClose();
 
   async function run(id: string, action: () => Promise<unknown>) {
     busy = id;
@@ -268,7 +275,7 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    if (selected || !scroller || (e.target as HTMLElement).closest("input, select, textarea")) return;
+    if (selected || reading || !scroller || (e.target as HTMLElement).closest("input, select, textarea")) return;
     if (e.key === "Escape") onClose();
     const side = { ArrowRight: 1, l: 1, ArrowLeft: -1, h: -1 }[e.key];
     if (side) return e.preventDefault(), swipe(side);
@@ -352,7 +359,8 @@
       {@const near = Math.abs(i - active) <= NEAR}
       {@const who = whose(it)}
       {@const answer = guessed[it.id]}
-      {@const all = parts(it)}
+      {@const comic = it.layout === "comic"}
+      {@const all = comic ? [it] : parts(it)}
       {@const cur = part[it.id] ?? 0}
       {@const shown = all[cur] ?? it}
       <section class="slide" data-i={i} use:watch style:--ar={Math.max(9 / 16, (it.width ?? 0) / (it.height || 1))}>
@@ -374,7 +382,7 @@
                 ></video>
               {:else}
                 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-                <img src={near && m.kind === "photo" && m.file ? m.file : m.thumb} alt={m.title ?? ""} loading="lazy" onclick={() => it.audio && (paused = !paused)} />
+                <img src={near && m.kind === "photo" && m.file ? m.file : m.thumb} alt={m.title ?? ""} loading="lazy" onclick={() => (comic ? (reading = it) : it.audio && (paused = !paused))} />
               {/if}
             </div>
           {/each}
@@ -390,7 +398,11 @@
           {#if shown.title}<strong>{shown.title}</strong>{/if}
           <span class="meta">
             {date(it.date)}{#if it.uses} · {fill(s.feedUses, { n: it.uses })}{/if}
-            {#if it.album}<Badge size="sm" variant="solid"><Layers size={12} aria-hidden="true" /> {(part[it.id] ?? 0) + 1}/{it.album}</Badge>{/if}
+            {#if it.album && comic}
+              <Badge size="sm" variant="solid"><BookOpen size={12} aria-hidden="true" /> {fill(s.comicPages, { n: it.album })}</Badge>
+            {:else if it.album}
+              <Badge size="sm" variant="solid"><Layers size={12} aria-hidden="true" /> {(part[it.id] ?? 0) + 1}/{it.album}</Badge>
+            {/if}
             {#if p && who}
               <Badge size="sm" variant="solid" tone={answer ? (answer.correct ? "success" : "danger") : who === "me" ? "accent" : "info"}>
                 {#if answer}{answer.correct ? s.feedRight : s.feedWrong} · {/if}{who === "me" ? s.feedMine : p.name}
@@ -413,6 +425,9 @@
         </div>
 
         <div class="actions">
+          {#if comic}
+            <IconButton label={s.readComic} variant="secondary" onclick={() => (reading = it)}><BookOpen size={20} /></IconButton>
+          {/if}
           {#if parts(it).some((m) => m.kind === "video" && m.file) || it.audio}
             <IconButton label={muted ? s.feedSoundOn : s.feedSoundOff} variant="secondary" onclick={() => (muted = !muted)}>
               {#if muted}<VolumeX size={20} />{:else}<Volume2 size={20} />{/if}
@@ -454,6 +469,10 @@
     {/if}
   </div>
 </div>
+
+{#if reading}
+  <ComicReader pages={reading.slides ?? [reading]} title={reading.title ?? ""} onClose={closeReader} />
+{/if}
 
 {#if selected}
   {@const it = items.find((m) => m.id === selected)}

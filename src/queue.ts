@@ -7,6 +7,8 @@ import { embedStage, hashStage } from "./ingest/embed";
 import { purgeStage } from "./purge";
 import { rekeyStage } from "./rekey";
 import { postJob } from "./channels";
+import { e621Sync, type E621Job } from "./e621";
+import { galleryJob } from "./ingest/gallery";
 import { linkJob } from "./ingest/link";
 import type { AddedVia } from "./ingest/receive";
 import { failSearch, searchJob } from "./search/chat";
@@ -23,6 +25,8 @@ export type Job =
   | { type: "post"; postId: string }
   | { type: "purge"; userId: number; before: number }
   | { type: "link"; userId: number; url: string; via?: AddedVia } // API import (src/ingest/link.ts)
+  | { type: "gallery"; importId: string; from: number } // gallery import: from = first item of the download chunk (src/ingest/gallery.ts)
+  | ({ type: "e621_sync" } & E621Job) // e621 favorites and upvotes (src/e621.ts)
   | { type: "analysis_report"; analysisId: string; msgId?: number } // bot report of an embedding analysis
   | { type: "pair_report"; analysisId: string; msgId?: number; only?: number } // to both members of the pair, or only to one
   | SearchJob;
@@ -55,6 +59,10 @@ async function run(env: Env, job: Job) {
       return purgeStage(env, job.userId, job.before);
     case "link":
       return linkJob(env, job.userId, job.url, job.via);
+    case "gallery":
+      return galleryJob(env, job.importId, job.from);
+    case "e621_sync":
+      return e621Sync(env, job);
     case "thumb":
       return thumbStage(env, job.memeId);
   }
@@ -73,7 +81,7 @@ async function fail(env: Env, job: Job, error: unknown) {
   if (job.type === "batch_poll" || job.type === "hash" || job.type === "rekey") return; // cron runs them again
   if (job.type === "thumb") return env.JOBS.send({ type: "embed", memeId: job.memeId }); // goes on without a preview
   if (job.type === "analysis_report" || job.type === "pair_report") return reportFailed(env, job.analysisId, error);
-  if (job.type === "purge" || job.type === "post" || job.type === "link") return; // idempotent: the dead letter queue keeps it for a manual re-run
+  if (job.type === "purge" || job.type === "post" || job.type === "link" || job.type === "gallery" || job.type === "e621_sync") return; // idempotent: the dead letter queue keeps it for a manual re-run
   return failIngest(env, job.memeId, error, job.gen);
 }
 

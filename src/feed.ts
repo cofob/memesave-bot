@@ -1,6 +1,6 @@
 import { ALBUM_FIRST, type Meme } from "./db";
 
-export const FEED_MODES = ["new", "old", "random", "favorites", "forgotten", "time", "unseen"] as const;
+export const FEED_MODES = ["new", "old", "random", "favorites", "forgotten", "time", "unseen", "porn"] as const;
 export type FeedMode = (typeof FEED_MODES)[number];
 /**
  * seed: the order of the "random" mode (1…2147483646); for "unseen", the start of the feed session (unix time): memes
@@ -38,6 +38,8 @@ function mode(q: FeedQuery): { where?: string; params?: unknown[]; order: string
         params: [q.seed],
         order: `${DATE} DESC`,
       };
+    case "porn":
+      return { where: "porn = 1", order: `${DATE} DESC` };
   }
 }
 
@@ -53,7 +55,7 @@ export function startSeed(mode: FeedMode) {
 export async function feedPage(db: D1Database, userId: number | number[], q: FeedQuery) {
   const m = mode(q);
   const users = [userId].flat();
-  const where = [`user_id IN (${users.map(() => "?").join(",")})`, "status != 'failed'", ALBUM_FIRST, ...(m.where ? [m.where] : []), ...(q.hidePorn ? ["porn = 0"] : [])];
+  const where = [`user_id IN (${users.map(() => "?").join(",")})`, "status != 'failed'", ALBUM_FIRST, ...(m.where ? [m.where] : []), ...(q.hidePorn && q.mode !== "porn" ? ["porn = 0"] : [])];
   const { results } = await db
     .prepare(`SELECT *, ${USES} AS uses, ${DATE} AS date FROM memes WHERE ${where.join(" AND ")} ORDER BY ${m.order} LIMIT ? OFFSET ?`)
     .bind(...users, ...(m.params ?? []), ...(m.orderParams ?? []), q.limit + 1, q.offset)

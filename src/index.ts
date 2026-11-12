@@ -8,6 +8,7 @@ import { expireExports, handleExport } from "./export";
 import { expireAnalyses, handleAnalysis } from "./analysis";
 import { expireInvites } from "./pairs";
 import { queueHashBackfill } from "./ingest/embed";
+import { queueE621 } from "./e621";
 import { queueRekey } from "./rekey";
 import { handleBatch, type Job } from "./queue";
 import { backToBot, oauthCallback } from "./userkey";
@@ -78,6 +79,7 @@ export default {
     await expireInvites(env.DB);
     await queueHashBackfill(env);
     await queueRekey(env);
+    await queueE621(env);
     await billingNotices(env);
     if (await env.DB.prepare("SELECT 1 FROM imports WHERE status = 'submitted' LIMIT 1").first()) await env.JOBS.send({ type: "batch_poll" });
   },

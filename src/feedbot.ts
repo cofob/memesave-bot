@@ -9,7 +9,7 @@ import { EMOJI, esc, t, type Key, type Lang } from "./i18n";
 import { ownerOf, pairFeed, pairPage, type PairMode } from "./pairfeed";
 
 // Callback data: f:<mode code>:<seed base36>:<offset>. A negative offset: the "time" mode above its point (newer memes).
-const CODES: Record<FeedMode, string> = { new: "n", old: "o", random: "r", favorites: "f", forgotten: "g", time: "t", unseen: "u" };
+const CODES: Record<FeedMode, string> = { new: "n", old: "o", random: "r", favorites: "f", forgotten: "g", time: "t", unseen: "u", porn: "p" };
 const BY_CODE = Object.fromEntries(Object.entries(CODES).map(([mode, code]) => [code, mode as FeedMode]));
 const data = (mode: FeedMode, seed: number, offset: number) => `f:${CODES[mode]}:${seed.toString(36)}:${offset}`;
 
@@ -27,16 +27,19 @@ export function feedKeyboard(env: Env, lang: Lang, mode: FeedMode, seed: number,
   return { inline_keyboard: [nav, FEED_MODES.slice(0, 4).map(button), FEED_MODES.slice(4).map(button), [app]].filter((row) => row.length) };
 }
 
-export function feedCaption(lang: Lang, m: FeedMeme, offset: number, album?: number) {
+export function feedCaption(lang: Lang, m: FeedMeme, offset: number, album?: number, comic = false) {
   return [
     m.title ? `<b>${esc(m.title)}</b>` : null,
     `${offset >= 0 ? `#${offset + 1} · ` : ""}${new Date(m.date * 1000).toLocaleDateString(lang, { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}`,
     m.uses ? t(lang, "feed_uses", { n: m.uses }) : null,
-    album && album > 1 ? t(lang, "feed_album", { n: album }) : null,
+    album && album > 1 ? t(lang, comic ? "feed_comic" : "feed_album", { n: album }) : null,
   ]
     .filter(Boolean)
     .join("\n");
 }
+
+const isComic = async (db: D1Database, memeId: string) =>
+  !!(await db.prepare("SELECT 1 FROM post_items i JOIN posts p ON p.id = i.post_id WHERE i.meme_id = ? AND p.media_group_id IS NOT NULL AND p.layout = 'comic'").bind(memeId).first());
 
 /** Shows the feed meme at `offset`: a new message, or the media of `messageId` replaced. False when there is none. */
 export async function showFeed(env: Env, api: Api, chatId: number, user: Pick<User, "id" | "hide_porn">, lang: Lang, mode: FeedMode, seed: number, offset: number, messageId?: number) {
@@ -47,7 +50,7 @@ export async function showFeed(env: Env, api: Api, chatId: number, user: Pick<Us
   if (!m) return false;
   const [more, back] = [!!(await at(offset + 1)), offset > 0 || !!(await at(offset - 1))];
   const other = {
-    caption: feedCaption(lang, m, offset, (await albumSizes(env.DB, [m.id])).get(m.id)),
+    caption: feedCaption(lang, m, offset, (await albumSizes(env.DB, [m.id])).get(m.id), await isComic(env.DB, m.id)),
     parse_mode: "HTML" as const,
     reply_markup: feedKeyboard(env, lang, mode, seed, offset, more, back),
   };
@@ -103,7 +106,7 @@ export function registerFeed<C extends Ctx>(bot: Composer<C>, env: Env) {
     const mode = feedMode(ctx.match.trim()) ?? "new";
     if (!(await showFeed(env, ctx.api, ctx.chat.id, ctx.user, ctx.lang, mode, startSeed(mode), 0))) await ctx.reply(t(ctx.lang, "feed_empty"));
   });
-  bot.callbackQuery(/^f:([norfgtu]):([0-9a-z]+):(-?\d+)$/, async (ctx) => {
+  bot.callbackQuery(/^f:([norfgtup]):([0-9a-z]+):(-?\d+)$/, async (ctx) => {
     const [, code, seed, offset] = ctx.match;
     const msg = ctx.callbackQuery.message;
     const shown = !!msg && (await showFeed(env, ctx.api, msg.chat.id, ctx.user, ctx.lang, BY_CODE[code], parseInt(seed, 36), Number(offset), msg.message_id));

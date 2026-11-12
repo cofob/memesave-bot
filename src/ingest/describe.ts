@@ -1,5 +1,5 @@
 import { botApi } from "../botapi";
-import { DEFAULT_TIER, DESCRIBE_FALLBACKS, DESCRIBE_MODELS, DESCRIBE_VIDEO_FALLBACKS, MODELS, VIDEO_INLINE_MAX_BYTES } from "../config";
+import { DEFAULT_TIER, DESCRIBE_FALLBACKS, DESCRIBE_MODELS, DESCRIBE_UNCENSORED, DESCRIBE_VIDEO_FALLBACKS, MODELS, VIDEO_INLINE_MAX_BYTES } from "../config";
 import { getMeme, getUser, setStatus, userLang, type Meme } from "../db";
 import { ALBUM_WAIT, albumPhotos, queuePosts } from "../channels";
 import type { Env } from "../env";
@@ -23,6 +23,15 @@ export interface Description {
   porn: boolean; // sexual content in the picture or frames; false when not set
 }
 
+/** Metadata of the import source, kept in memes.source_meta: its tags join the meme tags, `porn` forces the porn flag. */
+export interface SourceMeta {
+  site: string;
+  tags: string[];
+  data: unknown;
+  porn?: boolean;
+}
+const parseMeta = (m: Partial<Pick<Meme, "source_meta">>) => (m.source_meta ? (JSON.parse(m.source_meta) as SourceMeta) : null);
+
 const str = { type: "string" };
 const strs = { type: "array", items: str };
 const SCHEMA = {
@@ -37,7 +46,7 @@ const SCHEMA = {
     description: { ...str, description: "Detailed visual description in English" },
     meme_context: { ...str, description: "Template/format, origin, source, the joke (English)" },
     cultural_meaning: { ...str, description: "How and when people use it, emotion, community/region (English)" },
-    tags: { ...strs, description: "8-25 lowercase tags in English and in the meme language" },
+    tags: { ...strs, description: "8-25 lowercase tags in English and in the meme language; sexual content: e621-style tags (rule 7)" },
     search_phrases: { ...strs, description: "5-15 phrases people would type to find it, English and meme language" },
     porn: {
       type: "boolean",
@@ -46,6 +55,7 @@ const SCHEMA = {
     },
   },
 };
+const COMIC_PAGES = 10; // a comic is described from its first pages; the later pages copy page 1
 const ALBUM_SCHEMA = { type: "object", additionalProperties: false, required: ["items"], properties: { items: { type: "array", items: SCHEMA } } };
 
 const PROMPT = `You index memes for a private meme search engine. Look at the attached image or video carefully.
@@ -58,6 +68,17 @@ const PROMPT = `You index memes for a private meme search engine. Look at the at
 5. Never invent facts. If something is unknown, say so briefly. Do not censor slang or swearing that people would search for.
 6. description, meme_context and cultural_meaning are in English. tags and search_phrases are in English AND in the meme's own language (if different).
    Keep phrases that people would type to find this meme.
+7. Sexual content (porn: true) is the user's own adult collection: describe the scene plainly and in full, without euphemisms or moralizing:
+   participants (number, apparent gender, species for furry art, art style), acts and positions, visible body parts, clothing, setting,
+   fetishes, and the artist or characters if known. Use the words people search with.
+   tags then follow e621 tagging: 25-60 real e621 tag names, lowercase, underscores for spaces, no namespaces, e.g.
+   count (solo, duo, group), gender (male, female, intersex, male/female, male/male), form (anthro, feral, human, humanoid),
+   species (canid, fox, wolf, felid, dragon, equid), body (breasts, penis, pussy, anus, muscular, overweight), nudity and clothing
+   (nude, partially_clothed, lingerie), acts and positions (sex, oral, fellatio, penetration, vaginal_penetration, anal_penetration,
+   masturbation, from_behind_position, missionary_position), fluids (cum, cum_inside), kinks (bondage, bdsm, feet, size_difference),
+   art (digital_media_(artwork), comic, monochrome, 3d_(artwork)), the artist and characters as e621 names (e.g. character_name).
+   Add a few tags in the meme language too.
+   If anyone looks like a minor, do not describe sexual details: describe the image neutrally.
 Reply with one JSON object only, with exactly these keys:
 ${Object.entries(SCHEMA.properties)
   .map(([k, v]) => `- ${k}: ${v.description}`)
@@ -121,11 +142,12 @@ export async function topTags(db: D1Database, userId: number, n = 30): Promise<s
   return [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([tag]) => tag);
 }
 
-async function mediaPart(env: Env, m: Meme): Promise<Part[]> {
+/** The picture or video of the meme; `frame`: the preview frame of a video (for models without video input). */
+async function mediaPart(env: Env, m: Meme, frame = false): Promise<Part[]> {
   if (m.kind === "photo") {
     return [{ type: "image_url", image_url: { url: toDataUrl(await memeMedia(env, m, "file")) } }];
   }
-  if ((m.file_size ?? Infinity) <= VIDEO_INLINE_MAX_BYTES) {
+  if (!frame && (m.file_size ?? Infinity) <= VIDEO_INLINE_MAX_BYTES) {
     const media = await memeMedia(env, m, "file");
     return [{ type: "video_url", video_url: { url: toDataUrl(media) } }];
   }
@@ -143,18 +165,39 @@ export type Tier = keyof typeof DESCRIBE_MODELS;
 /** The owner's describe quality tier. */
 export const userTier = async (db: D1Database, userId: number): Promise<Tier> => (await getUser(db, userId))?.describe_tier ?? DEFAULT_TIER;
 
-/** Models to try in order: the tier's model, then cheaper ones when a provider blocks the photo. Videos have one. */
-export const describeModels = (m: Pick<Meme, "kind">, tier: Tier) =>
-  m.kind === "photo" ? [...new Set([DESCRIBE_MODELS[tier], ...DESCRIBE_FALLBACKS])] : [MODELS.describeVideo, ...DESCRIBE_VIDEO_FALLBACKS];
+/**
+ * Models to try in order: the tier's model, then other ones when a provider blocks or refuses the meme; the uncensored one is last.
+ * It has no video input: a video gets it only when it has a preview frame.
+ */
+export const describeModels = (m: Pick<Meme, "kind" | "r2_preview" | "preview_file_id">, tier: Tier) =>
+  m.kind === "photo"
+    ? [...new Set([DESCRIBE_MODELS[tier], ...DESCRIBE_FALLBACKS, DESCRIBE_UNCENSORED])]
+    : [MODELS.describeVideo, ...DESCRIBE_VIDEO_FALLBACKS, ...(m.r2_preview || m.preview_file_id ? [DESCRIBE_UNCENSORED] : [])];
 
-/** A provider's safety filter refused the request (an error, or an empty answer). */
-export const isBlocked = (e: unknown) => /SAFETY|content.?(policy|filter)|PROHIBITED|blocked|moderation|empty answer/i.test(String(e));
+/** A provider's safety filter blocked the request (an error, an empty answer) or the model refused it. */
+export const isBlocked = (e: unknown) => /SAFETY|content.?(policy|filter)|PROHIBITED|blocked|moderation|empty answer|refused/i.test(String(e));
+
+const REFUSAL = /\bI(?:['’]m| am)? (?:can['’]?t|cannot|won['’]?t|unable to|not able to) [^.]{0,40}?\b(?:describe|assist|comply|provide|help (?:you|with))|against my (?:guidelines|policy|policies)/i;
+/** A short text that declines the request, like "I can't describe this image". */
+export const isRefusal = (s: string) => s.length < 400 && REFUSAL.test(s);
+
+/** Descriptions of a model answer (`n` for an album); throws "refused" (see isBlocked) when the model declined. */
+export function parseAnswer(content: string, refusal: string | null | undefined, n = 1): Description[] {
+  const text = content.trim();
+  if (refusal || (!text.includes("{") && isRefusal(text))) throw new Error(`refused: ${refusal || text.slice(0, 200)}`);
+  const raw = parseJson(text);
+  const ds = n > 1 ? toDescriptions(raw, text, n) : [toDescription(raw, text)];
+  if (ds.some((d) => isRefusal(d.title) || isRefusal(d.description))) throw new Error(`refused: ${text.slice(0, 200)}`);
+  return ds;
+}
 /** OpenRouter or the provider failed after the retry: another model may work. */
 export const isTransient = (e: unknown) => /OpenRouter \S+ (408|429|5\d\d) |fetch failed/i.test(String(e));
 
 export function describeRequest(m: Meme, usedTags: string[], media: Part[], tier: Tier = DEFAULT_TIER) {
+  const meta = parseMeta(m);
   const context = [
     `Meme kind: ${m.kind}. User caption: ${JSON.stringify(m.caption ?? "")}. Forwarded from: ${JSON.stringify(m.source ?? "")}.`,
+    meta ? `Source metadata (${meta.site}): tags: ${meta.tags.join(", ")}; ${JSON.stringify(meta.data)}`.slice(0, 3000) : "",
     usedTags.length ? `Most used tags in this collection (reuse them when they fit, add new ones when needed): ${usedTags.join(", ")}` : "",
   ]
     .filter(Boolean)
@@ -181,8 +224,9 @@ const DESCRIPTION = ["title", "ocr_text", "speech_text", "language", "descriptio
  * Saves description fields (FTS updates by trigger) of this processing run; fields the user edited (`edits`) stay.
  * The meme stays 'describing' until finishStage.
  */
-export const saveDescription = (db: D1Database, m: Pick<Meme, "id" | "gen">, d: Description, status: Meme["status"] = "describing") =>
-  db
+export const saveDescription = (db: D1Database, m: Pick<Meme, "id" | "gen"> & Partial<Pick<Meme, "source_meta">>, d: Description, status: Meme["status"] = "describing") => {
+  const meta = parseMeta(m); // the tags and porn flag of the source always count
+  return db
     .prepare(
       `UPDATE memes SET ${DESCRIPTION.map((k) => `${k} = COALESCE(json_extract(edits, '$.${k}'), ?)`).join(", ")},
         updated_at = unixepoch() WHERE id = ? AND status = ? AND gen = ?`,
@@ -195,13 +239,14 @@ export const saveDescription = (db: D1Database, m: Pick<Meme, "id" | "gen">, d: 
       d.description,
       d.meme_context,
       d.cultural_meaning,
-      d.tags.join("\n"),
+      [...new Set([...d.tags, ...(meta?.tags ?? []).map((x) => x.toLowerCase().trim())].filter(Boolean))].join("\n"),
       d.search_phrases.join("\n"),
-      d.porn ? 1 : 0,
+      d.porn || meta?.porn ? 1 : 0,
       m.id,
       status,
       m.gen,
     );
+};
 
 const fromRow = (m: Meme): Description => ({
   title: m.title ?? "",
@@ -233,17 +278,26 @@ export async function describeStage(env: Env, memeId: string, from = 0, single =
       await env.JOBS.send({ type: "describe", memeId, gen, from }, { delaySeconds: ALBUM_WAIT });
       return;
     }
-    const pending = album.filter((a) => a.status === "describing" && a.title === null);
-    if (pending.length > 1 && pending[0].id !== memeId) return; // the first pending photo describes the album
-    const group = pending.length > 1 ? pending : [m];
-    try {
-      await describeGroup(env, m, group, from);
-    } catch (e) {
-      if (group.length === 1) throw e;
-      // The album request failed: each photo is described alone.
-      console.warn("album describe failed, one by one", memeId, String(e).slice(0, 200));
-      await Promise.all(group.map((g) => env.JOBS.send({ type: "describe", memeId: g.id, gen: g.gen, single: true })));
-      return;
+    const head = album[0]?.album_layout === "comic" ? album.slice(0, COMIC_PAGES) : album;
+    const donor = head.find((a) => a.title !== null);
+    const later = album.length > 0 && !head.some((a) => a.id === memeId);
+    // A later comic page copies the first described page; while the first pages work, their finish copies it.
+    // When all of them failed, it is described alone.
+    if (later && donor) await saveDescription(env.DB, m, fromRow(donor)).run();
+    else if (later && head.some((a) => a.status !== "failed")) return;
+    else {
+      const pending = head.filter((a) => a.status === "describing" && a.title === null);
+      if (pending.length > 1 && pending[0].id !== memeId) return; // the first pending photo describes the album
+      const group = pending.length > 1 ? pending : [m];
+      try {
+        await describeGroup(env, m, group, from);
+      } catch (e) {
+        if (group.length === 1) throw e;
+        // The album request failed: each photo is described alone.
+        console.warn("album describe failed, one by one", memeId, String(e).slice(0, 200));
+        await Promise.all(group.map((g) => env.JOBS.send({ type: "describe", memeId: g.id, gen: g.gen, single: true })));
+        return;
+      }
     }
   }
   await finishStage(env, memeId, gen);
@@ -253,23 +307,27 @@ export async function describeStage(env: Env, memeId: string, from = 0, single =
 async function describeGroup(env: Env, m: Meme, group: Meme[], from: number) {
   const memeId = m.id;
   const tier = await userTier(env.DB, m.user_id);
-  const media = group.length > 1
-    ? (await Promise.all(group.map(async (g, i) => [{ type: "text" as const, text: `Image ${i + 1}. User caption: ${JSON.stringify(g.caption ?? "")}.` }, ...(await mediaPart(env, g))]))).flat()
-    : await mediaPart(env, m);
-  const albumText = `This is an album of ${group.length} images sent together; use them as context for each other. Reply {"items": [...]} with one object per image, in order.`;
-  const req = describeRequest(m, await topTags(env.DB, m.user_id), group.length > 1 ? [{ type: "text", text: albumText }, ...media] : media, tier);
-  const body = {
-    ...req,
-    tools: WEB_TOOLS,
-    ...(group.length > 1 && { response_format: { type: "json_schema", json_schema: { name: "album", strict: true, schema: ALBUM_SCHEMA } } }),
+  const tags = await topTags(env.DB, m.user_id);
+  const build = async (frame: boolean) => {
+    const media = group.length > 1
+      ? (await Promise.all(group.map(async (g, i) => [{ type: "text" as const, text: `Image ${i + 1}. User caption: ${JSON.stringify(g.caption ?? "")}.` }, ...(await mediaPart(env, g))]))).flat()
+      : await mediaPart(env, m, frame);
+    const albumText = `This is an album of ${group.length} images sent together; use them as context for each other. Reply {"items": [...]} with one object per image, in order.`;
+    return {
+      ...describeRequest(m, tags, group.length > 1 ? [{ type: "text", text: albumText }, ...media] : media, tier),
+      tools: WEB_TOOLS,
+      ...(group.length > 1 && { response_format: { type: "json_schema", json_schema: { name: "album", strict: true, schema: ALBUM_SCHEMA } } }),
+    };
   };
+  let body = await build(false);
   const models = describeModels(m, tier);
   for (let i = Math.min(from, models.length - 1); ; i++) {
     try {
+      // The uncensored model has no video input: a video goes to it as its preview frame.
+      if (m.kind !== "photo" && models[i] === DESCRIBE_UNCENSORED) body = await build(true);
       const msg = await chat(env, { ...body, model: models[i] }, { userId: m.user_id, memeId, kind: "describe" });
       if (!msg.content?.trim()) throw new Error(`${models[i]}: empty answer`);
-      const raw = parseJson(msg.content);
-      const ds = group.length > 1 ? toDescriptions(raw, msg.content, group.length) : [toDescription(raw, msg.content)];
+      const ds = parseAnswer(msg.content, msg.refusal, group.length);
       await env.DB.batch(group.map((g, j) => saveDescription(env.DB, g, ds[j])));
       await Promise.all(group.slice(1).map((g) => env.JOBS.send({ type: "finish", memeId: g.id, gen: g.gen })));
       break;
@@ -301,6 +359,16 @@ export async function finishStage(env: Env, memeId: string, gen = 0) {
   const state = { s: "r", t: d.title.slice(0, 120), g: d.tags.slice(0, 8).map((x) => x.slice(0, 24)) };
   await editStatus(env, m, t(lang, "saved", { title: esc(d.title), tags }) + (await firstMemeTip(env, m, lang)), state);
   await queuePosts(env, memeId);
+  await copyToComicPages(env, m, d);
+}
+
+/** The first described page of a comic gives its description to the later pages that wait for it. */
+async function copyToComicPages(env: Env, m: Meme, d: Description) {
+  const album = await albumPhotos(env.DB, m.id);
+  if (album[0]?.album_layout !== "comic" || album.slice(0, COMIC_PAGES).find((a) => a.title !== null)?.id !== m.id) return;
+  const waiting = album.slice(COMIC_PAGES).filter((a) => a.status === "describing" && a.title === null);
+  await env.DB.batch(waiting.map((a) => saveDescription(env.DB, a, d)));
+  await Promise.all(waiting.map((a) => env.JOBS.send({ type: "finish", memeId: a.id, gen: a.gen })));
 }
 
 /** A search hint under the first meme a user saves from the chat. */

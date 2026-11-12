@@ -89,7 +89,7 @@ export async function cobalt(env: Env, url: string): Promise<Fetched> {
 }
 
 /** The user already has this link (dedupe before the download). */
-const linkSaved = (db: D1Database, userId: number, url: string) =>
+export const linkSaved = (db: D1Database, userId: number, url: string) =>
   db.prepare("SELECT 1 FROM memes WHERE user_id = ? AND status != 'failed' AND source = ?").bind(userId, url).first();
 
 /** Sends the media to a chat: one message, or albums of up to 10 (albums have no GIFs: they go as videos). */

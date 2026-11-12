@@ -18,7 +18,7 @@ export interface ToolCall {
 }
 
 // reasoning_details must be sent back unchanged for tool calling with reasoning models.
-export type AssistantMessage = { role: "assistant"; content: string | null; tool_calls?: ToolCall[]; reasoning_details?: unknown[] };
+export type AssistantMessage = { role: "assistant"; content: string | null; refusal?: string | null; tool_calls?: ToolCall[]; reasoning_details?: unknown[] };
 
 export type ChatMessage =
   | { role: "system" | "user"; content: string | Part[] }

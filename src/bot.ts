@@ -10,6 +10,7 @@ import { recordUse, type User } from "./db";
 import type { Env } from "./env";
 import { langOf, t, type Lang } from "./i18n";
 import { receiveMedia } from "./ingest/receive";
+import { gallerySource, startGallery } from "./ingest/gallery";
 import { findLink, importLink } from "./ingest/link";
 import { handleInline } from "./search/inline";
 import { allowAi, registerBilling, registerPayments } from "./billingbot";
@@ -77,6 +78,10 @@ export function createBot(env: Env) {
     if (await captionReply(env, ctx)) return;
     if (!(await allowAi(env, ctx))) return;
     const link = findLink(text);
+    if (link && gallerySource(link)) {
+      await ctx.replyWithChatAction("upload_photo").catch(() => {});
+      return startGallery(env, ctx.user.id, link, "bot", ctx.chat.id);
+    }
     if (link) return importLink(ctx, env, link);
     const placeholder = await ctx.reply(t(ctx.lang, "searching"), html);
     await env.JOBS.send({

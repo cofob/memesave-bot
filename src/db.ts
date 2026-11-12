@@ -39,6 +39,7 @@ export interface Meme {
   duration: number | null;
   caption: string | null;
   source: string | null;
+  source_meta: string | null; // JSON SourceMeta of an import source
   status: "embedding" | "describing" | "ready" | "failed";
   status_msg_id: number | null;
   title: string | null;

@@ -77,6 +77,14 @@ describe("feed modes", () => {
     expect(await ids(94, "time", { seed: point, newer: true, offset: 1 })).toEqual(["t4"]);
   });
 
+  it("porn: only porn memes, also when they are hidden", async () => {
+    await add(89, "pn", 2);
+    await add(89, "px", 1);
+    await e.DB.prepare("UPDATE memes SET porn = 1 WHERE id = 'px'").run();
+    expect(await ids(89, "porn")).toEqual(["px"]);
+    expect((await feedPage(e.DB, 89, { mode: "porn", seed: 1, offset: 0, limit: 50, hidePorn: true })).memes.map((m) => m.id)).toEqual(["px"]);
+  });
+
   it("unseen: memes seen before the session go away, seen ones keep their place in it", async () => {
     await add(95, "s1", 1);
     await add(95, "s2", 2);
@@ -169,6 +177,7 @@ describe("hide porn setting", () => {
     expect(await listed("memes")).toEqual(["clean"]);
     expect(await listed("index")).toEqual(["clean"]);
     expect(await listed("feed?mode=new")).toEqual(["clean"]);
+    expect(await listed("feed?mode=porn")).toEqual(["nsfw"]); // the porn mode ignores the setting
     // the porn filter overrides the setting
     expect(await listed("memes?porn=yes")).toEqual(["nsfw"]);
     expect(await listed("memes?porn=yes,no")).toEqual(["nsfw", "clean"]);

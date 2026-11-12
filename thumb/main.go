@@ -1,5 +1,5 @@
 // HTTP service of the Thumbnailer container: POST / with a video body answers a JPEG preview frame
-// and the video size in X-Width, X-Height and X-Duration (seconds). POST /clip: see clip.go.
+// and the video size in X-Width, X-Height and X-Duration (seconds). POST /clip: see clip.go. POST /fetch: see fetch.go.
 package main
 
 import (
@@ -18,6 +18,7 @@ import (
 
 func main() {
 	http.HandleFunc("POST /clip", clip)
+	http.HandleFunc("POST /fetch", fetch)
 	http.HandleFunc("POST /", thumb)
 	srv := &http.Server{Addr: ":8080"}
 	go func() {

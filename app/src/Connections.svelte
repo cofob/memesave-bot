@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { Button, Heading, Inline, Stack, Switch, Text, TextField } from "@cofob2/design-system-svelte";
-  import { api, type ApiToken, type Connection } from "./api";
+  import { Alert, Button, Heading, Inline, Stack, Switch, Text, TextField } from "@cofob2/design-system-svelte";
+  import { api, ApiError, type ApiToken, type Connection, type E621Status } from "./api";
   import { fill, s } from "./strings";
 
   let items = $state<Connection[]>([]);
@@ -27,6 +27,24 @@
     tokenName = "";
     await loadTokens();
   };
+
+  let e621 = $state<E621Status>({ connected: false });
+  let e621User = $state("");
+  let e621Key = $state("");
+  let e621Msg = $state("");
+  const loadE621 = async () => (e621 = await api.e621());
+  loadE621().catch(() => {});
+  const connectE621 = async () => {
+    e621Msg = "";
+    try {
+      await api.connectE621(e621User.trim(), e621Key.trim());
+      e621Key = "";
+      await loadE621();
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 402)) e621Msg = e instanceof ApiError && e.status === 400 ? s.e621Invalid : s.e621Failed;
+    }
+  };
+  const e621Error: Record<string, string> = { unauthorized: s.e621Err_unauthorized, "payment required": s.e621Err_payment_required, "storage full": s.e621Err_storage_full };
 </script>
 
 <Heading as="h3" size="sm">{s.connTitle}</Heading>
@@ -69,3 +87,19 @@
     <Inline gap="sm"><Button size="sm" variant="ghost" onclick={() => api.deleteToken(tk.id).then(loadTokens)}>{s.tokensDelete}</Button></Inline>
   </Stack>
 {/each}
+
+<Heading as="h3" size="sm">{s.e621Title}</Heading>
+<Text tone="muted" size="sm">{s.e621Hint}</Text>
+{#if e621.connected}
+  <Text size="sm">{fill(e621.backfill_done ? s.e621Synced : s.e621Importing, { user: e621.username ?? "", n: String(e621.imported ?? 0) })}</Text>
+  {#if e621.error}<Alert tone="danger" title={e621Error[e621.error] ?? e621.error} />{/if}
+  <Inline gap="sm"><Button size="sm" variant="ghost" onclick={() => api.disconnectE621().then(loadE621)}>{s.e621Disconnect}</Button></Inline>
+{/if}
+{#if !e621.connected || e621.error === "unauthorized"}
+  <Inline gap="sm" wrap>
+    <TextField label={s.e621User} bind:value={e621User} size="sm" />
+    <TextField label={s.e621Key} bind:value={e621Key} type="password" size="sm" />
+    <Button size="sm" variant="secondary" onclick={connectE621}>{s.e621Connect}</Button>
+  </Inline>
+  {#if e621Msg}<Alert tone="danger" title={e621Msg} />{/if}
+{/if}

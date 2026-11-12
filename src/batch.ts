@@ -3,7 +3,7 @@ import { DESCRIBE_MODELS, MODELS } from "./config";
 import { getMeme, userLang, type Meme } from "./db";
 import type { Env } from "./env";
 import { esc, t, usd, type Key } from "./i18n";
-import { describeRequest, isBlocked, parseJson, saveDescription, toDescription, topTags, userTier } from "./ingest/describe";
+import { describeRequest, isBlocked, parseAnswer, saveDescription, topTags, userTier } from "./ingest/describe";
 import { hasExt, memeMedia, signedMediaUrl } from "./media";
 import { presignedR2Url } from "./presign";
 import { rekeyStage } from "./rekey";
@@ -312,12 +312,12 @@ async function pollImport(env: Env, imp: Import) {
         continue;
       }
       const response = byId.get(m.id)?.response;
-      const content: string = (response?.body ?? response)?.choices?.[0]?.message?.content ?? ""; // OpenRouter wraps it in "body"
+      const msg = (response?.body ?? response)?.choices?.[0]?.message; // OpenRouter wraps it in "body"
       try {
-        updates.push(saveDescription(db, m, toDescription(parseJson(content), content)));
+        updates.push(saveDescription(db, m, parseAnswer(msg?.content ?? "", msg?.refusal)[0]));
         saved.push(m);
-      } catch {
-        retry.push(m);
+      } catch (e) {
+        (isBlocked(e) ? blocked : retry).push(m); // a refusal would come again
       }
     }
     for (let i = 0; i < updates.length; i += 100) await db.batch(updates.slice(i, i + 100));

@@ -2,7 +2,8 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { addToPost } from "../src/channels";
 import type { Env } from "../src/env";
-import { describeStage, docText, isTransient, parseJson, toDescription, toDescriptions, topTags, type Description } from "../src/ingest/describe";
+import { DESCRIBE_UNCENSORED } from "../src/config";
+import { describeStage, describeModels, docText, isBlocked, isRefusal, isTransient, parseJson, toDescription, toDescriptions, topTags, type Description } from "../src/ingest/describe";
 
 describe("parseJson", () => {
   it("parses plain, fenced and prose-wrapped JSON", () => {
@@ -99,5 +100,77 @@ describe("isTransient", () => {
     expect(isTransient(new Error('OpenRouter /chat/completions 500 (global key): {"message":"Internal Server Error"}'))).toBe(true);
     expect(isTransient(new Error("OpenRouter /chat/completions 429 (user key): {}"))).toBe(true);
     expect(isTransient(new Error("OpenRouter /chat/completions 400 (user key): {}"))).toBe(false);
+  });
+});
+
+describe("refusals", () => {
+  const VECTORS = { upsert: async () => ({ mutationId: "m" }) };
+  const e = { ...env, VECTORS, PUBLIC_URL: "https://m.example", JOBS: { send: async () => {} } } as unknown as Env;
+  const calls: { model: string; content: { type: string }[] }[] = [];
+  const answers: Record<string, unknown>[] = [];
+  const add = async (id: string, kind: "photo" | "video", preview = false) => {
+    await env.MEDIA.put(`u/90/${id}`, "DATA", { httpMetadata: { contentType: kind === "photo" ? "image/jpeg" : "video/mp4" } });
+    if (preview) await env.MEDIA.put(`u/90/${id}.jpg`, "FRAME", { httpMetadata: { contentType: "image/jpeg" } });
+    await env.DB.prepare("INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, r2_file, r2_preview, file_size, status) VALUES (?, 90, ?, 'f', ?, ?, ?, 100, 'describing')")
+      .bind(id, kind, id, `u/90/${id}`, preview ? `u/90/${id}.jpg` : null)
+      .run();
+  };
+  const title = (id: string) => env.DB.prepare("SELECT status, title FROM memes WHERE id = ?").bind(id).first();
+  const mock = (answer: (n: number) => Record<string, unknown>) =>
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url).endsWith("/embeddings")) return Response.json({ data: [{ index: 0, embedding: [1, 0] }], usage: { cost: 0 } });
+      const body = JSON.parse(String(init!.body));
+      calls.push({ model: body.model, content: body.messages[1].content });
+      return Response.json({ choices: [{ message: answer(calls.length) }], usage: { cost: 0 } });
+    });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    calls.length = 0;
+    answers.length = 0;
+  });
+
+  it("detects refusal sentences, not memes about them", () => {
+    expect(isRefusal("I'm sorry, but I can't help with that request.")).toBe(true);
+    expect(isRefusal("I cannot describe this image.")).toBe(true);
+    expect(isRefusal("This goes against my guidelines.")).toBe(true);
+    expect(isRefusal("I can't help falling in love")).toBe(false);
+    expect(isRefusal("A cat on a sofa. " + "x".repeat(400))).toBe(false);
+    expect(isBlocked(new Error("refused: no"))).toBe(true);
+  });
+
+  it("goes to the next model on a prose or JSON refusal, the uncensored model is the last", async () => {
+    await add("rf1", "photo");
+    mock((n) =>
+      n === 1 ? { content: "I'm sorry, but I can't assist with describing this image." }
+        : n === 2 ? { content: JSON.stringify({ title: "Refused", description: "I cannot describe this image." }) }
+        : { content: JSON.stringify({ title: "Cat" }) },
+    );
+    await describeStage(e, "rf1");
+    const models = describeModels({ kind: "photo", r2_preview: null, preview_file_id: null }, "medium");
+    expect(models.at(-1)).toBe(DESCRIBE_UNCENSORED);
+    expect(calls.map((c) => c.model)).toEqual(models);
+    expect(await title("rf1")).toEqual({ status: "ready", title: "Cat" });
+  });
+
+  it("treats the refusal field as a refusal", async () => {
+    await add("rf2", "photo");
+    mock((n) => (n === 1 ? { content: JSON.stringify({ title: "Cat" }), refusal: "no" } : { content: JSON.stringify({ title: "Dog" }) }));
+    await describeStage(e, "rf2");
+    expect(calls).toHaveLength(2);
+    expect(await title("rf2")).toEqual({ status: "ready", title: "Dog" });
+  });
+
+  it("sends the preview frame of a video refused by all video models to the uncensored model", async () => {
+    await add("rf3", "video", true);
+    mock((n) => (n <= 3 ? { content: "I can't help with that." } : { content: JSON.stringify({ title: "Clip" }) }));
+    await describeStage(e, "rf3");
+    expect(calls.map((c) => c.model).at(-1)).toBe(DESCRIBE_UNCENSORED);
+    expect(calls[0].content.map((p) => p.type)).toContain("video_url");
+    expect(calls.at(-1)!.content.map((p) => p.type)).toEqual(["text", "text", "image_url"]);
+    expect(await title("rf3")).toEqual({ status: "ready", title: "Clip" });
+  });
+
+  it("skips the uncensored model for a video without a preview", () => {
+    expect(describeModels({ kind: "video", r2_preview: null, preview_file_id: null }, "medium")).not.toContain(DESCRIBE_UNCENSORED);
   });
 });

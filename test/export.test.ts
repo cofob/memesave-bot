@@ -108,7 +108,7 @@ describe("data export", () => {
     await e.DB.prepare("UPDATE zip_imports SET status = 'running' WHERE id = ?").bind(zip.id).run();
     const vec = Array(EMBED_DIMS).fill(0.1);
     const items = [
-      { sha256: "a".repeat(64), kind: "photo", mime: "image/jpeg", restore: { title: "Cat", tags: "cat\nfunny", created_at: 1700000000, image: vec, text: vec } },
+      { sha256: "a".repeat(64), kind: "photo", mime: "image/jpeg", restore: { title: "Cat", tags: "cat\nfunny", source_meta: '{"site":"e621"}', created_at: 1700000000, image: vec, text: vec } },
       { sha256: "b".repeat(64), kind: "photo", mime: "image/jpeg", restore: { title: "Bad", text: [1] } }, // incomplete: processed again
     ];
     const res = await handleZipCallback(
@@ -120,10 +120,10 @@ describe("data export", () => {
       e,
     );
     expect(res.status).toBe(200);
-    const rows = await e.DB.prepare("SELECT sha256, status, title, tags, created_at, import_id IS NULL AS no_batch FROM memes WHERE user_id = 44 ORDER BY sha256").all();
+    const rows = await e.DB.prepare("SELECT sha256, status, title, tags, source_meta, created_at, import_id IS NULL AS no_batch FROM memes WHERE user_id = 44 ORDER BY sha256").all();
     expect(rows.results).toEqual([
-      { sha256: "a".repeat(64), status: "ready", title: "Cat", tags: "cat\nfunny", created_at: 1700000000, no_batch: 1 },
-      { sha256: "b".repeat(64), status: "embedding", title: null, tags: null, created_at: expect.any(Number), no_batch: 1 },
+      { sha256: "a".repeat(64), status: "ready", title: "Cat", tags: "cat\nfunny", source_meta: '{"site":"e621"}', created_at: 1700000000, no_batch: 1 },
+      { sha256: "b".repeat(64), status: "embedding", title: null, tags: null, source_meta: null, created_at: expect.any(Number), no_batch: 1 },
     ]);
     expect(upserts.map((v) => v.id.split(":")[1]).sort()).toEqual(["i", "t"]);
     expect(jobs).toHaveLength(1);

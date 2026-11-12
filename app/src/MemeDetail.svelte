@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { Button, Checkbox, Dialog, Drawer, Heading, IconButton, Inline, Spinner, Stack, Tag, Text, Textarea, TextField, VideoPlayer } from "@cofob2/design-system-svelte";
-  import { Check, ChevronLeft, Pencil, ChevronRight, Clapperboard, FileDown, Layers, Link, Music, RefreshCw, Send, Share, Share2, Trash2, VolumeX } from "@lucide/svelte";
+  import { Button, Checkbox, Dialog, Drawer, Heading, IconButton, Inline, Select, Spinner, Stack, Tag, Text, Textarea, TextField, VideoPlayer } from "@cofob2/design-system-svelte";
+  import { BookOpen, Check, ChevronLeft, Pencil, ChevronRight, Clapperboard, FileDown, Layers, Link, Music, RefreshCw, Send, Share, Share2, Trash2, VolumeX } from "@lucide/svelte";
   import { onMount, untrack } from "svelte";
-  import { api, type MemeBrief, type MemeDetail } from "./api";
+  import { api, type Layout, type MemeBrief, type MemeDetail } from "./api";
+  import ComicReader from "./ComicReader.svelte";
   import { s } from "./strings";
   import { shareFiles } from "./share";
   import { confirm, saveFile, tg } from "./telegram";
@@ -35,7 +36,7 @@
   });
   const kindLabel = $derived(meme ? (meme.kind === "photo" ? s.f_kind_photo : meme.kind === "video" ? s.video : s.gif) : "");
   const title = $derived(meme?.title ?? kindLabel);
-  let busy = $state<"share" | "file" | "link" | "fileLink" | "send" | "album" | "clip" | "clipFile" | "sound" | "edit" | "delete" | "retry" | null>(null);
+  let busy = $state<"share" | "file" | "link" | "fileLink" | "send" | "album" | "clip" | "clipFile" | "sound" | "layout" | "edit" | "delete" | "retry" | null>(null);
   let soundInput = $state<HTMLInputElement>();
   let copied = $state<"link" | "fileLink" | null>(null);
   let failed = $state(false);
@@ -159,6 +160,20 @@
       if (meme) meme.audio = audio;
     });
 
+  // Comic pages top to bottom, or a carousel; the detail loads again with the new layout.
+  const setLayout = (layout: Layout) =>
+    run("layout", async () => {
+      await api.setLayout(id, layout);
+      meme = await api.get(id);
+    });
+
+  let reading = $state(false); // the comic open in the reader
+  function closeReader() {
+    reading = false;
+    setTimeout(() => tg?.BackButton.show()); // the reader hides it when it closes
+  }
+  const back = () => !reading && onClose();
+
   const retry = () =>
     run("retry", async () => {
       await api.retry(id);
@@ -200,9 +215,9 @@
 
   onMount(() => {
     tg?.BackButton.show();
-    tg?.BackButton.onClick(onClose);
+    tg?.BackButton.onClick(back);
     return () => {
-      tg?.BackButton.offClick(onClose);
+      tg?.BackButton.offClick(back);
       tg?.BackButton.hide();
     };
   });
@@ -225,7 +240,7 @@
 
 {#snippet media(m: MemeDetail)}
   <div class="stage">
-    {#if m.album.length}
+    {#if m.album.length && m.layout !== "comic"}
       <div class="carousel" bind:this={carousel} onscroll={onSwipe}>
         {#each m.album as a (a.id)}
           <div class="part">{@render one(a.id === m.id ? m : null, a)}</div>
@@ -262,6 +277,16 @@
           </button>
         {/each}
       </div>
+      {#if own}
+        <Select
+          label={s.albumView}
+          size="sm"
+          value={m.layout}
+          options={[{ value: "carousel", label: s.layoutCarousel }, { value: "comic", label: s.layoutComic }]}
+          disabled={busy === "layout"}
+          onchange={(e: Event) => setLayout((e.currentTarget as HTMLSelectElement).value as Layout)}
+        />
+      {/if}
     {/if}
     {#if m.status !== "ready"}<Text tone="muted" size="sm">{m.status === "failed" ? s.stateError : s.processing}</Text>{/if}
     {#if m.tags.length}
@@ -277,6 +302,17 @@
         <Text class="pre">{value}</Text>
       </Stack>
     {/each}
+    {#if m.source_meta}
+      <details>
+        <summary>{s.sourceMeta}: {m.source_meta.site}</summary>
+        <Stack gap="xs">
+          {#if m.source && /^https?:\/\//.test(m.source)}<a href={m.source} target="_blank" rel="noreferrer noopener">{m.source}</a>{/if}
+          <Inline gap="xs" wrap>
+            {#each m.source_meta.tags as t (t)}<Tag>{t}</Tag>{/each}
+          </Inline>
+        </Stack>
+      </details>
+    {/if}
   </Stack>
   {/if}
 {/snippet}
@@ -312,6 +348,12 @@
       <Button variant="secondary" onclick={() => (draft = { ...fieldsOf(meme!), porn: meme!.porn })}>
         {#snippet leading()}<Pencil size={16} aria-hidden="true" />{/snippet}
         {s.edit}
+      </Button>
+    {/if}
+    {#if meme?.layout === "comic"}
+      <Button onclick={() => (reading = true)}>
+        {#snippet leading()}<BookOpen size={16} aria-hidden="true" />{/snippet}
+        {s.readComic}
       </Button>
     {/if}
     {#if meme?.status === "failed" && own}
@@ -384,6 +426,10 @@
     {/if}
   </Inline>
 {/snippet}
+
+{#if reading && meme}
+  <ComicReader pages={meme.album} title={title} onClose={closeReader} />
+{/if}
 
 {#if wide}
   <Dialog open {title} closeLabel={s.close} class="viewer" onOpenChange={(open) => !open && onClose()}>

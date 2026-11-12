@@ -82,6 +82,7 @@ export type MemeRow = NewMeme & {
   tg_meta?: string | null;
   saved_at?: number | null;
   added_via?: AddedVia | null;
+  source_meta?: string | null;
 };
 
 /** How a meme was saved (the analytics of sources). */
@@ -92,8 +93,8 @@ export const insertMeme = (db: D1Database, userId: number, m: MemeRow) =>
   db
     .prepare(
       `INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, preview_file_id, preview_unique_id, mime, file_size,
-        width, height, duration, caption, source, import_id, sha256, r2_file, r2_preview, tg_meta, saved_at, added_via)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        width, height, duration, caption, source, import_id, sha256, r2_file, r2_preview, tg_meta, saved_at, added_via, source_meta)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(user_id, file_unique_id) DO NOTHING RETURNING id`,
     )
     .bind(
@@ -118,6 +119,7 @@ export const insertMeme = (db: D1Database, userId: number, m: MemeRow) =>
       m.tg_meta ?? null,
       m.saved_at ?? null,
       m.added_via ?? null,
+      m.source_meta ?? null,
     )
     .first<string>("id");
 

@@ -64,12 +64,13 @@ interface Restore {
   tags?: string;
   search_phrases?: string;
   porn?: boolean;
+  source_meta?: string;
   created_at?: number;
   image?: number[];
   text: number[];
 }
 const isVector = (v: unknown): v is number[] => Array.isArray(v) && v.length === EMBED_DIMS && v.every(Number.isFinite);
-const FIELDS = ["title", "description", "ocr_text", "speech_text", "meme_context", "cultural_meaning", "language", "tags", "search_phrases"] as const;
+const FIELDS = ["title", "description", "ocr_text", "speech_text", "meme_context", "cultural_meaning", "language", "tags", "search_phrases", "source_meta"] as const;
 
 /** Saves the exported description and vectors; false when they are incomplete (then the meme is processed normally). */
 async function restoreMeme(env: Env, userId: number, memeId: string, kind: Kind, r: Restore | undefined) {

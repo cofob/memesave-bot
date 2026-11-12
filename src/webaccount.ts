@@ -15,6 +15,8 @@ import { createZipImport, zipStatus } from "./zip";
 import { exportStatus, setExportStatusMessage, startExport } from "./export";
 import { accountSummary, CONFIRM, deleteAccount } from "./purge";
 import { oauthApi } from "./oauth";
+import { connectE621, disconnectE621, e621Status } from "./e621";
+import { E621Error } from "./ingest/sources/e621";
 import { createToken, deleteToken, listTokens } from "./tokens";
 import { billingStatus, ownKey, starsInvoiceLink, type ProductKind } from "./billing";
 import { addChannelUrl, listChannels, removeChannel, updateChannel } from "./channels";
@@ -137,6 +139,22 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
     }
     if (m === "DELETE" && id) {
       await api.revokeGrant(id, String(user.id));
+      return json({ ok: true });
+    }
+  }
+
+  if (resource === "e621") {
+    if (m === "GET") return json(await e621Status(env.DB, user.id));
+    if (m === "DELETE") return (await disconnectE621(env.DB, user.id), json({ ok: true }));
+    if (m === "PUT") {
+      const { username = "", api_key = "" } = await req.json<{ username?: string; api_key?: string }>();
+      if (!username.trim() || !api_key.trim()) return json({ error: "username and api_key required" }, 400);
+      try {
+        await connectE621(env, user.id, username.trim(), api_key.trim());
+      } catch (e) {
+        if (e instanceof E621Error && (e.status === 401 || e.status === 403)) return json({ error: "invalid username or API key" }, 400);
+        throw e;
+      }
       return json({ ok: true });
     }
   }

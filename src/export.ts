@@ -38,7 +38,7 @@ const TABLES: Record<string, { from: string; where: string; cols: string; key?: 
   memes: {
     from: "memes",
     where: "user_id = ?",
-    cols: "id, kind, mime, file_size, width, height, duration, caption, source, tg_meta, status, title, description, ocr_text, speech_text, meme_context, cultural_meaning, language, tags, search_phrases, porn, import_id, sha256, share_id, added_via, error, created_at, updated_at, saved_at, COALESCE(r2_file, '') != '' AS has_file, r2_preview IS NOT NULL AS has_preview",
+    cols: "id, kind, mime, file_size, width, height, duration, caption, source, tg_meta, status, title, description, ocr_text, speech_text, meme_context, cultural_meaning, language, tags, search_phrases, porn, source_meta, import_id, sha256, share_id, added_via, error, created_at, updated_at, saved_at, COALESCE(r2_file, '') != '' AS has_file, r2_preview IS NOT NULL AS has_preview",
   },
   transactions: {
     from: "transactions",
