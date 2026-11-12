@@ -21,6 +21,7 @@ var (
 	dateSpan     = regexp.MustCompile(`(?s)<span class="date[^>]*>.*?</span>`)
 	lineBreak    = regexp.MustCompile(`<br\s*/?>`)
 	anyTag       = regexp.MustCompile(`<[^>]+>`)
+	webLink      = regexp.MustCompile(`href="(https?://[^"]+)"`)
 )
 
 var htmlKinds = map[string]string{"photo_wrap": "photo", "video_file_wrap": "video", "animated_wrap": "animation"}
@@ -39,7 +40,7 @@ func readHTML(f *zip.File) ([]ref, error) {
 }
 
 // parseHTML finds media links per message block, with the message text as caption
-// and the forwarded sender as source.
+// the forwarded sender as source and the web links of the block (text links, buttons).
 func parseHTML(doc string) []ref {
 	starts := messageStart.FindAllStringIndex(doc, -1)
 	refs := []ref{}
@@ -60,8 +61,12 @@ func parseHTML(doc string) []ref {
 		if m := forwardFrom.FindStringSubmatch(block); m != nil {
 			source = plain(dateSpan.ReplaceAllString(m[1], ""))
 		}
+		var web []string
+		for _, m := range webLink.FindAllStringSubmatch(block, -1) {
+			web = append(web, html.UnescapeString(m[1]))
+		}
 		for _, l := range links {
-			x := ref{kind: htmlKinds[l[1]], path: unescapePath(l[2]), caption: caption, source: source}
+			x := ref{kind: htmlKinds[l[1]], path: unescapePath(l[2]), caption: caption, source: source, links: web}
 			if img := imgSrc.FindStringSubmatch(l[3]); img != nil && x.kind != "photo" {
 				x.thumb = unescapePath(img[1])
 			}

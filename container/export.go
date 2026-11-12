@@ -23,7 +23,8 @@ const (
 )
 
 var tables = []string{"profile", "memes", "transactions", "imports", "zip_imports", "payments", "crypto_invoices", "exports",
-	"channels", "posts", "post_items", "meme_uses", "meme_views", "api_tokens", "analyses", "pairs", "pair_quiz", "notices"}
+	"channels", "posts", "post_items", "meme_uses", "meme_views", "api_tokens", "analyses", "pairs", "pair_quiz", "notices",
+	"analysis_shares", "e621_accounts", "e621_posts", "e621_pools"}
 
 const readme = `memesave data export
 ====================
@@ -38,7 +39,8 @@ profile.csv             your account: role, language, settings, plan, balance, A
 memes.csv               one row per meme: kind, size, caption, forward source, status, the AI description
                         (title, description, ocr_text, speech_text, meme_context, cultural_meaning,
                         language, tags, search_phrases; lists are separated by new lines), porn (1: sexual
-                        content in the picture), source_meta (JSON of the import source), sha256, dates.
+                        content in the picture), source_meta (JSON of the import source), edits (JSON of the fields you
+                        edited), sha256, dates.
                         "file" and "preview" are the paths of the meme's files in this archive
                         (empty when the file could not be read).
 media/<id>.<ext>        the original photo, video or GIF of each meme.
@@ -48,13 +50,16 @@ embeddings/<id>.json    the meme's search vectors: {"image": [...], "text": [...
 transactions.csv        every AI request and its cost in USD.
 imports.csv             batch imports.  zip_imports.csv: .zip imports.
 payments.csv            payments.  crypto_invoices.csv: crypto invoices.  exports.csv: data exports.
-channels.csv            linked channels.  posts.csv, post_items.csv: posts (a meme or an album) and their memes.
+channels.csv            linked channels and their filters.  posts.csv, post_items.csv: posts (a meme or an album) and their memes.
                         "audio" and "clip" are the paths of the post's sound and its video with sound.
 posts/<id>.audio.<ext>  the sound of a post.  posts/<id>.clip.mp4: the post's photos with the sound as a video.
 meme_uses.csv           memes you sent (inline, share, send).  meme_views.csv: feed views.
 api_tokens.csv          API tokens (without the token).  analyses.csv: collection analyses.
 pairs.csv               pairs with a partner.  pair_quiz.csv: pair quiz scores.
 notices.csv             bot notices sent to you.
+analysis_shares.csv     public links to your analyses.
+e621_accounts.csv       linked e621 account (without the API key).  e621_posts.csv, e621_pools.csv: e621 posts
+                        and pools already imported or skipped.
 
 Dates are Unix timestamps (seconds, UTC). CSV files are UTF-8 with a header row.
 
@@ -84,6 +89,7 @@ type Restore struct {
 	SearchPhrases   string    `json:"search_phrases,omitempty"`
 	Porn            bool      `json:"porn,omitempty"`
 	SourceMeta      string    `json:"source_meta,omitempty"`
+	Edits           string    `json:"edits,omitempty"`
 	CreatedAt       int64     `json:"created_at,omitempty"`
 	Image           []float32 `json:"image,omitempty"`
 	Text            []float32 `json:"text,omitempty"`
@@ -438,13 +444,13 @@ func readMemesave(byName map[string]*zip.File, dir string) ([]ref, error) {
 	for _, row := range rows[1:] {
 		x := ref{
 			kind: val(row, "kind"), path: val(row, "file"), thumb: val(row, "preview"), caption: val(row, "caption"), source: val(row, "source"),
-			width: num(row, "width"), height: num(row, "height"), duration: num(row, "duration"),
+			width: num(row, "width"), height: num(row, "height"), duration: num(row, "duration"), savedAt: int64(num(row, "saved_at")),
 		}
 		if val(row, "status") == "ready" && val(row, "title") != "" {
 			x.restore = &Restore{
 				Title: val(row, "title"), Description: val(row, "description"), OCRText: val(row, "ocr_text"), SpeechText: val(row, "speech_text"),
 				MemeContext: val(row, "meme_context"), CulturalMeaning: val(row, "cultural_meaning"), Language: val(row, "language"),
-				Tags: val(row, "tags"), SearchPhrases: val(row, "search_phrases"), Porn: val(row, "porn") == "1", SourceMeta: val(row, "source_meta"), CreatedAt: int64(num(row, "created_at")),
+				Tags: val(row, "tags"), SearchPhrases: val(row, "search_phrases"), Porn: val(row, "porn") == "1", SourceMeta: val(row, "source_meta"), Edits: val(row, "edits"), CreatedAt: int64(num(row, "created_at")),
 				embedding: byName[path.Join(dir, "embeddings", val(row, "id")+".json")],
 			}
 		}

@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -52,6 +53,7 @@ type Item struct {
 	Caption  string   `json:"caption,omitempty"`
 	Source   string   `json:"source,omitempty"`
 	SavedAt  int64    `json:"saved_at,omitempty"`
+	Links    []string `json:"links,omitempty"` // links of the message, in order: the Worker picks the source
 	Restore  *Restore `json:"restore,omitempty"`
 }
 
@@ -197,7 +199,7 @@ func store(m *media) (Item, error) {
 	}
 	item := Item{
 		SHA256: m.sha256, Kind: m.kind, Mime: mime, FileSize: int64(len(data)),
-		Width: m.width, Height: m.height, Duration: m.duration, Caption: m.caption, Source: m.source, SavedAt: m.savedAt,
+		Width: m.width, Height: m.height, Duration: m.duration, Caption: m.caption, Source: m.source, SavedAt: m.savedAt, Links: m.links,
 		Restore: m.restore.withVectors(),
 	}
 	if m.thumb != nil {
@@ -215,6 +217,7 @@ type ref struct {
 	width, height, duration     int
 	restore                     *Restore // memesave export: description and embeddings
 	savedAt                     int64    // tiktok-sync: when the user liked it
+	links                       []string // links in the message text and buttons
 }
 
 // findMedia auto-detects the archive layout. Folders with a Telegram Desktop export (result.json or
@@ -358,6 +361,52 @@ type exportMessage struct {
 	Duration      int             `json:"duration_seconds"`
 	Text          json.RawMessage `json:"text"`
 	ForwardedFrom string          `json:"forwarded_from"`
+	Buttons       [][]struct {
+		Type, Data string
+	} `json:"inline_bot_buttons"`
+}
+
+// urlText finds links in text: with a scheme, or a host with a path ("e621.net/posts/1").
+var urlText = regexp.MustCompile(`(?i)https?://[^\s<>"']+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}/[^\s<>"']*`)
+
+// linksIn returns the links in text, with https:// when the scheme is missing.
+func linksIn(text string) []string {
+	out := []string{}
+	for _, l := range urlText.FindAllString(text, -1) {
+		if l = strings.TrimRight(l, ".,;:!?)]"); !strings.Contains(l, "://") {
+			l = "https://" + l
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+// links lists the links of the message in order: in the text (a text link by its href), then in the URL buttons.
+func (m exportMessage) links() []string {
+	var parts []json.RawMessage
+	if json.Unmarshal(m.Text, &parts) != nil {
+		parts = []json.RawMessage{m.Text}
+	}
+	out := []string{}
+	for _, p := range parts {
+		var s string
+		var obj struct{ Text, Href string }
+		if json.Unmarshal(p, &s) == nil {
+			out = append(out, linksIn(s)...)
+		} else if json.Unmarshal(p, &obj) == nil && obj.Href != "" {
+			out = append(out, obj.Href)
+		} else {
+			out = append(out, linksIn(obj.Text)...)
+		}
+	}
+	for _, row := range m.Buttons {
+		for _, b := range row {
+			if b.Type == "url" {
+				out = append(out, b.Data)
+			}
+		}
+	}
+	return out
 }
 
 func (m exportMessage) kind() (string, string) {
@@ -421,7 +470,7 @@ func readExport(f *zip.File) ([]ref, error) {
 	refs := make([]ref, 0, len(msgs))
 	for _, m := range msgs {
 		kind, rel := m.kind()
-		refs = append(refs, ref{kind, rel, m.caption(), m.ForwardedFrom, m.Thumbnail, m.Width, m.Height, m.Duration, nil, 0})
+		refs = append(refs, ref{kind, rel, m.caption(), m.ForwardedFrom, m.Thumbnail, m.Width, m.Height, m.Duration, nil, 0, m.links()})
 	}
 	return refs, nil
 }

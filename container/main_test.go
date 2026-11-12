@@ -89,3 +89,34 @@ func TestFindMediaTiktokSync(t *testing.T) {
 		t.Fatalf("plain file: %s", found[1].file.Name)
 	}
 }
+
+// Links of a message (text, text links, URL buttons) go with its media, in order.
+func TestExportLinks(t *testing.T) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	add := func(name, body string) {
+		f, _ := w.Create(name)
+		_, _ = f.Write([]byte(body))
+	}
+	add("chat/result.json", `{"messages":[{"photo":"photos/a.jpg","text":["art by x, ",{"type":"text_link","text":"source","href":"https://e621.net/posts/1"},
+		" mirror: rule34.xxx/index.php?page=post&s=view&id=2."],"inline_bot_buttons":[[{"type":"url","text":"FA","data":"https://www.furaffinity.net/view/3/"}]]}]}`)
+	add("chat/photos/a.jpg", "A")
+	add("html/messages.html", `<div class="message default clearfix" id="message1"><div class="body">
+		<a class="photo_wrap clearfix pull_left" href="photos/b.jpg"><img src="photos/b_thumb.jpg"/></a>
+		<div class="text">see <a href="https://telegra.ph/Comic-01-01?a=1&amp;b=2">comic</a></div></div></div>`)
+	add("html/photos/b.jpg", "B")
+	_ = w.Close()
+
+	r, _ := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	found, _, err := findMedia(r)
+	if err != nil || len(found) != 2 {
+		t.Fatalf("found %d: %v", len(found), err)
+	}
+	want := []string{"https://e621.net/posts/1", "https://rule34.xxx/index.php?page=post&s=view&id=2", "https://www.furaffinity.net/view/3/"}
+	if !reflect.DeepEqual(found[0].links, want) || found[0].caption != "art by x, source mirror: rule34.xxx/index.php?page=post&s=view&id=2." {
+		t.Fatalf("json links %q, caption %q", found[0].links, found[0].caption)
+	}
+	if want := []string{"https://telegra.ph/Comic-01-01?a=1&b=2"}; !reflect.DeepEqual(found[1].links, want) {
+		t.Fatalf("html links %q", found[1].links)
+	}
+}
