@@ -101,7 +101,27 @@ export const recentMemes = async (db: D1Database, userId: number, limit: number)
 export const recordUse = (db: D1Database, userId: number, memeId: string, via: "inline" | "share" | "send") =>
   db.prepare("INSERT INTO meme_uses (user_id, meme_id, via) SELECT ?, id, ? FROM memes WHERE id = ? AND user_id = ?").bind(userId, via, memeId, userId).run();
 
-type MemeStores = { DB: D1Database; VECTORS: Vectorize; MEDIA: R2Bucket };
+/** Joins a meme (i) to the other memes (f, at j) of its media group. */
+const ALBUM_JOIN = `FROM post_items i JOIN posts p ON p.id = i.post_id AND p.media_group_id IS NOT NULL
+  JOIN post_items j ON j.post_id = i.post_id JOIN memes f ON f.id = j.meme_id`;
+
+/** WHERE part over `memes`: an album shows as its first meme. */
+export const ALBUM_FIRST = `NOT EXISTS (SELECT 1 ${ALBUM_JOIN} AND j.position < i.position WHERE i.meme_id = memes.id)`;
+
+/** Sizes of the albums among `ids` (memes not in an album are left out). */
+export const albumSizes = async (db: D1Database, ids: string[]) =>
+  new Map(
+    ids.length
+      ? (
+          await db
+            .prepare(`SELECT i.meme_id AS id, COUNT(*) AS n ${ALBUM_JOIN} WHERE i.meme_id IN (${ids.map(() => "?").join(",")}) GROUP BY i.meme_id`)
+            .bind(...ids)
+            .all<{ id: string; n: number }>()
+        ).results.map((r) => [r.id, r.n] as const)
+      : [],
+  );
+
+type MemeStores ={ DB: D1Database; VECTORS: Vectorize; MEDIA: R2Bucket };
 
 /** Deletes memes with their vectors and R2 files (up to 100 ids: Vectorize and D1 bind limits). */
 export async function deleteMemes(env: MemeStores, ids: string[]) {
@@ -112,6 +132,7 @@ export async function deleteMemes(env: MemeStores, ids: string[]) {
     .all<{ r2_file: string | null; r2_preview: string | null }>();
   await env.DB.prepare(`DELETE FROM post_items WHERE meme_id IN (${ids.map(() => "?").join(",")})`).bind(...ids).run();
   await env.DB.prepare(`DELETE FROM meme_uses WHERE meme_id IN (${ids.map(() => "?").join(",")})`).bind(...ids).run();
+  await env.DB.prepare(`DELETE FROM meme_views WHERE meme_id IN (${ids.map(() => "?").join(",")})`).bind(...ids).run();
   const keys = results.flatMap((r) => [r.r2_file, r.r2_preview]).filter((k): k is string => !!k);
   if (keys.length) await env.MEDIA.delete(keys);
 }

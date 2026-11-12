@@ -1,5 +1,5 @@
-import { InputFile, type Api } from "grammy";
-import type { InlineQueryResult, Message } from "grammy/types";
+import { InputFile, InputMediaBuilder, type Api } from "grammy";
+import type { InlineKeyboardMarkup, InlineQueryResult, Message } from "grammy/types";
 import type { Meme } from "../db";
 import type { Env } from "../env";
 import { t, type Lang } from "../i18n";
@@ -91,6 +91,26 @@ export async function sendMeme(env: Env, api: Api, chatId: number, m: Meme, othe
           : api.sendAnimation(chatId, file, { ...other, ...meta });
     },
     (msg) => [msg],
+  );
+}
+
+/** Replaces the media of a message with a meme (the feed). `other` has caption, parse_mode and reply_markup. */
+export async function editMeme(env: Env, api: Api, chatId: number, messageId: number, m: Meme, other: { reply_markup?: InlineKeyboardMarkup; caption?: string; parse_mode?: "HTML" } = {}) {
+  const { reply_markup, ...text } = other;
+  return withUploadFallback(
+    env,
+    [m],
+    async (upload) => {
+      const { file, meta } = await input(env, m, upload);
+      const media =
+        m.kind === "photo"
+          ? InputMediaBuilder.photo(file, text)
+          : m.kind === "video"
+            ? InputMediaBuilder.video(file, { ...text, ...meta, supports_streaming: true })
+            : InputMediaBuilder.animation(file, { ...text, ...meta });
+      return api.editMessageMedia(chatId, messageId, media, { reply_markup });
+    },
+    (msg) => (msg === true ? [] : [msg]),
   );
 }
 

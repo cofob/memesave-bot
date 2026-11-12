@@ -46,6 +46,13 @@ export interface Page {
 }
 
 export type Sort = "new" | "old" | "title";
+export type FeedMode = "new" | "old" | "random" | "favorites" | "forgotten" | "day" | "unseen";
+/** A feed meme: the file URL (null for Telegram-only files over 20 MB), use count and date (saved_at, else created_at). */
+export interface FeedItem extends MemeBrief {
+  file: string | null;
+  uses: number;
+  date: number;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -371,6 +378,11 @@ export const api = {
   index: () => call<IndexItem[]>("index"),
   tags: () => call<{ tag: string; count: number }[]>("tags"),
   get: (id: string) => call<MemeDetail>(`memes/${id}`),
+  feed: (mode: FeedMode, seed: number, offset: number) =>
+    call<{ items: FeedItem[]; next_offset: number | null }>(
+      `feed?${new URLSearchParams({ mode, seed: String(seed), offset: String(offset), tz: String(-new Date().getTimezoneOffset()) })}`,
+    ),
+  seen: (ids: string[]) => call<{ ok: true }>("feed/seen", { method: "POST", body: JSON.stringify({ ids }), keepalive: true }),
   share: (id: string) => call<{ id: string }>(`memes/${id}/share`, { method: "POST" }),
   link: (id: string) => post<{ page: string; file: string | null }>(`memes/${id}/link`),
   send: (id: string) => call<{ ok: true }>(`memes/${id}/send`, { method: "POST" }),

@@ -1,7 +1,7 @@
 import { botApi } from "./botapi";
 import type { User as TgUser } from "grammy/types";
 import { resolveUser } from "./auth";
-import { deleteMeme, deleteMemes, getMeme, getUser, recordUse, storageFull, type Kind, type Meme, type User } from "./db";
+import { ALBUM_FIRST, albumSizes, deleteMeme, deleteMemes, getMeme, getUser, recordUse, storageFull, type Kind, type Meme, type User } from "./db";
 import { insertMeme, type AddedVia } from "./ingest/receive";
 import { parseJson, saveDescription, toDescription, type Description } from "./ingest/describe";
 import { collectingImport } from "./batch";
@@ -10,6 +10,7 @@ import { handleAccount } from "./webaccount";
 import { addToPost, albumMemes } from "./channels";
 import { billingStatus, canUseAi } from "./billing";
 import { facets, filterSql } from "./filters";
+import { feedMode, feedPage, markSeen } from "./feed";
 import { getCookie, readSession } from "./session";
 import { TOKEN_PREFIX, tokenUser } from "./tokens";
 import { serveOpenapi } from "./openapi";
@@ -22,6 +23,7 @@ import { keywordSearch } from "./search/hybrid";
 import { cachedFastSearch } from "./search/inline";
 
 const PAGE = 60;
+const FEED_PAGE = 10;
 const URL_TTL = 86400;
 const FILE_MAX = 20 * 1024 * 1024; // Bot API getFile limit
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -70,6 +72,9 @@ export async function brief(env: Env, m: Meme) {
   };
 }
 
+const fileUrl = async (env: Env, m: Meme) =>
+  fileFits(m) ? `${base(env)}/app/file/${m.id}${await signedQuery(env, `file|${m.id}`, URL_TTL)}` : null;
+
 export async function detail(env: Env, m: Meme) {
   const album = await albumMemes(env.DB, m.id);
   return {
@@ -82,7 +87,7 @@ export async function detail(env: Env, m: Meme) {
     speech_text: m.speech_text,
     meme_context: m.meme_context,
     cultural_meaning: m.cultural_meaning,
-    file: fileFits(m) ? `${base(env)}/app/file/${m.id}${await signedQuery(env, `file|${m.id}`, URL_TTL)}` : null,
+    file: await fileUrl(env, m),
     album: album.length > 1 ? await Promise.all(album.map((a) => brief(env, a))) : [],
   };
 }
@@ -108,29 +113,17 @@ export async function listMemes(env: Env, user: User, url: URL) {
   const filters = filterSql(url);
   const where = ["user_id = ?", ...(tag ? ["instr(char(10) || tags || char(10), char(10) || ? || char(10)) > 0"] : []), ...filters.where];
   // Plain browsing shows an album as its first meme; a tag or filters show every matching meme.
-  if (where.length === 1) where.push(`NOT EXISTS (SELECT 1 ${ALBUM_JOIN} AND j.position < i.position WHERE i.meme_id = memes.id)`);
+  if (where.length === 1) where.push(ALBUM_FIRST);
   const { results } = await env.DB.prepare(`SELECT * FROM memes WHERE ${where.join(" AND ")} ORDER BY ${sort ?? "created_at DESC"} LIMIT ? OFFSET ?`)
     .bind(user.id, ...(tag ? [tag] : []), ...filters.params, PAGE + 1, offset)
     .all<Meme>();
   const page = results.slice(0, PAGE);
-  const sizes = new Map(
-    page.length
-      ? (
-          await env.DB.prepare(`SELECT i.meme_id AS id, COUNT(*) AS n ${ALBUM_JOIN} WHERE i.meme_id IN (${page.map(() => "?").join(",")}) GROUP BY i.meme_id`)
-            .bind(...page.map((m) => m.id))
-            .all<{ id: string; n: number }>()
-        ).results.map((r) => [r.id, r.n])
-      : [],
-  );
+  const sizes = await albumSizes(env.DB, page.map((m) => m.id));
   return {
     items: await Promise.all(page.map(async (m) => ({ ...(await brief(env, m)), album: (sizes.get(m.id) ?? 0) > 1 ? sizes.get(m.id) : undefined }))),
     next_offset: results.length > PAGE ? offset + PAGE : null,
   };
 }
-
-/** Joins a meme (i) to the other memes (f, at j) of its media group. */
-const ALBUM_JOIN = `FROM post_items i JOIN posts p ON p.id = i.post_id AND p.media_group_id IS NOT NULL
-  JOIN post_items j ON j.post_id = i.post_id JOIN memes f ON f.id = j.meme_id`;
 
 export async function tagCounts(env: Env, user: User) {
   const { results } = await env.DB.prepare("SELECT tags FROM memes WHERE user_id = ? AND tags IS NOT NULL").bind(user.id).all<{ tags: string }>();
@@ -332,6 +325,25 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
     return json(results);
   }
   if (resource === "memes" && !id && req.method === "GET") return json(await listMemes(env, user, url));
+  if (resource === "feed" && !id && req.method === "GET") {
+    const mode = feedMode(url.searchParams.get("mode"));
+    if (!mode) return json({ error: "bad mode" }, 400);
+    const n = (k: string) => Math.trunc(Number(url.searchParams.get(k))) || 0;
+    const offset = Math.max(0, n("offset"));
+    const { memes, more } = await feedPage(env.DB, user.id, { mode, seed: Math.max(1, n("seed")), offset, limit: FEED_PAGE, tz: Math.max(-840, Math.min(840, n("tz"))) });
+    const sizes = await albumSizes(env.DB, memes.map((m) => m.id));
+    return json({
+      items: await Promise.all(
+        memes.map(async (m) => ({ ...(await brief(env, m)), file: await fileUrl(env, m), uses: m.uses, date: m.date, album: (sizes.get(m.id) ?? 0) > 1 ? sizes.get(m.id) : undefined })),
+      ),
+      next_offset: more ? offset + FEED_PAGE : null,
+    });
+  }
+  if (resource === "feed" && id === "seen" && req.method === "POST") {
+    const { ids = [] } = await req.json<{ ids?: string[] }>();
+    await markSeen(env.DB, user.id, Array.isArray(ids) ? ids : []);
+    return json({ ok: true });
+  }
   if (resource === "delete" && req.method === "POST") {
     // Batch delete from the selection mode (the app sends up to 100 ids per call).
     const { ids = [] } = await req.json<{ ids?: string[] }>();

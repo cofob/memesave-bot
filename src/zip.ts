@@ -44,6 +44,7 @@ interface ZipItem {
   duration?: number;
   caption?: string;
   source?: string;
+  saved_at?: number; // tiktok-sync: when the user liked it
   restore?: Restore; // from a memesave export: saved as ready, without AI processing
 }
 const KINDS: Kind[] = ["photo", "video", "animation"];
@@ -232,7 +233,7 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
     // After a restart (rollout) the memes imported before it are known: they still count as imported.
     const total = fresh.length + zip.imported;
     const skipped = Number(body.found ?? hashes.length) - total;
-    const formats = ["memesave", "telegram_json", "telegram_html", "files"];
+    const formats = ["memesave", "tiktok", "telegram_json", "telegram_html", "files"];
     const format = ((body.formats ?? []) as string[]).filter((f) => formats.includes(f)).join(",") || null;
     await db.prepare("UPDATE zip_imports SET total = ?, skipped = ?, format = ?, updated_at = unixepoch() WHERE id = ?")
       .bind(total, skipped, format, id)
@@ -269,6 +270,7 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
         duration: item.duration ?? null,
         caption: item.caption || null,
         source: item.source || null,
+        saved_at: Number(item.saved_at) || null,
         import_id: item.kind === "photo" && !item.restore ? zip.import_id : null,
         sha256: item.sha256,
         added_via: "zip",

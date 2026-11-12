@@ -16,6 +16,8 @@ interface WebApp {
   downloadFile(params: { url: string; file_name: string }, cb?: (accepted: boolean) => void): void;
   openInvoice(url: string, cb?: (status: "paid" | "cancelled" | "failed" | "pending") => void): void;
   BackButton: { show(): void; hide(): void; onClick(cb: () => void): void; offClick(cb: () => void): void };
+  disableVerticalSwipes?(): void; // Bot API 7.7+
+  enableVerticalSwipes?(): void;
   HapticFeedback?: { notificationOccurred(type: "success" | "error"): void };
 }
 

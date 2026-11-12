@@ -16,10 +16,10 @@
     Tag,
     TextField,
   } from "@cofob2/design-system-svelte";
-  import { Bot, ChartNoAxesCombined, CircleCheck, CircleUser, Download, Layers, ListChecks, LogOut, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Upload, X } from "@lucide/svelte";
+  import { Bot, ChartNoAxesCombined, CircleCheck, Clapperboard, CircleUser, Download, Layers, ListChecks, LogOut, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Upload, X } from "@lucide/svelte";
   import { onMount, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
-  import { api, ApiError, type Me, type MemeBrief, type Sort } from "./api";
+  import { api, ApiError, type FeedMode, type Me, type MemeBrief, type Sort } from "./api";
   import Account from "./Account.svelte";
   import FilterDrawer from "./FilterDrawer.svelte";
   import { activeCount, emptyFilters, groups, matches, toQuery, type Filters } from "./filters";
@@ -36,7 +36,10 @@
   let auth = $state<"checking" | "ok" | "login" | "denied">("checking");
   let me = $state<Me | null>(null);
   let accountOpen = $state(false);
-  let view = $state<"grid" | "analytics">("grid"); // analytics: the charts mode (loaded on demand with ECharts)
+  let view = $state<"grid" | "analytics" | "feed">("grid"); // analytics: the charts mode (loaded on demand with ECharts)
+  // ?feed=<mode>: the bot's feed button opens the feed.
+  const feedLink = new URLSearchParams(location.search).get("feed") as FeedMode | null;
+  if (feedLink) view = "feed";
   let accountTab = $state("stats");
   // Result of the OpenRouter connect redirect (?key=connected|failed), shown once.
   let notice = $state<{ tone: "success" | "danger"; text: string } | null>(null);
@@ -311,7 +314,21 @@
 {/if}
 
 <!-- Hidden, not unmounted: the grid keeps its list, scroll observer and search while the charts are open. -->
-<div hidden={view === "analytics"}>
+{#if view === "feed"}
+  {#await import("./Feed.svelte") then { default: Feed }}
+    <Feed
+      initial={feedLink}
+      onClose={() => (view = "grid")}
+      onTag={(t) => {
+        view = "grid";
+        pickTag(t);
+      }}
+      onDeleted={(id) => drop([id])}
+    />
+  {/await}
+{/if}
+
+<div hidden={view !== "grid"}>
 <Container size="default" class="app">
   <Stack gap="md">
     <TextField
@@ -387,6 +404,7 @@
         {#snippet leading()}<Upload size={16} aria-hidden="true" />{/snippet}
         {s.upload}
       </Button>
+      <IconButton label={s.feed} variant="ghost" size="sm" onclick={() => (view = "feed")}><Clapperboard size={18} /></IconButton>
       <IconButton label={s.analytics} variant="ghost" size="sm" onclick={() => (view = "analytics")}><ChartNoAxesCombined size={18} /></IconButton>
       <IconButton label={s.account} variant="ghost" size="sm" onclick={() => (accountOpen = true)}><CircleUser size={18} /></IconButton>
       {#if !tg}

@@ -1,6 +1,7 @@
 import { Bot, type Context } from "grammy";
 import { retryOn429 } from "./botapi";
 import { registerAdmin } from "./admin";
+import { registerFeed } from "./feedbot";
 import { resolveUser } from "./auth";
 import { setCommandScope } from "./botcommands";
 import { registerCommands } from "./commands";
@@ -50,6 +51,7 @@ export function createBot(env: Env) {
 
   const pm = bot.chatType("private");
   registerCommands(pm, env);
+  registerFeed(pm, env);
   registerAdmin(pm, env);
   registerBilling(pm, env);
   registerChannels(pm, env);

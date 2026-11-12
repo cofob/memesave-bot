@@ -51,6 +51,7 @@ type Item struct {
 	Duration int      `json:"duration,omitempty"`
 	Caption  string   `json:"caption,omitempty"`
 	Source   string   `json:"source,omitempty"`
+	SavedAt  int64    `json:"saved_at,omitempty"`
 	Restore  *Restore `json:"restore,omitempty"`
 }
 
@@ -196,7 +197,7 @@ func store(m *media) (Item, error) {
 	}
 	item := Item{
 		SHA256: m.sha256, Kind: m.kind, Mime: mime, FileSize: int64(len(data)),
-		Width: m.width, Height: m.height, Duration: m.duration, Caption: m.caption, Source: m.source,
+		Width: m.width, Height: m.height, Duration: m.duration, Caption: m.caption, Source: m.source, SavedAt: m.savedAt,
 		Restore: m.restore.withVectors(),
 	}
 	if m.thumb != nil {
@@ -213,13 +214,15 @@ type ref struct {
 	thumb                       string // optional thumbnail path
 	width, height, duration     int
 	restore                     *Restore // memesave export: description and embeddings
+	savedAt                     int64    // tiktok-sync: when the user liked it
 }
 
 // findMedia auto-detects the archive layout. Folders with a Telegram Desktop export (result.json or
 // messages*.html) give media referenced by the export, with captions, forward source and GIF vs video;
 // other files there (stickers, user pictures) are skipped. Media anywhere else is taken by extension.
 // A memesave export (memesave-export.json) gives its memes with descriptions and embeddings.
-// It also returns the detected formats: "memesave", "telegram_json", "telegram_html", "files".
+// A tiktok-sync backfill folder (<like id>/meta.json with "files") gives its files with the like time.
+// It also returns the detected formats: "memesave", "tiktok", "telegram_json", "telegram_html", "files".
 func findMedia(r *zip.Reader) ([]*media, []string, error) {
 	byName := map[string]*zip.File{}
 	for _, f := range r.File {
@@ -242,6 +245,12 @@ func findMedia(r *zip.Reader) ([]*media, []string, error) {
 		case base == manifestName:
 			refs, err = readMemesave(byName, path.Dir(f.Name))
 			formats["memesave"] = true
+		case base == "meta.json":
+			var ok bool
+			if refs, ok = readTiktok(f); !ok {
+				continue // some other meta.json
+			}
+			formats["tiktok"] = true
 		case base == "result.json":
 			refs, err = readExport(f)
 			formats["telegram_json"] = true
@@ -286,7 +295,7 @@ func findMedia(r *zip.Reader) ([]*media, []string, error) {
 		}
 	}
 	list := []string{}
-	for _, name := range []string{"memesave", "telegram_json", "telegram_html", "files"} {
+	for _, name := range []string{"memesave", "tiktok", "telegram_json", "telegram_html", "files"} {
 		if formats[name] {
 			list = append(list, name)
 		}
@@ -412,9 +421,39 @@ func readExport(f *zip.File) ([]ref, error) {
 	refs := make([]ref, 0, len(msgs))
 	for _, m := range msgs {
 		kind, rel := m.kind()
-		refs = append(refs, ref{kind, rel, m.caption(), m.ForwardedFrom, m.Thumbnail, m.Width, m.Height, m.Duration, nil})
+		refs = append(refs, ref{kind, rel, m.caption(), m.ForwardedFrom, m.Thumbnail, m.Width, m.Height, m.Duration, nil, 0})
 	}
 	return refs, nil
+}
+
+// tiktokMeta is meta.json of a tiktok-sync backfill folder (BACKFILL_DIR/<like id>/, see tiktok-sync/sync.py).
+type tiktokMeta struct {
+	Source  string `json:"source"`
+	SavedAt int64  `json:"saved_at"`
+	Desc    string `json:"desc"`
+	Files   *[]struct {
+		File, Thumb             string
+		Width, Height, Duration float64
+	} `json:"files"`
+}
+
+// readTiktok reads a tiktok-sync meta.json; false for other meta.json files.
+func readTiktok(f *zip.File) ([]ref, bool) {
+	rc, err := f.Open()
+	if err != nil {
+		return nil, false
+	}
+	defer rc.Close()
+	var m tiktokMeta
+	if json.NewDecoder(rc).Decode(&m) != nil || m.Files == nil {
+		return nil, false
+	}
+	refs := []ref{}
+	for _, x := range *m.Files {
+		refs = append(refs, ref{kind: kindByExt(x.File), path: x.File, caption: m.Desc, source: m.Source, thumb: x.Thumb,
+			width: int(x.Width), height: int(x.Height), duration: int(x.Duration), savedAt: m.SavedAt})
+	}
+	return refs, true
 }
 
 // get reads a Worker path with retries into out (JSON, or *blob for raw bytes).

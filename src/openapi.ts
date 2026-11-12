@@ -183,6 +183,36 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
           responses: { "200": ok("A page of memes.", ref("Page")), ...COMMON },
         },
       },
+      "/feed": {
+        get: {
+          summary: "Meme feed",
+          description: "The feed page by page (10 per page). An album shows as its first meme. Dates are saved_at (when known), else created_at.",
+          parameters: [
+            {
+              name: "mode",
+              in: "query",
+              required: true,
+              schema: { type: "string", enum: ["new", "old", "random", "favorites", "forgotten", "day", "unseen"] },
+              description: "favorites: most used; forgotten: never used, oldest first; day: the same day of the month in earlier months and years; unseen: not seen in the feed.",
+            },
+            { name: "seed", in: "query", schema: { type: "integer", minimum: 1 }, description: "Order of the random mode: the same seed gives the same order." },
+            { name: "tz", in: "query", schema: { type: "integer", default: 0 }, description: "Minutes east of UTC, for the day mode." },
+            { name: "offset", in: "query", schema: { type: "integer", minimum: 0, default: 0 }, description: "next_offset of the previous page." },
+          ],
+          responses: {
+            "200": ok("A page of the feed: memes with file (null for Telegram-only files over 20 MB), uses, date and album size.", ref("Page")),
+            ...COMMON,
+          },
+        },
+      },
+      "/feed/seen": {
+        post: {
+          summary: "Mark memes as seen",
+          description: "Marks up to 100 memes as seen (the unseen mode). Ids of other users are ignored. Needs a write token.",
+          requestBody: body({ type: "object", properties: { ids: { type: "array", items: { type: "string" }, maxItems: 100 } }, required: ["ids"] }),
+          responses: { "200": ok("Marked."), ...COMMON },
+        },
+      },
       "/memes/{id}": {
         get: memeOps("Get a meme", "All metadata of a meme with signed file URLs and its album.", {
           responses: { "200": ok("The meme.", ref("MemeDetail")), ...COMMON, ...NOT_FOUND },
