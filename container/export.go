@@ -22,7 +22,8 @@ const (
 	partSize     = 50 << 20 // R2 multipart part, under the Worker request body limit
 )
 
-var tables = []string{"profile", "memes", "transactions", "imports", "zip_imports", "payments", "crypto_invoices", "exports"}
+var tables = []string{"profile", "memes", "transactions", "imports", "zip_imports", "payments", "crypto_invoices", "exports",
+	"channels", "posts", "post_items", "meme_uses", "meme_views", "api_tokens", "analyses", "pairs", "pair_quiz", "notices"}
 
 const readme = `memesave data export
 ====================
@@ -47,6 +48,13 @@ embeddings/<id>.json    the meme's search vectors: {"image": [...], "text": [...
 transactions.csv        every AI request and its cost in USD.
 imports.csv             batch imports.  zip_imports.csv: .zip imports.
 payments.csv            payments.  crypto_invoices.csv: crypto invoices.  exports.csv: data exports.
+channels.csv            linked channels.  posts.csv, post_items.csv: posts (a meme or an album) and their memes.
+                        "audio" and "clip" are the paths of the post's sound and its video with sound.
+posts/<id>.audio.<ext>  the sound of a post.  posts/<id>.clip.mp4: the post's photos with the sound as a video.
+meme_uses.csv           memes you sent (inline, share, send).  meme_views.csv: feed views.
+api_tokens.csv          API tokens (without the token).  analyses.csv: collection analyses.
+pairs.csv               pairs with a partner.  pair_quiz.csv: pair quiz scores.
+notices.csv             bot notices sent to you.
 
 Dates are Unix timestamps (seconds, UTC). CSV files are UTF-8 with a header row.
 
@@ -177,6 +185,18 @@ func extOf(mime string) string {
 		return "webm"
 	case "video/mp4":
 		return "mp4"
+	case "audio/mpeg":
+		return "mp3"
+	case "audio/mp4", "audio/x-m4a":
+		return "m4a"
+	case "audio/ogg":
+		return "ogg"
+	case "audio/opus":
+		return "opus"
+	case "audio/aac":
+		return "aac"
+	case "audio/wav":
+		return "wav"
 	}
 	return "bin"
 }
@@ -212,6 +232,13 @@ func runExport() error {
 			if cols, rows, files, failed, err = exportMemes(zw, cols, rows); err != nil {
 				return err
 			}
+		}
+		if name == "posts" {
+			var f, x int
+			if cols, rows, f, x, err = exportPosts(zw, cols, rows); err != nil {
+				return err
+			}
+			files, failed = files+f, failed+x
 		}
 		if err := writeCSV(zw, name+".csv", cols, rows); err != nil {
 			return err
@@ -293,6 +320,40 @@ func exportMemes(zw *zip.Writer, cols []string, rows [][]string) ([]string, [][]
 		rows[i] = append(r, file, preview)
 	}
 	return append(cols, "file", "preview"), rows, files, failed, nil
+}
+
+// exportPosts writes the audio and clip of each post and replaces "has_audio" and "has_clip" with their paths.
+func exportPosts(zw *zip.Writer, cols []string, rows [][]string) ([]string, [][]string, int, int, error) {
+	files, failed := 0, 0
+	for _, r := range rows {
+		for i, c := range cols {
+			variant, ok := map[string]string{"has_audio": "audio", "has_clip": "clip"}[c]
+			if !ok {
+				continue
+			}
+			has := r[i]
+			r[i] = ""
+			if has != "1" {
+				continue
+			}
+			var b blob
+			if err := get("/post/"+r[0]+"/"+variant, &b); err != nil {
+				log.Printf("post %s %s: %v", r[0], variant, err)
+				failed++
+				continue
+			}
+			name := "posts/" + r[0] + "." + variant + "." + extOf(b.mime)
+			if err := writeStored(zw, name, b.data); err != nil {
+				return nil, nil, 0, 0, err
+			}
+			files++
+			r[i] = name
+		}
+	}
+	for i, c := range cols {
+		cols[i] = strings.TrimPrefix(c, "has_")
+	}
+	return cols, rows, files, failed, nil
 }
 
 // partWriter streams the archive to R2 as a multipart upload through the Worker,

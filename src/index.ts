@@ -6,6 +6,7 @@ import { syncCommands } from "./botcommands";
 import type { Env } from "./env";
 import { expireExports, handleExport } from "./export";
 import { expireAnalyses, handleAnalysis } from "./analysis";
+import { expireInvites } from "./pairs";
 import { queueHashBackfill } from "./ingest/embed";
 import { queueRekey } from "./rekey";
 import { handleBatch, type Job } from "./queue";
@@ -74,6 +75,7 @@ export default {
     await expireZipUploads(env.DB);
     await expireExports(env.DB);
     await expireAnalyses(env.DB);
+    await expireInvites(env.DB);
     await queueHashBackfill(env);
     await queueRekey(env);
     await billingNotices(env);

@@ -194,8 +194,8 @@ func topKeys(score map[string]float64, k int) []string {
 // duplicates are near-identical images the sha256 dedupe missed (re-encoded, resized, cropped):
 // kNN candidates, checked on the full vectors. Two guards against a placeholder picture (a black first frame
 // of a video, a blank cover): when both memes have descriptions, they must match too; and a picture with many
-// identical neighbours is a placeholder, not a meme with copies.
-func duplicates(s, text *space) [][3]any {
+// identical neighbours is a placeholder, not a meme with copies. keep (nil: all) filters the pairs by id.
+func duplicates(s, text *space, keep func(a, b string) bool) [][3]any {
 	const same, placeholder = 0.995, 4 // 4+ identical neighbours: a placeholder
 	twins := make([]int, len(s.ids))
 	for i, ids := range s.idx {
@@ -227,7 +227,7 @@ func duplicates(s, text *space) [][3]any {
 				continue
 			}
 			seen[[2]int{a, b}] = true
-			if twins[a] >= placeholder || twins[b] >= placeholder {
+			if twins[a] >= placeholder || twins[b] >= placeholder || (keep != nil && !keep(s.ids[a], s.ids[b])) {
 				continue
 			}
 			if sim := dot(s.x.row(a), s.x.row(b)); sim >= 0.97 && sameText(s.ids[a], s.ids[b]) {
@@ -537,7 +537,7 @@ func analyze(memes []meme, vectors map[string][]float32, p *progress) *result {
 	r.Clusters = groups
 	r.Trends = interestTrends(memes, txt.ids, labels, len(groups))
 	r.PCA.Image, r.PCA.Text = ratios(img.pca), ratios(txt.pca)
-	r.Duplicates = duplicates(img, txt)
+	r.Duplicates = duplicates(img, txt, nil)
 	r.Outliers = outliers(txt)
 	// One range for both spaces, so the web and the report draw them on one axis.
 	r.Similarity.Image, r.Similarity.Text = histRange(randomPairs(img.x), -0.2, 1, 48), histRange(randomPairs(txt.x), -0.2, 1, 48)

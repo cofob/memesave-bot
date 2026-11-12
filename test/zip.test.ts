@@ -102,7 +102,9 @@ describe("zip import", () => {
     expect(jobs.at(-1)).toEqual({ type: "batch_submit", importId });
     const row = await e.DB.prepare("SELECT status, imported, skipped, total, format FROM zip_imports WHERE id = ?").bind(zip.id).first();
     expect(row).toEqual({ status: "done", imported: 2, skipped: 2, total: 2, format: "telegram_html,files" });
-    expect(telegram).toEqual(["editMessageText", "sendMessage"]); // the second progress edit is throttled
+    // The progress widget, its final state (the second progress edit is throttled) and the "done" notification.
+    expect(telegram).toEqual(["sendWidget", "editMessageWidgetData", "sendMessage"]);
+    expect(await e.DB.prepare("SELECT widget_msg_id FROM zip_imports WHERE id = ?").bind(zip.id).first("widget_msg_id")).toBe(1);
     expect((await call(e, zip.id, "items", { items: [] })).status).toBe(403);
   });
 });

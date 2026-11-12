@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { analysisStatus, failAnalysis, handleAnalysis, startAnalysis } from "../src/analysis";
+import { analysisStatus, failAnalysis, handleAnalysis, resultKey, startAnalysis } from "../src/analysis";
 import { md, reportMarkdown, sendReport } from "../src/analysisreport";
 import { originStats, tagStats, userAnalytics } from "../src/analytics";
 import { recordUse } from "../src/db";
@@ -185,6 +185,7 @@ describe("embedding analysis", () => {
     const upgraded = await startAnalysis(e, 72, { llm: true });
     expect(upgraded).toMatchObject({ id, status: "running", stage: "render", labeled: true });
     expect(started[1]).toMatchObject({ MODE: "render" });
+    expect((await (await e.MEDIA.get(resultKey(id)))!.json<any>()).clusters[0].name).toBeTruthy(); // the names are kept for the redraw
     expect((await analysisStatus(e, 72)).ready?.id).toBe(id); // the result stays readable during the redraw
 
     await failAnalysis(e, id, "boom"); // a failed redraw keeps the result

@@ -1,5 +1,6 @@
 import { paywall } from "./paywall.svelte";
 import { tg } from "./telegram";
+import { viewing } from "./viewing.svelte";
 
 export type Kind = "photo" | "video" | "animation";
 
@@ -30,6 +31,7 @@ export interface MemeDetail extends Omit<MemeBrief, "album"> {
   meme_context: string | null;
   cultural_meaning: string | null;
   file: string | null;
+  audio: string | null; // sound of the photo, shared by its album
   album: MemeBrief[]; // the media group in order, empty for a single meme
 }
 
@@ -48,11 +50,22 @@ export interface Page {
 
 export type Sort = "new" | "old" | "title";
 export type FeedMode = "new" | "old" | "random" | "favorites" | "forgotten" | "time" | "unseen";
-/** A feed meme: the file URL (null for Telegram-only files over 20 MB), use count and date (saved_at, else created_at). */
-export interface FeedItem extends MemeBrief {
+/** A feed media: the file URL (null for Telegram-only files over 20 MB). */
+export interface FeedMedia extends MemeBrief {
   file: string | null;
+}
+/** A feed meme: the media, use count and date (saved_at, else created_at); an album has all its memes in slides. */
+export interface FeedItem extends FeedMedia {
+  slides?: FeedMedia[];
+  audio: string | null;
   uses: number;
   date: number;
+}
+export type PairFeedMode = "mix" | "theirs" | "twins" | "rhymes" | "foryou" | "surprise" | "bridge" | "guess";
+export type Owner = "me" | "partner";
+/** owner: omitted in the solo feed and in the pair "guess" mode. */
+export interface PairFeedItem extends FeedItem {
+  owner?: Owner;
 }
 
 export class ApiError extends Error {
@@ -67,7 +80,11 @@ export class ApiError extends Error {
 // Mini App: signed initData; web: the session cookie from Telegram Login (sent automatically).
 const authHeaders = (): Record<string, string> => (tg ? { Authorization: `tma ${tg.initData}` } : {});
 
+// Reads of the meme library go to the viewed partner's memes.
+const OWNED = /^(memes|index|tags|facets|search)\b/;
+
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
+  if (!init.method && OWNED.test(path) && viewing.who && !/[?&]owner=/.test(path)) path += `${path.includes("?") ? "&" : "?"}owner=${viewing.who.id}`;
   const headers = { ...authHeaders(), ...(init.body && typeof init.body === "string" ? { "Content-Type": "application/json" } : {}) };
   const res = await fetch(`/app/api/${path}`, { ...init, headers });
   if (!res.ok) {
@@ -204,7 +221,7 @@ export interface Analytics {
   added: { month: string; via: AddedVia | "unknown"; n: number }[]; // how memes were saved
 }
 
-export type AddedVia = "bot" | "web" | "miniapp" | "api" | "mcp" | "zip";
+export type AddedVia = "bot" | "web" | "miniapp" | "api" | "mcp" | "zip" | "pair";
 
 export type OriginKind = "channel" | "group" | "user" | "link" | "direct";
 
@@ -217,6 +234,46 @@ export interface AdminAnalytics {
   keys: { k: string; cost: number }[];
   payments: { month: string; method: string; usd: number; n: number }[];
   table: AllStats;
+}
+
+export interface PairView {
+  id: string;
+  status: "pending" | "active";
+  incoming: boolean; // the viewer can accept or decline it
+  partner: { id: number | null; name: string | null; username: string | null }; // id null: an open link nobody accepted yet
+  i_share: boolean;
+  they_share: boolean;
+  created_at: number;
+  accepted_at: number | null;
+}
+
+interface PairSide {
+  id: number;
+  name: string | null;
+  ready: number;
+  kinds: Count[];
+  heatmap: { wd: number; h: number; n: number }[];
+  months: { month: string; n: number }[];
+  languages: Count[];
+  durations: Count[];
+  aspect: Count[];
+  tags: { tag: string; count: number }[];
+}
+
+export interface PairStats {
+  me: PairSide;
+  partner: PairSide;
+  shared: {
+    tags: { tag: string; me: number; partner: number }[];
+    jaccard: number;
+    unique_me: { tag: string; count: number }[];
+    unique_partner: { tag: string; count: number }[];
+    sources: { kind: string; name: string; me: number; partner: number }[];
+    twins: { count: number; items: [me_id: string, partner_id: string, me_date: number, partner_date: number][]; first: { me: number; partner: number } };
+    hourSim: number;
+    monthSim: number;
+  };
+  compat: number;
 }
 
 export interface AnalysisRun {
@@ -262,6 +319,52 @@ export interface AnalysisResult {
   tagmap: { tag: string; x: number; y: number; n: number }[];
   trends: { months: string[]; clusters: number[][]; other: number[]; total: number[]; rising: number[]; fading: number[] };
   analytics: Analytics; // SQL stats snapshot taken with this analysis
+}
+
+export interface PairCluster extends Cluster {
+  share: [number, number]; // members per owner
+  r: number; // 1 = all owner 0, 0 = all owner 1 (normalized by collection sizes)
+  type: "shared" | "a" | "b" | "";
+  first: number; // the owner who came here first, -1 same month or one side
+}
+
+export interface PairFacts {
+  title: string;
+  verdict: string;
+  facts: string[];
+  awards: { name: string; winner: "a" | "b" | "both"; reason: string }[];
+}
+
+/** The pair analysis: owner 0 = owners[0] ("a"), 1 = owners[1] ("b"). */
+export interface PairResult {
+  created_at: number;
+  owners: [number, number];
+  count: [number, number];
+  memes: [id: string, kind: Kind, created_at: number, language: string, owner: number][];
+  map: { ids: string[]; xy: [number, number][]; xyz?: [number, number, number][]; labels?: number[]; owner: number[] };
+  clusters: PairCluster[];
+  scores: { compat: number; mixing: number; centroid: number; moodSim: number; hourSim: number };
+  twins: [a: string, b: string, sim: number][];
+  rhymes: [a: string, b: string, sim: number][];
+  for: [string[], string[]]; // [o]: the other owner's memes closest to o's taste
+  surprise: [string[], string[]];
+  bridge: string[];
+  sync: { months: string[]; sim: number[] };
+  influence: { clusters: [number, number]; twins: [number, number]; score: [number, number] };
+  moods: {
+    keys: string[];
+    emoji: string[];
+    names: Record<string, string[]>;
+    months: string[];
+    a: (number[] | null)[];
+    b: (number[] | null)[];
+    overall: [number[] | null, number[] | null];
+    sim: (number | null)[];
+    top: [number, number];
+    best: string[];
+  } | null;
+  facts?: Partial<Record<string, PairFacts>>; // by language
+  images: string[];
 }
 
 export interface ImportRow {
@@ -380,18 +483,46 @@ export const api = {
   search: (q: string, mode: SearchMode) => call<Page>(`search?${new URLSearchParams({ q, mode, porn: "yes,no" })}`),
   index: () => call<IndexItem[]>("index?porn=yes,no"),
   tags: () => call<{ tag: string; count: number }[]>("tags"),
-  get: (id: string) => call<MemeDetail>(`memes/${id}`),
+  get: (id: string, owner?: number) => call<MemeDetail>(`memes/${id}${owner ? `?owner=${owner}` : ""}`),
   /** newer: the "time" mode above its point (seed), oldest first. */
   feed: (mode: FeedMode, seed: number, offset: number, newer = false) =>
     call<{ items: FeedItem[]; next_offset: number | null }>(
       `feed?${new URLSearchParams({ mode, seed: String(seed), offset: String(offset), ...(newer ? { newer: "1" } : {}) })}`,
     ),
   seen: (ids: string[]) => call<{ ok: true }>("feed/seen", { method: "POST", body: JSON.stringify({ ids }), keepalive: true }),
+  pairFeed: (id: string, mode: PairFeedMode, seed: number, offset: number) =>
+    call<{ items: PairFeedItem[]; next_offset: number | null; modes: PairFeedMode[] }>(
+      `pairs/${id}/feed?${new URLSearchParams({ mode, seed: String(seed), offset: String(offset), tz: Intl.DateTimeFormat().resolvedOptions().timeZone })}`,
+    ),
+  pairFeedSeen: (id: string, ids: string[]) => call<{ ok: true }>(`pairs/${id}/feed/seen`, { method: "POST", body: JSON.stringify({ ids }), keepalive: true }),
+  pairGuess: (id: string, memeId: string, owner: Owner) => post<{ correct: boolean; owner: Owner }>(`pairs/${id}/guess`, { id: memeId, owner }),
+  /** Copies a partner's meme into the own collection (duplicate: it is already there). */
+  copyMeme: (id: string) => post<{ id: string; duplicate: boolean }>(`memes/${id}/copy`),
   share: (id: string) => call<{ id: string }>(`memes/${id}/share`, { method: "POST" }),
   link: (id: string) => post<{ page: string; file: string | null }>(`memes/${id}/link`),
   send: (id: string) => call<{ ok: true }>(`memes/${id}/send`, { method: "POST" }),
   sendAlbum: (id: string) => call<{ ok: true }>(`memes/${id}/send_album`, { method: "POST" }),
+  sendClip: (id: string) => call<{ ok: true }>(`memes/${id}/send_clip`, { method: "POST" }),
+  clipLink: (id: string) => call<{ url: string }>(`memes/${id}/clip_link`, { method: "POST" }),
+  /** Sets (file) or removes (null) the sound of a photo's album. */
+  setAudio: (id: string, file: File | null) => {
+    const body = new FormData();
+    if (file) body.set("audio", file);
+    return call<{ audio: string | null }>(`memes/${id}/audio`, file ? { method: "POST", body } : { method: "DELETE" });
+  },
   remove: (id: string) => call<{ ok: true }>(`memes/${id}`, { method: "DELETE" }),
   removeMany: (ids: string[]) => post<{ deleted: string[] }>("delete", { ids }),
+  pairs: () => call<{ pairs: PairView[]; bot: string }>("pairs"),
+  pairInvite: () => post<{ id: string; link: string; prepared: string | null }>("pairs"),
+  pairPick: () => post<{ id: string }>("pairs/pick"),
+  pairAccept: (id: string) => post<PairView>(`pairs/${id}/accept`),
+  pairDecline: (id: string) => post<{ ok: true }>(`pairs/${id}/decline`),
+  pairShare: (id: string, on: boolean) => post<PairView>(`pairs/${id}/share`, { on }),
+  pairEnd: (id: string) => call<{ ok: true }>(`pairs/${id}`, { method: "DELETE" }),
+  pairStats: (id: string) => call<PairStats>(`pairs/${id}/stats`),
+  pairAnalysis: (id: string) => call<{ current: AnalysisRun | null; ready: AnalysisRun | null }>(`pairs/${id}/analysis`),
+  pairAnalysisStart: (id: string, llm: boolean) => post<AnalysisRun>(`pairs/${id}/analysis`, { llm }),
+  pairAnalysisResult: (id: string) => call<PairResult>(`pairs/${id}/analysis/result`),
+  pairMemes: (owner: number, ids: string[]) => call<{ items: MemeBrief[] }>(`memes?owner=${owner}&ids=${ids.join(",")}`),
   files: (ids: string[]) => call<{ id: string; name: string; url: string }[]>(`files?ids=${ids.join(",")}`),
 };

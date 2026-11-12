@@ -16,10 +16,10 @@
     Tag,
     TextField,
   } from "@cofob2/design-system-svelte";
-  import { Bot, ChartNoAxesCombined, CircleCheck, Clapperboard, CircleUser, Download, Layers, ListChecks, LogOut, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Upload, X } from "@lucide/svelte";
+  import { Bot, ChartNoAxesCombined, CircleCheck, Clapperboard, CircleUser, Download, Layers, ListChecks, LogOut, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Upload, Users, X } from "@lucide/svelte";
   import { onMount, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
-  import { api, ApiError, type FeedMode, type Me, type MemeBrief, type Sort } from "./api";
+  import { api, ApiError, type FeedMode, type Me, type MemeBrief, type PairFeedMode, type PairView, type Sort } from "./api";
   import Account from "./Account.svelte";
   import FilterDrawer from "./FilterDrawer.svelte";
   import { activeCount, emptyFilters, groups, matches, toQuery, type Filters } from "./filters";
@@ -31,15 +31,30 @@
   import UploadPanel from "./UploadPanel.svelte";
   import { addFiles, onUploadReady } from "./uploads.svelte";
   import { forget, loadIndex, localSearch, textIndex } from "./search.svelte";
+  import { viewing } from "./viewing.svelte";
 
   // "login": web without a session; "denied": the account has no access.
   let auth = $state<"checking" | "ok" | "login" | "denied">("checking");
   let me = $state<Me | null>(null);
   let accountOpen = $state(false);
-  let view = $state<"grid" | "analytics" | "feed">("grid"); // analytics: the charts mode (loaded on demand with ECharts)
+  let view = $state<"grid" | "analytics" | "feed" | "pairs" | "pair">("grid"); // analytics: the charts mode (loaded on demand with ECharts)
   // ?feed=<mode>: the bot's feed button opens the feed.
   const feedLink = new URLSearchParams(location.search).get("feed") as FeedMode | null;
   if (feedLink) view = "feed";
+  // ?pair=<id>: the bot's stats button opens the pair page.
+  const pairLink = new URLSearchParams(location.search).get("pair");
+  if (pairLink) view = "pair";
+  let pairId = $state(pairLink);
+  let pairs = $state<PairView[]>([]);
+  // The pair feed (from the pair page or ?pair=<id>&feed=<mode>); it closes back to the pair page.
+  let pairFeed = $state<{ id: string; name: string; partner: number; mode?: PairFeedMode | null }>();
+  function openPairFeed(p: PairView, mode?: PairFeedMode | null) {
+    pairId = p.id;
+    pairFeed = { id: p.id, name: p.partner.name ?? s.pairSomeone, partner: p.partner.id!, mode };
+    view = "feed";
+  }
+  // Partners who show their memes: the toolbar switches the library to theirs.
+  const sharing = $derived(pairs.filter((p) => p.status === "active" && p.they_share && p.partner.id));
   let accountTab = $state("stats");
   // Result of the OpenRouter connect redirect (?key=connected|failed), shown once.
   let notice = $state<{ tone: "success" | "danger"; text: string } | null>(null);
@@ -58,6 +73,7 @@
   let tagsOpen = $state(false);
   let tagList = $state<{ tag: string; count: number }[] | null>(null);
   let selected = $state<string | null>(null);
+  let partnerMeme = $state<{ id: string; owner: number }>(); // a partner's meme opened from pair stats
   let sentinel = $state<HTMLElement>();
   let generation = 0; // drops answers of outdated requests
 
@@ -138,7 +154,7 @@
   const pending = $derived(searching && (mode === "quick" ? query.trim().length >= 2 && serverItems === null : aiLoading));
 
   async function serverSearch(q: string, gen: number) {
-    const page = await api.search(q, "fast").catch(() => null);
+    const page = await api.search(q, viewing.who ? "fts" : "fast").catch(() => null);
     if (gen === searchGen) serverItems = page?.items ?? [];
   }
 
@@ -210,13 +226,52 @@
   // Reload the list when the filters change.
   $effect(() => {
     if (auth !== "ok") return;
-    void [sort, tag, JSON.stringify(filters)];
+    void [sort, tag, JSON.stringify(filters), viewing.who];
     // untrack: load() reads `loading`/`nextOffset`; tracking them would reload page 1 after every load.
     untrack(() => load(true));
   });
 
   $effect(() => {
+    void viewing.who;
     if (auth === "ok") untrack(() => loadIndex().catch(() => {}));
+  });
+
+  $effect(() => {
+    if (auth === "ok" && view === "grid") api.pairs().then(
+        (r) => {
+          pairs = r.pairs;
+          if (viewing.who && !sharing.some((p) => p.partner.id === viewing.who!.id)) watch(null); // the pair ended or stopped sharing
+        },
+        () => {},
+      );
+  });
+
+  function pickOwner(value: string) {
+    const p = sharing.find((x) => String(x.partner.id) === value);
+    watch(p ? { id: p.partner.id!, name: p.partner.name ?? s.pairSomeone } : null);
+  }
+
+  /** Switches the library between the own memes and a partner's (null). */
+  function watch(who: { id: number; name: string } | null) {
+    viewing.who = who;
+    query = "";
+    tag = null;
+    tagList = null;
+    selected = null;
+    stopSelecting();
+  }
+
+  // Telegram's back button on the pair pages (the meme detail has its own).
+  $effect(() => {
+    if (!tg || (view !== "pairs" && view !== "pair") || selected) return;
+    const back = () => (view = view === "pair" ? "pairs" : "grid");
+    const timer = setTimeout(() => tg!.BackButton.show()); // after a closing detail hides it
+    tg.BackButton.onClick(back);
+    return () => {
+      clearTimeout(timer);
+      tg!.BackButton.offClick(back);
+      tg!.BackButton.hide();
+    };
   });
 
   async function openTags() {
@@ -239,7 +294,7 @@
   function onDrop(event: DragEvent) {
     event.preventDefault();
     dragging = false;
-    if (auth === "ok" && event.dataTransfer?.files.length) addFiles(event.dataTransfer.files);
+    if (auth === "ok" && !viewing.who && event.dataTransfer?.files.length) addFiles(event.dataTransfer.files);
   }
 
   onMount(() => {
@@ -255,6 +310,10 @@
       (value) => {
         me = value;
         auth = "ok";
+        if (pairLink && feedLink) api.pairs().then((r) => {
+          const p = r.pairs.find((x) => x.id === pairLink && x.partner.id);
+          if (p) openPairFeed(p, feedLink as PairFeedMode);
+        }, () => {});
         const b = value.billing;
         if (value.role === "paid" && !b.active) paywall.reason = "subscribe";
         else if (value.role === "paid" && !b.ownKey && b.balance <= 0 && b.allowanceLeft <= 0) paywall.reason = "credit";
@@ -311,16 +370,51 @@
       />
     {/await}
   </Container>
+{:else if view === "pairs"}
+  <Container size="default" class="app">
+    {#await import("./Pairs.svelte") then { default: Pairs }}
+      <Pairs
+        onBack={() => (view = "grid")}
+        onOpen={(id) => {
+          pairId = id;
+          view = "pair";
+        }}
+      />
+    {/await}
+  </Container>
+{:else if view === "pair" && pairId}
+  <Container size="default" class="app">
+    {#await import("./PairStats.svelte") then { default: PairStats }}
+      <PairStats
+        id={pairId}
+        onBack={() => (view = "pairs")}
+        onOpen={(id, owner) => {
+          selected = id;
+          if (owner) partnerMeme = { id, owner };
+        }}
+        onView={(who) => {
+          watch(who);
+          view = "grid";
+        }}
+        onFeed={openPairFeed}
+      />
+    {/await}
+  </Container>
 {/if}
 
 <!-- Hidden, not unmounted: the grid keeps its list, scroll observer and search while the charts are open. -->
 {#if view === "feed"}
   {#await import("./Feed.svelte") then { default: Feed }}
     <Feed
-      initial={feedLink}
-      onClose={() => (view = "grid")}
+      initial={pairFeed ? pairFeed.mode : feedLink}
+      pair={pairFeed}
+      onClose={() => {
+        view = pairFeed ? "pair" : "grid";
+        pairFeed = undefined;
+      }}
       onTag={(t) => {
         view = "grid";
+        pairFeed = undefined;
         pickTag(t);
       }}
       onDeleted={(id) => drop([id])}
@@ -342,7 +436,7 @@
       {#snippet leading()}<Search size={16} aria-hidden="true" />{/snippet}
     </TextField>
 
-    {#if searching}
+    {#if searching && !viewing.who}
       <Stack gap="xs">
         <Inline gap="sm" align="center" wrap>
           <Button
@@ -368,6 +462,15 @@
 
     <Inline gap="sm" align="center" wrap>
       <Select bind:value={sort} options={sortOptions} aria-label={s.sort} size="sm" disabled={searching} />
+      {#if sharing.length}
+        <Select
+          value={String(viewing.who?.id ?? "")}
+          options={[{ value: "", label: s.pairMine }, ...sharing.map((p) => ({ value: String(p.partner.id), label: fill(s.pairTheirs, { name: p.partner.name ?? s.pairSomeone }) }))]}
+          aria-label={s.pairs}
+          size="sm"
+          onchange={(e: Event) => pickOwner((e.currentTarget as HTMLSelectElement).value)}
+        />
+      {/if}
       <Button variant="secondary" size="sm" onclick={openTags} disabled={searching}>
         {#snippet leading()}<Tags size={16} aria-hidden="true" />{/snippet}
         {s.tags}
@@ -396,17 +499,20 @@
         >
       {/if}
       <span class="spacer"></span>
-      <Button size="sm" variant={selecting ? "primary" : "secondary"} onclick={() => (selecting ? stopSelecting() : (selecting = true))}>
-        {#snippet leading()}<ListChecks size={16} aria-hidden="true" />{/snippet}
-        {s.select}
-      </Button>
-      <Button size="sm" onclick={() => fileInput?.click()}>
-        {#snippet leading()}<Upload size={16} aria-hidden="true" />{/snippet}
-        {s.upload}
-      </Button>
-      <IconButton label={s.feed} variant="ghost" size="sm" onclick={() => (view = "feed")}><Clapperboard size={18} /></IconButton>
-      <IconButton label={s.analytics} variant="ghost" size="sm" onclick={() => (view = "analytics")}><ChartNoAxesCombined size={18} /></IconButton>
-      <IconButton label={s.account} variant="ghost" size="sm" onclick={() => (accountOpen = true)}><CircleUser size={18} /></IconButton>
+      {#if !viewing.who}
+        <Button size="sm" variant={selecting ? "primary" : "secondary"} onclick={() => (selecting ? stopSelecting() : (selecting = true))}>
+          {#snippet leading()}<ListChecks size={16} aria-hidden="true" />{/snippet}
+          {s.select}
+        </Button>
+        <Button size="sm" onclick={() => fileInput?.click()}>
+          {#snippet leading()}<Upload size={16} aria-hidden="true" />{/snippet}
+          {s.upload}
+        </Button>
+        <IconButton label={s.feed} variant="ghost" size="sm" onclick={() => (view = "feed")}><Clapperboard size={18} /></IconButton>
+        <IconButton label={s.analytics} variant="ghost" size="sm" onclick={() => (view = "analytics")}><ChartNoAxesCombined size={18} /></IconButton>
+        <IconButton label={s.pairs} variant="ghost" size="sm" onclick={() => (view = "pairs")}><Users size={18} /></IconButton>
+        <IconButton label={s.account} variant="ghost" size="sm" onclick={() => (accountOpen = true)}><CircleUser size={18} /></IconButton>
+      {/if}
       {#if !tg}
         <IconButton label={s.logout} variant="ghost" size="sm" onclick={logout}><LogOut size={16} /></IconButton>
       {/if}
@@ -425,6 +531,11 @@
 
     {#if notice}
       <Alert tone={notice.tone} title={notice.text} dismissible onDismiss={() => (notice = null)} />
+    {/if}
+    {#if viewing.who}
+      <Alert tone="info" title={fill(s.pairViewing, { name: viewing.who.name })}>
+        <Button size="sm" variant="secondary" onclick={() => watch(null)}>{s.pairBackMine}</Button>
+      </Alert>
     {/if}
     {#if paywall.reason}
       <Alert tone="info" title={paywall.reason === "credit" ? s.billGateCredit : s.billGateSubscribe}>
@@ -517,7 +628,7 @@
   {/if}
 </Drawer>
 
-<UploadPanel />
+{#if !viewing.who}<UploadPanel />{/if}
 <FilterDrawer open={filtersOpen} {filters} onChange={(f) => (filters = f)} onClose={() => (filtersOpen = false)} />
 {#if me}
   <Account {me} bind:tab={accountTab} open={accountOpen} onClose={() => (accountOpen = false)} onMeChange={(value) => (me = value)} />
@@ -527,6 +638,7 @@
 {#if selected}
   <MemeDetail
     id={selected}
+    owner={partnerMeme?.id === selected ? partnerMeme.owner : undefined}
     onClose={() => (selected = null)}
     onTag={pickTag}
     onRetried={(id) => {

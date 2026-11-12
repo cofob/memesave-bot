@@ -41,3 +41,19 @@ export const DESCRIBE_VIDEO_FALLBACKS = ["google/gemini-4-argon", "qwen/qwen3.8-
 // MCP: OAuth scopes and the request body limit (base64 of a 10 MB photo).
 export const MCP_SCOPES = { read: "memes:read", write: "memes:write" } as const;
 export const MCP_BODY_MAX = 16 << 20;
+
+// Pair analysis mood anchors when the LLM is off or fails (src/moods.ts): phrases of the emotional tone, en + ru.
+export const DEFAULT_MOODS = [
+  { key: "absurd", emoji: "🤪", name_en: "Absurd", name_ru: "Абсурд", phrases: ["surreal nonsense that makes no sense", "random absurd humor", "weird bizarre joke", "сюрреалистичный бред", "абсурдный юмор без смысла", "странная нелепая шутка"] },
+  { key: "sarcasm", emoji: "😏", name_en: "Sarcasm", name_ru: "Сарказм", phrases: ["dry sarcastic irony", "mocking passive-aggressive joke", "ironic eye-roll", "сухая саркастичная ирония", "язвительная насмешка", "ирония с закатыванием глаз"] },
+  { key: "dark", emoji: "💀", name_en: "Dark humor", name_ru: "Чёрный юмор", phrases: ["dark humor about death and misery", "grim morbid joke", "edgy black comedy", "чёрный юмор про смерть", "мрачная жестокая шутка", "циничная чернуха"] },
+  { key: "cute", emoji: "🥺", name_en: "Cute", name_ru: "Милота", phrases: ["adorable cute animals", "sweet wholesome cuteness", "aww so cute", "милые животные", "умилительная милота", "няшный котик"] },
+  { key: "cringe", emoji: "😬", name_en: "Cringe", name_ru: "Кринж", phrases: ["awkward cringe moment", "embarrassing secondhand shame", "cringeworthy situation", "неловкий кринж", "испанский стыд", "позорная ситуация"] },
+  { key: "sad", emoji: "😢", name_en: "Sad", name_ru: "Грусть", phrases: ["sad lonely melancholy", "depressing heartbreak", "crying inside", "грусть и одиночество", "тоска и меланхолия", "плачу внутри"] },
+  { key: "rant", emoji: "😤", name_en: "Rant", name_ru: "Злость", phrases: ["angry rant about everything", "furious annoyed outrage", "frustrated yelling", "злой рант обо всём", "бешенство и раздражение", "крик от бессилия"] },
+  { key: "nostalgia", emoji: "📼", name_en: "Nostalgia", name_ru: "Ностальгия", phrases: ["nostalgic childhood memories", "the good old days", "retro throwback", "ностальгия по детству", "старые добрые времена", "ретро из прошлого"] },
+  { key: "cozy", emoji: "☕", name_en: "Cozy", name_ru: "Уют", phrases: ["cozy calm comfort", "warm relaxing evening", "peaceful chill vibe", "уютное спокойствие", "тёплый вечер дома", "расслабленный вайб"] },
+  { key: "chaos", emoji: "🔥", name_en: "Chaos", name_ru: "Хаос", phrases: ["total chaos and mayhem", "unhinged energy", "everything is on fire", "полный хаос", "безумная энергия", "всё горит"] },
+  { key: "wholesome", emoji: "🤗", name_en: "Wholesome", name_ru: "Поддержка", phrases: ["wholesome support and kindness", "you are loved encouragement", "heartwarming friendship", "добрая поддержка", "ты молодец, тебя любят", "тёплая дружба"] },
+  { key: "self", emoji: "🙃", name_en: "Self-irony", name_ru: "Самоирония", phrases: ["self-deprecating humor about my life", "laughing at my own failures", "me being a mess", "самоирония про свою жизнь", "смеюсь над своими провалами", "я опять всё испортил"] },
+];

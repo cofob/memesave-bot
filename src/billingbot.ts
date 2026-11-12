@@ -9,6 +9,7 @@ import {
   hasAllowance,
   isActive,
   isFree,
+  langOfUser,
   money,
   ownKey,
   paymentText,
@@ -28,6 +29,10 @@ import { btcpayOn, createBtcpayInvoice, productUsd, usdtNetworks } from "./crypt
 import type { User } from "./db";
 import type { Env } from "./env";
 import { t, type Lang } from "./i18n";
+import { botApi } from "./botapi";
+import { editWidget, sendWidget } from "./widget";
+import { balancePage } from "./widgetpages";
+import { subscribePage } from "./subscribewidget";
 
 // Telegram UI for billing: /subscribe, /balance, payment methods, Stars payment updates, the AI gate.
 
@@ -45,14 +50,8 @@ function statusLine(u: User, lang: Lang) {
 export async function subscribeCard(env: Env, api: Api, u: User, lang: Lang) {
   const byok = ownKey(u);
   const [m, y] = [planUsd("monthly", byok), planUsd("yearly", byok)];
-  const text = t(lang, "bill_subscribe", {
-    m_usd: money(m),
-    m_stars: starsFor(m),
-    y_usd: money(y),
-    y_stars: starsFor(y),
-    included: byok ? t(lang, "bill_included_byok") : t(lang, "bill_included_std", { allowance: money(MONTHLY_ALLOWANCE) }),
-    status: statusLine(u, lang),
-  });
+  const included = byok ? t(lang, "bill_included_byok") : t(lang, "bill_included_std", { allowance: money(MONTHLY_ALLOWANCE) });
+  const text = t(lang, "bill_subscribe", { m_usd: money(m), m_stars: starsFor(m), y_usd: money(y), y_stars: starsFor(y), included, status: statusLine(u, lang) });
   if (isFree(u)) return { text, reply_markup: kb([]) };
   const [monthly, yearly] = await Promise.all([starsInvoiceLink(api, u, lang, "monthly"), starsInvoiceLink(api, u, lang, "yearly")]);
   const renew: InlineKeyboardButton[] =
@@ -63,6 +62,8 @@ export async function subscribeCard(env: Env, api: Api, u: User, lang: Lang) {
       : [];
   return {
     text,
+    // For the widget: prices and Stars invoice links (the first keyboard row).
+    plans: { m, y, monthly, yearly, included },
     reply_markup: kb([
       [{ text: t(lang, "bill_btn_stars_monthly", { stars: starsFor(m) }), url: monthly }, { text: t(lang, "bill_btn_stars_yearly", { stars: starsFor(y) }), url: yearly }],
       btcpayOn(env)
@@ -75,6 +76,18 @@ export async function subscribeCard(env: Env, api: Api, u: User, lang: Lang) {
       renew,
     ]),
   };
+}
+
+/** The plan card as a widget: plans and Stars payment in it, the other methods as buttons; false when Telegram refuses it. */
+async function sendSubscribeWidget(api: Api, u: User, lang: Lang, card: Awaited<ReturnType<typeof subscribeCard>>) {
+  if (!card.plans) return false;
+  const { m, y, monthly, yearly, included } = card.plans;
+  const saving = Math.round(100 * (1 - y / (12 * m)));
+  const plain = (s: string) => s.replace(/<[^>]+>/g, "");
+  const p = [["m", money(m), starsFor(m), monthly, null], ["y", money(y), starsFor(y), yearly, saving > 0 ? saving : null]];
+  const state = JSON.stringify({ p, i: plain(included), st: plain(statusLine(u, lang)) });
+  const reply_markup = { inline_keyboard: card.reply_markup.inline_keyboard.slice(1) };
+  return !!(await sendWidget(api, { chat_id: u.id, html: subscribePage(lang), caption: t(lang, "w_sub_caption"), parse_mode: "HTML", chat_data: state, reply_markup }));
 }
 
 /** Top-up menu: Stars sizes (invoice links) and crypto sizes. */
@@ -101,6 +114,36 @@ export async function balanceText(env: Env, u: User, lang: Lang) {
     allowance: money(hasAllowance(u) ? MONTHLY_ALLOWANCE : 0),
     balance: money(u.balance),
     own: t(lang, ownKey(u) ? "bill_yes" : "bill_no"),
+  });
+}
+
+/** The balance widget state: plan status (plain text), balance and this month's included spend. */
+async function balanceState(env: Env, u: User, lang: Lang) {
+  const [left, all] = [await allowanceLeft(env.DB, u), hasAllowance(u) ? MONTHLY_ALLOWANCE : 0];
+  const s = statusLine(u, lang).replace(/<[^>]+>/g, "");
+  return JSON.stringify({ s, b: money(u.balance), l: money(left), a: money(all), r: all ? left / all : 0 });
+}
+
+/** Sends the balance widget and keeps its id for live updates; false when Telegram refuses it. */
+async function sendBalanceWidget(env: Env, api: Api, u: User, lang: Lang, reply_markup: unknown) {
+  const caption = t(lang, "w_balance_caption", { balance: money(u.balance) });
+  const sent = await sendWidget(api, { chat_id: u.id, html: balancePage(lang), caption, parse_mode: "HTML", chat_data: await balanceState(env, u, lang), reply_markup });
+  if (sent) await env.DB.prepare("UPDATE users SET balance_msg_id = ?, balance_at = unixepoch() WHERE id = ?").bind(sent.message_id, u.id).run();
+  return !!sent;
+}
+
+/** Silently updates the user's last /balance widget: at most every 10 s, unless forced (payments, plan changes). */
+export async function pushBalance(env: Env, userId: number, force = false) {
+  const u = await env.DB.prepare(
+    "UPDATE users SET balance_at = unixepoch() WHERE id = ?1 AND balance_msg_id IS NOT NULL AND (?2 OR balance_at IS NULL OR balance_at <= unixepoch() - 10) RETURNING *",
+  )
+    .bind(userId, force ? 1 : 0)
+    .first<User & { balance_msg_id: number }>();
+  if (!u) return;
+  await editWidget(botApi(env.BOT_TOKEN), u.id, u.balance_msg_id, await balanceState(env, u, langOfUser(u))).catch(async (e) => {
+    console.error("pushBalance", e);
+    // The user deleted the message: stop updating it.
+    if (String(e).includes("not found")) await env.DB.prepare("UPDATE users SET balance_msg_id = NULL WHERE id = ?").bind(u.id).run();
   });
 }
 
@@ -147,6 +190,7 @@ async function cryptoCheckout(env: Env, ctx: Ctx, provider: "btc" | "usdt", kind
 export function registerBilling<C extends Ctx>(bot: Composer<C>, env: Env) {
   const sendSubscribe = async (ctx: C) => {
     const card = await subscribeCard(env, ctx.api, ctx.user, ctx.lang);
+    if (await sendSubscribeWidget(ctx.api, ctx.user, ctx.lang, card)) return;
     await ctx.reply(card.text, { ...html, reply_markup: card.reply_markup });
   };
   const sendTopup = async (ctx: C) => {
@@ -155,9 +199,11 @@ export function registerBilling<C extends Ctx>(bot: Composer<C>, env: Env) {
   };
 
   bot.command("subscribe", sendSubscribe);
-  bot.command("balance", async (ctx) =>
-    ctx.reply(await balanceText(env, ctx.user, ctx.lang), { ...html, reply_markup: kb([[topupButton(ctx.lang), subscribeButton(ctx.lang)]]) }),
-  );
+  bot.command("balance", async (ctx) => {
+    const reply_markup = kb([[topupButton(ctx.lang), subscribeButton(ctx.lang)]]);
+    if (!isFree(ctx.user) && (await sendBalanceWidget(env, ctx.api, ctx.user, ctx.lang, reply_markup))) return;
+    await ctx.reply(await balanceText(env, ctx.user, ctx.lang), { ...html, reply_markup });
+  });
   bot.command("paysupport", (ctx) =>
     ctx.reply(t(ctx.lang, "paysupport", { contact: "@cofob" }), html),
   );
@@ -225,6 +271,7 @@ export function registerPayments(bot: Bot<Ctx>, env: Env) {
       recurring: !!sp.is_recurring && !sp.is_first_recurring,
       subChargeId: sp.is_first_recurring ? sp.telegram_payment_charge_id : undefined,
     });
+    if (applied) await pushBalance(env, ctx.from.id, true).catch(console.error);
     if (applied && user) await ctx.reply(paymentText(ctx.lang, p.k, user, starsPaymentUsd(p), !!sp.is_recurring && !sp.is_first_recurring), html);
   });
 
@@ -234,6 +281,7 @@ export function registerPayments(bot: Bot<Ctx>, env: Env) {
       .bind(state, from.id, state)
       .first<User>();
     if (!u) return;
+    await pushBalance(env, u.id, true).catch(console.error);
     const key = state === "failed" ? "bill_renew_failed" : state === "canceled" ? "bill_renew_canceled" : "bill_renew_resumed";
     const buttons = state === "failed" ? kb([[subscribeButton(ctx.lang)]]) : undefined;
     await ctx.api.sendMessage(u.id, t(ctx.lang, key, { date: date(u.paid_until ?? 0, ctx.lang) }), { ...html, reply_markup: buttons });

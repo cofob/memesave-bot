@@ -18,23 +18,29 @@ const photo = (n: number) =>
 describe("album status message", () => {
   it("sends one status message for a media group and shows its progress", async () => {
     await e.DB.prepare("INSERT INTO users (id, role, lang) VALUES (81, 'user', 'en')").run();
-    const reply = vi.fn(async () => ({ message_id: 50 }));
-    const ctx = { user: { id: 81 }, lang: "en", reply, react: async () => {} } as unknown as Ctx;
+    const sendWidget = vi.fn(async () => ({ message_id: 50 }));
+    const ctx = { user: { id: 81 }, lang: "en", api: { raw: { sendWidget } }, react: async () => {} } as unknown as Ctx;
     await Promise.all([1, 2, 3].map((n) => receiveMedia(ctx, e, photo(n))));
-    expect(reply).toHaveBeenCalledTimes(1);
+    expect(sendWidget).toHaveBeenCalledTimes(1);
     const { results } = await e.DB.prepare("SELECT id, status_msg_id FROM memes WHERE user_id = 81").all<{ id: string; status_msg_id: number }>();
     expect(results.map((r) => r.status_msg_id)).toEqual([50, 50, 50]);
 
     const edits: string[] = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (_, init) => {
-      edits.push(JSON.parse(String(init?.body)).text);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const body = JSON.parse(String(init?.body));
+      edits.push(`${String(url).split("/").pop()} ${body.chat_data ?? body.caption}`);
       return Response.json({ ok: true, result: true });
     });
     await e.DB.prepare("UPDATE memes SET status = 'ready', title = 'A' WHERE file_unique_id = 'u1'").run();
     await editStatus(e, (await getMeme(e.DB, results[0].id))!, "ignored");
     await e.DB.prepare("UPDATE memes SET status = 'ready', title = 'B' WHERE user_id = 81 AND title IS NULL").run();
     await editStatus(e, (await getMeme(e.DB, results[1].id))!, "ignored");
-    expect(edits).toEqual([expect.stringContaining("Saved, indexing… 1/3"), expect.stringContaining("Saved 3 of 3:\n• <b>A</b>\n• <b>B</b>\n• <b>B</b>")]);
+    // The widget's state on each step, the caption (what clients without widgets show) once all are done.
+    expect(edits).toEqual([
+      'editMessageWidgetData {"n":3,"d":1,"r":["A"],"s":"i"}',
+      'editMessageWidgetData {"n":3,"d":3,"r":["A","B","B"],"s":"r"}',
+      expect.stringMatching(/^editMessageCaption .*Saved 3 of 3:\n• <b>A<\/b>\n• <b>B<\/b>\n• <b>B<\/b>$/),
+    ]);
   });
 });
 

@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { Api } from "grammy";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { addToPost } from "../src/channels";
 import { visible } from "../src/db";
 import type { Env } from "../src/env";
 import { feedPage, markSeen, type FeedMode } from "../src/feed";
@@ -107,6 +108,12 @@ describe("feed API", () => {
     expect((await req("feed?mode=nope")).status).toBe(400);
     expect((await req("feed/seen", { method: "POST", body: JSON.stringify({ ids: ["p1"] }) })).status).toBe(200);
     expect(await e.DB.prepare("SELECT COUNT(*) AS n FROM meme_views WHERE user_id = 97").first("n")).toBe(1);
+
+    // An album: once, as its first meme, with all its memes in order in slides.
+    for (const [id, pos] of [["fa2", 2], ["fa1", 1]] as const) await add(97, id, 2), await addToPost(e.DB, 97, { memeId: id, mediaGroupId: "g", position: pos });
+    const all = (await (await req("feed?mode=new")).json<any>()).items;
+    expect(all.map((m: any) => [m.id, m.album, m.slides?.map((x: any) => x.id)])).toEqual([["p1", undefined, undefined], ["fa1", 2, ["fa1", "fa2"]]]);
+    expect(all[1].slides[1].file).toMatch(/\/app\/file\/fa2\?e=/);
   });
 });
 

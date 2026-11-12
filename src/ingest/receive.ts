@@ -3,6 +3,7 @@ import type { Ctx } from "../bot";
 import { storageFull, type Kind } from "../db";
 import type { Env } from "../env";
 import { t } from "../i18n";
+import { sendSaveStatus } from "../savewidget";
 import { collectingImport } from "../batch";
 import { addToPost } from "../channels";
 
@@ -84,7 +85,7 @@ export type MemeRow = NewMeme & {
 };
 
 /** How a meme was saved (the analytics of sources). */
-export type AddedVia = "bot" | "web" | "miniapp" | "api" | "mcp" | "zip";
+export type AddedVia = "bot" | "web" | "miniapp" | "api" | "mcp" | "zip" | "pair";
 
 /** Inserts a meme; returns its id, or null when the user already has this file. */
 export const insertMeme = (db: D1Database, userId: number, m: MemeRow) =>
@@ -179,7 +180,7 @@ export async function receiveMedia(
   }
 
   const postId = await addToPost(db, ctx.user.id, { memeId, mediaGroupId: group, caption: msg.caption, position: link?.position ?? msg.message_id });
-  const sendStatus = async () => (await ctx.reply(t(ctx.lang, "saving"), { ...html, reply_parameters: { message_id: msg.message_id } })).message_id;
+  const sendStatus = () => sendSaveStatus(ctx.api, ctx.user.id, ctx.lang, msg.message_id);
   const statusId = group ? await albumStatus(db, postId, sendStatus) : await sendStatus();
   await db
     .prepare("UPDATE memes SET status = 'embedding', error = NULL, status_msg_id = COALESCE(?, status_msg_id), updated_at = unixepoch() WHERE id = ?")

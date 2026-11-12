@@ -13,6 +13,8 @@ interface WebApp {
   showAlert(message: string): void;
   shareMessage(id: string, cb?: (sent: boolean) => void): void;
   openLink(url: string): void;
+  openTelegramLink(url: string): void;
+  requestChat?(id: string, cb?: (sent: boolean) => void): void; // Bot API 9.6+
   downloadFile(params: { url: string; file_name: string }, cb?: (accepted: boolean) => void): void;
   openInvoice(url: string, cb?: (status: "paid" | "cancelled" | "failed" | "pending") => void): void;
   BackButton: { show(): void; hide(): void; onClick(cb: () => void): void; offClick(cb: () => void): void };
@@ -64,6 +66,9 @@ export function syncTheme() {
 
 /** Opens an external page: the system browser in Telegram, the same tab on the web. */
 export const openExternal = (url: string) => (tg ? tg.openLink(url) : (location.href = url));
+
+/** Opens a t.me link: inside Telegram in the Mini App, a new tab on the web. */
+export const openTelegram = (url: string) => (tg ? tg.openTelegramLink(url) : window.open(url, "_blank", "noopener"));
 
 /** Opens a payment page: Telegram's browser in the Mini App, a new tab on the web. */
 export const openTab = (url: string) => (tg ? tg.openLink(url) : window.open(url, "_blank", "noopener"));

@@ -3,14 +3,17 @@ import type { Env } from "./env";
 import { allStats } from "./stats";
 
 const DAY = "date(created_at, 'unixepoch')";
-const MONTH = "strftime('%Y-%m', created_at, 'unixepoch')";
+export const MONTH = "strftime('%Y-%m', created_at, 'unixepoch')";
 
 const SIZE = `CASE WHEN file_size < 102400 THEN '<100K' WHEN file_size < 512000 THEN '<500K' WHEN file_size < 1048576 THEN '<1M'
   WHEN file_size < 5242880 THEN '<5M' WHEN file_size < 20971520 THEN '<20M' ELSE '20M+' END`;
-const DURATION = `CASE WHEN duration < 5 THEN '<5s' WHEN duration < 15 THEN '<15s' WHEN duration < 30 THEN '<30s'
+export const DURATION = `CASE WHEN duration < 5 THEN '<5s' WHEN duration < 15 THEN '<15s' WHEN duration < 30 THEN '<30s'
   WHEN duration < 60 THEN '<1m' WHEN duration < 180 THEN '<3m' ELSE '3m+' END`;
-const ASPECT = `CASE WHEN width * 1.0 / height < 0.8 THEN 'portrait' WHEN width * 1.0 / height < 1.25 THEN 'square'
+export const ASPECT = `CASE WHEN width * 1.0 / height < 0.8 THEN 'portrait' WHEN width * 1.0 / height < 1.25 THEN 'square'
   WHEN width * 1.0 / height < 2 THEN 'landscape' ELSE 'wide' END`;
+/** Memes per weekday (0 = Sunday) and hour, UTC. */
+export const HEATMAP =
+  "SELECT CAST(strftime('%w', created_at, 'unixepoch') AS INTEGER) AS wd, CAST(strftime('%H', created_at, 'unixepoch') AS INTEGER) AS h, COUNT(*) AS n FROM memes WHERE user_id = ? GROUP BY wd, h";
 
 /** Tag counts, tags per meme, co-occurrence of the top tags and monthly trends of the top tags. */
 export function tagStats(rows: { tags: string; month: string }[]) {
@@ -89,7 +92,7 @@ export async function userAnalytics(env: Env, user: User) {
   const res = await env.DB.batch([
     q(`SELECT ${DAY} AS day, kind, COUNT(*) AS n FROM memes WHERE user_id = ? GROUP BY day, kind ORDER BY day`),
     q(`SELECT date(saved_at, 'unixepoch') AS day, COUNT(*) AS n FROM memes WHERE user_id = ? AND saved_at IS NOT NULL GROUP BY day ORDER BY day`),
-    q("SELECT CAST(strftime('%w', created_at, 'unixepoch') AS INTEGER) AS wd, CAST(strftime('%H', created_at, 'unixepoch') AS INTEGER) AS h, COUNT(*) AS n FROM memes WHERE user_id = ? GROUP BY wd, h"),
+    q(HEATMAP),
     group("kind"),
     group("status"),
     group("language", "AND language IS NOT NULL"),

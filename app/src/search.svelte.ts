@@ -1,5 +1,6 @@
 import MiniSearch from "minisearch";
 import { api, type IndexItem, type MemeBrief } from "./api";
+import { viewing } from "./viewing.svelte";
 
 // Client-side text index of all memes: instant results on every keystroke.
 export const textIndex = $state({ version: 0 });
@@ -36,7 +37,9 @@ export function findIds(index: MiniSearch, query: string): string[] {
 }
 
 export async function loadIndex() {
+  const who = viewing.who?.id;
   const list = await api.index();
+  if (who !== viewing.who?.id) return; // the user switched meanwhile: a newer load owns the index
   const next = makeIndex(list);
   docs.clear();
   for (const m of list) docs.set(m.id, m);

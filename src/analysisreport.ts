@@ -28,7 +28,7 @@ interface Result {
 /** Text for a Markdown table cell or a paragraph: Markdown syntax characters are escaped. */
 export const md = (s: string) => s.replace(/[\\`*_~|[\]()#<>=!$]/g, "\\$&").replace(/\n/g, " ");
 
-const table = (head: string[], rows: (string | number)[][]) =>
+export const table = (head: string[], rows: (string | number)[][]) =>
   [`| ${head.join(" | ")} |`, `|${head.map((_, i) => (i ? "---:" : ":---")).join("|")}|`, ...rows.map((r) => `| ${r.join(" | ")} |`)].join("\n");
 
 /** Builds the report Markdown in the order of the web page; `image(name, caption)` returns the media block of a
@@ -171,24 +171,35 @@ export async function sendReport(env: Env, analysisId: string, msgId?: number) {
     ...(result.alignment?.worst ?? []).slice(0, 10).map(([id]) => id),
   ]);
 
-  const rendered = new Set(result.images ?? []);
-  const used: string[] = [];
-  const markdown = reportMarkdown(lang, result, (name, caption) => {
-    if (!rendered.has(name) || used.length >= 50) return "";
-    used.push(name);
-    return `![](tg://photo?id=${name} "${t(lang, caption).replace(/"/g, "'")}")`;
-  });
-  const media: InputRichMessageMedia[] = [];
-  for (const name of used) {
-    const png = await env.MEDIA.get(imageKey(a.id, name));
-    if (png) media.push({ id: name, media: { type: "photo", media: new InputFile(new Uint8Array(await png.arrayBuffer()), `${name}.png`) } });
-  }
+  const img = charts(result.images);
+  const markdown = reportMarkdown(lang, result, (name, caption) => img.image(name, t(lang, caption)));
+  const media = await img.media(env, a.id);
   const app = { text: t(lang, "app_button"), web_app: { url: `${env.PUBLIC_URL.replace(/\/$/, "")}/` } };
   const replyTo = msgId ?? a.status_msg_id;
   await botApi(env.BOT_TOKEN).sendRichMessage(user.id, { markdown, media }, {
     reply_markup: { inline_keyboard: [[app]] },
     ...(replyTo && { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } }),
   });
+}
+
+/** Rendered chart PNGs of an analysis for a rich message: `image` returns the Markdown block of one (or ""), `media` loads those used. */
+export function charts(rendered: string[] = []) {
+  const used: string[] = [];
+  return {
+    image: (name: string, caption: string) => {
+      if (!rendered.includes(name) || used.length >= 50) return "";
+      used.push(name);
+      return `![](tg://photo?id=${name} "${caption.replace(/"/g, "'")}")`;
+    },
+    async media(env: Env, id: string) {
+      const media: InputRichMessageMedia[] = [];
+      for (const name of used) {
+        const png = await env.MEDIA.get(imageKey(id, name));
+        if (png) media.push({ id: name, media: { type: "photo", media: new InputFile(new Uint8Array(await png.arrayBuffer()), `${name}.png`) } });
+      }
+      return media;
+    },
+  };
 }
 
 /** The report job gave up: tells the chat why. */

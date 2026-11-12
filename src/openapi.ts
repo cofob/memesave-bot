@@ -183,6 +183,7 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
             { name: "sort", in: "query", schema: { type: "string", enum: ["new", "old", "title"], default: "new" }, description: "new: newest first; old: oldest first; title: A–Z." },
             { name: "tag", in: "query", schema: { type: "string" }, description: "Exact tag (see /tags)." },
             { name: "offset", in: "query", schema: { type: "integer", minimum: 0, default: 0 }, description: "next_offset of the previous page." },
+            { name: "ids", in: "query", schema: { type: "string" }, description: "Only these memes, comma separated (max 100); other parameters are ignored." },
             ...FILTERS,
           ],
           responses: { "200": ok("A page of memes.", ref("Page")), ...COMMON },
@@ -191,7 +192,7 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
       "/feed": {
         get: {
           summary: "Meme feed",
-          description: "The feed page by page (10 per page). An album shows as its first meme. Dates are saved_at (when known), else created_at.",
+          description: "The feed page by page (10 per page). An album shows as its first meme with all its memes (and file URLs) in `slides`. Dates are saved_at (when known), else created_at.",
           parameters: [
             {
               name: "mode",
@@ -225,6 +226,7 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
       },
       "/memes/{id}": {
         get: memeOps("Get a meme", "All metadata of a meme with signed file URLs and its album.", {
+          parameters: [idParam],
           responses: { "200": ok("The meme.", ref("MemeDetail")), ...COMMON, ...NOT_FOUND },
         }),
         delete: memeOps("Delete a meme", "Deletes the meme with its files and search index. Cannot be undone. Needs a write token."),
@@ -248,7 +250,19 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
       },
       "/memes/{id}/send": { post: memeOps("Send a meme", "Sends the meme to the user's chat with the bot. Needs a write token.") },
       "/memes/{id}/send_album": {
-        post: memeOps("Send an album", "Sends the whole album of the meme (or the meme alone) to the user's chat with the bot, in albums of 10. Needs a write token."),
+        post: memeOps("Send an album", "Sends the whole album of the meme (or the meme alone) to the user's chat with the bot, in albums of 10, then its audio. Needs a write token."),
+      },
+      "/memes/{id}/send_clip": {
+        post: memeOps("Send as video", "Sends the photos of the meme's album (or the photo alone) with its audio as one video: the photos slide in a loop for the audio length. Made once, then kept. 409 without audio. Needs a write token."),
+      },
+      "/memes/{id}/clip_link": {
+        post: memeOps("Video link", "Makes the video of the meme's photos with its audio (as send_clip, once) and answers `{ url }`: a signed download link, valid at least 24 hours. 409 without audio. Needs a write token."),
+      },
+      "/memes/{id}/audio": {
+        post: memeOps("Set audio", "Sets the sound of a saved photo (multipart field `audio`: mp3, m4a, ogg, up to 20 MB). One sound per album: it is shared by all photos of the album and replaces the old one. Needs a write token.", {
+          requestBody: body({ type: "object", properties: { audio: { type: "string", format: "binary" } }, required: ["audio"] }, "multipart/form-data"),
+        }),
+        delete: memeOps("Remove audio", "Removes the sound of the photo's album. Needs a write token."),
       },
       "/status": {
         get: {
@@ -352,6 +366,7 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
                   example: "tiktok:7300000000000000000",
                 },
                 position: { type: "integer", description: "Place of the file in its album, from 0." },
+                audio: { type: "string", format: "binary", description: "Optional sound of a photo (mp3, m4a, ogg, up to 20 MB). One per album: send it with one file of the album." },
                 description: {
                   type: "string",
                   description:

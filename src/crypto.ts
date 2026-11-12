@@ -1,5 +1,6 @@
 import { applyPayment, langOfUser, paymentText, planUsd, type ProductKind } from "./billing";
 import { botApi } from "./botapi";
+import { pushBalance } from "./billingbot";
 import { CRYPTO_INVOICES_PER_HOUR, CRYPTO_TOPUPS } from "./config";
 import type { User } from "./db";
 import type { Env } from "./env";
@@ -116,6 +117,7 @@ export async function settleInvoice(env: Env, inv: CryptoInvoice, overUsd = 0) {
   await env.DB.prepare("UPDATE crypto_invoices SET status = 'paid', credited_usd = ?, paid_at = unixepoch() WHERE id = ?")
     .bind(inv.usd + overUsd, inv.id)
     .run();
+  await pushBalance(env, inv.user_id, true).catch(console.error);
   if (u) await botApi(env.BOT_TOKEN).sendMessage(u.id, paymentText(langOfUser(u), inv.kind, u, inv.usd), { parse_mode: "HTML" }).catch(console.error);
   return true;
 }

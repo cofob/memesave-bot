@@ -292,6 +292,11 @@ func orthRows(m [][]float64) [][]float64 {
 
 // knn finds the k most similar rows (cosine, rows normalized) of every row, most similar first, without itself.
 func knn(x mat, k int) ([][]int, [][]float32) {
+	return knnBy(x, k, func(i, j int) bool { return i == j })
+}
+
+// knnBy is knn without the rows j that skip(i, j) rejects.
+func knnBy(x mat, k int, skip func(i, j int) bool) ([][]int, [][]float32) {
 	k = min(k, x.n-1)
 	idx, sim := make([][]int, x.n), make([][]float32, x.n)
 	parallel(x.n, func(lo, hi int) {
@@ -299,7 +304,7 @@ func knn(x mat, k int) ([][]int, [][]float32) {
 			ri := x.row(i)
 			ids, ss := make([]int, 0, k+1), make([]float32, 0, k+1)
 			for j := range x.n {
-				if j == i {
+				if skip(i, j) {
 					continue
 				}
 				s := float32(dot(ri, x.row(j)))

@@ -57,6 +57,9 @@ export async function deleteAccount(env: Env, user: User) {
     db.prepare("DELETE FROM post_items WHERE post_id IN (SELECT id FROM posts WHERE user_id = ?)").bind(user.id),
     db.prepare("UPDATE memes SET user_id = -user_id, status = 'failed', error = 'deleted', import_id = NULL WHERE user_id = ?").bind(user.id),
     ...tables.map((table) => db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(user.id)),
+    db.prepare("DELETE FROM analyses WHERE pair_id IN (SELECT id FROM pairs WHERE a = ?1 OR b = ?1)").bind(user.id),
+    db.prepare("DELETE FROM pair_quiz WHERE pair_id IN (SELECT id FROM pairs WHERE a = ?1 OR b = ?1)").bind(user.id),
+    db.prepare("DELETE FROM pairs WHERE a = ?1 OR b = ?1").bind(user.id),
     db.prepare("DELETE FROM users WHERE id = ?").bind(user.id),
   ]);
   await env.JOBS.send({ type: "purge", userId: user.id, before: Math.floor(Date.now() / 1000) });

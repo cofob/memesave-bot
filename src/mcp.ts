@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import type { OAuthResourceContext } from "@cloudflare/workers-oauth-provider";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { attachAudio, audioError } from "./audio";
 import { billingStatus, canUseAi } from "./billing";
 import { botApi } from "./botapi";
 import { MCP_BODY_MAX, MCP_SCOPES } from "./config";
@@ -84,6 +85,15 @@ async function uploadFile(a: { url?: string; data?: string; mime_type?: string; 
   }
   if (!mime || !kindOf(mime)) return "mime_type must be an image or video type";
   return new File([bytes], a.filename ?? "upload", { type: mime });
+}
+
+/** An audio file from an https URL; a string is an error. */
+async function audioFile(url: string): Promise<File | string> {
+  if (new URL(url).protocol !== "https:") return "audio_url must be https";
+  const res = await fetch(url);
+  if (!res.ok) return `audio download failed: HTTP ${res.status}`;
+  const file = new File([await res.arrayBuffer()], "audio", { type: res.headers.get("Content-Type")?.split(";")[0].trim() ?? "" });
+  return audioError(file) ?? file;
 }
 
 function buildServer(env: Env, user: User, scopes: string[]) {
@@ -235,6 +245,7 @@ function buildServer(env: Env, user: User, scopes: string[]) {
         data: z.string().optional().describe("base64 file content (needs mime_type)"),
         mime_type: z.string().optional().describe("e.g. image/jpeg, image/gif, video/mp4"),
         filename: z.string().optional(),
+        audio_url: z.string().url().optional().describe("https URL of a sound for a photo (mp3, m4a, ogg; up to 20 MB)"),
         description: z
           .object({
             title: z.string(),
@@ -260,8 +271,13 @@ function buildServer(env: Env, user: User, scopes: string[]) {
       if (denied) return denied;
       const file = await uploadFile(a);
       if (typeof file === "string") return fail(file);
+      if (a.audio_url && kindOf(file.type) !== "photo") return fail("audio is only for photos");
+      const audio = a.audio_url ? await audioFile(a.audio_url) : null;
+      if (typeof audio === "string") return fail(audio);
       const res = await saveUpload(env, user, file, { description: a.description && toDescription(a.description, ""), via: "mcp" });
-      return "error" in res ? fail(res.error) : ok(res);
+      if ("error" in res) return fail(res.error);
+      if (audio) await attachAudio(env, (await getMeme(env.DB, res.id))!, audio);
+      return ok(res);
     },
   );
 
@@ -276,6 +292,23 @@ function buildServer(env: Env, user: User, scopes: string[]) {
       const memes = await ownMemes(env, user.id, ids);
       await deleteMemes(env, memes.map((m) => m.id));
       return ok({ deleted: memes.map((m) => m.id) });
+    },
+  );
+
+  server.registerTool(
+    "set_meme_audio",
+    {
+      description: "Set the sound of a saved photo; on an album (carousel) it is one sound for all its photos. Without audio_url, removes the sound.",
+      inputSchema: z.object({ id: z.string(), audio_url: z.string().url().optional().describe("https URL of mp3, m4a or ogg, up to 20 MB") }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ id, audio_url }) => {
+      const m = await own(id);
+      if (!m) return fail("meme not found");
+      const audio = audio_url ? await audioFile(audio_url) : null;
+      if (typeof audio === "string") return fail(audio);
+      const error = await attachAudio(env, m, audio);
+      return error ? fail(error) : ok({ ok: true });
     },
   );
 

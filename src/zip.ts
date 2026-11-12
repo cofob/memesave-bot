@@ -9,6 +9,8 @@ import { insertMeme } from "./ingest/receive";
 import { fileKey, previewKey, sign, signedQuery, tmpKey, verify, verifyQuery } from "./media";
 import type { Job } from "./queue";
 import { uploadPage } from "./uploadpage";
+import { editWidget, sendWidget } from "./widget";
+import { progressPage } from "./widgetpages";
 
 const LINK_TTL = 86400;
 const blobKey = (userId: number, sha256: string) => `u/${userId}/${sha256}`;
@@ -24,6 +26,7 @@ interface ZipImport {
   imported: number;
   skipped: number;
   status_msg_id: number | null;
+  widget_msg_id: number | null;
   format: string | null;
 }
 
@@ -99,15 +102,39 @@ async function say(env: Env, zip: ZipImport, key: Key, params: Record<string, st
 const formatLabel = (format: string | null, lang: Lang) =>
   (format ? format.split(",") : ["files"]).map((f) => t(lang, `fmt_${f}` as Key)).join(" + ");
 
-/** Edits the progress message at most once per 5 s (Telegram limits message edits); web imports have none. */
-async function progress(env: Env, zip: ZipImport, params: Record<string, string | number>) {
+const progressState = (found: number, total: number, skipped: number, done: number, end?: 1) =>
+  JSON.stringify({ f: found, t: total, k: skipped, d: done, e: end });
+
+/** The progress widget: sent once as a reply to the status message, then edited silently; false when Telegram refuses it. */
+async function progressWidget(env: Env, zip: ZipImport, lang: Lang, format: string, state: string) {
+  const api = botApi(env.BOT_TOKEN);
+  if (zip.widget_msg_id) return editWidget(api, zip.user_id, zip.widget_msg_id, state).then(() => true, (e) => (console.error(e), true));
+  const sent = await sendWidget(api, {
+    chat_id: zip.user_id,
+    html: progressPage(lang),
+    caption: t(lang, "w_zip_caption", { format }),
+    parse_mode: "HTML",
+    chat_data: state,
+    reply_parameters: { message_id: zip.status_msg_id, allow_sending_without_reply: true },
+  });
+  zip.widget_msg_id = sent?.message_id ?? 0;
+  await env.DB.prepare("UPDATE zip_imports SET widget_msg_id = ? WHERE id = ?").bind(zip.widget_msg_id, zip.id).run();
+  return !!sent;
+}
+
+/** Updates the progress at most once per 5 s (Telegram limits message edits): the widget, or the text when it is refused; web imports have none. */
+async function progress(env: Env, zip: ZipImport, p: { found: number; total: number; skipped: number; done: number }) {
   if (!zip.status_msg_id) return;
   const due = await env.DB.prepare(
     "UPDATE zip_imports SET edited_at = unixepoch() WHERE id = ? AND (edited_at IS NULL OR edited_at <= unixepoch() - 5) RETURNING id",
   )
     .bind(zip.id)
     .first();
-  if (due) await say(env, zip, "zip_progress", { ...params, format: formatLabel(zip.format, await userLang(env.DB, zip.user_id)) }, true);
+  if (!due) return;
+  const lang = await userLang(env.DB, zip.user_id);
+  const format = formatLabel(zip.format, lang);
+  if (zip.widget_msg_id !== 0 && (await progressWidget(env, zip, lang, format, progressState(p.found, p.total, p.skipped, p.done)))) return;
+  await say(env, zip, "zip_progress", { ...p, format }, true);
 }
 
 /** /batch_zip: opens batch mode if needed and returns the text and upload link for a new zip import. */
@@ -292,6 +319,10 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
   if (action === "done") {
     await db.prepare("UPDATE zip_imports SET status = 'done', updated_at = unixepoch() WHERE id = ?").bind(id).run();
     await env.MEDIA.delete(zipKey(id));
+    if (zip.widget_msg_id) {
+      const state = progressState((zip.total ?? 0) + zip.skipped, zip.total ?? 0, zip.skipped, zip.imported, 1);
+      await editWidget(botApi(env.BOT_TOKEN), zip.user_id, zip.widget_msg_id, state).catch(console.error);
+    }
     await say(env, zip, "zip_done", { imported: zip.imported, skipped: zip.skipped, failed: Number(body.failed ?? 0) }, false);
     await submitZipPhotos(env, zip);
     return json({ ok: true });

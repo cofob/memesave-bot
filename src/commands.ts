@@ -14,6 +14,12 @@ import { isActive } from "./billing";
 import { allowAi, balanceText, subscribeCard, topupCard } from "./billingbot";
 import { setExportStatusMessage, startExport } from "./export";
 import { accountSummary, CONFIRM, deleteAccount } from "./purge";
+import { pairStart } from "./pairbot";
+import { sendStatsWidget } from "./statswidget";
+import { sendSettingsWidget } from "./settingswidget";
+import { sendExportStatus } from "./exportwidget";
+import { sendAnalysisStatus, showAnalysis } from "./analysiswidget";
+import { sendStartWidget } from "./startwidget";
 
 const html = { parse_mode: "HTML" } as const;
 const utc = (t: number) => new Date(t * 1000).toISOString().slice(0, 16).replace("T", " ") + " UTC";
@@ -82,6 +88,7 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
       const card = await (ctx.match === "subscribe" ? subscribeCard : topupCard)(env, ctx.api, ctx.user, ctx.lang);
       return ctx.reply(card.text, { ...html, reply_markup: card.reply_markup });
     }
+    if (ctx.match === "pair" || ctx.match.startsWith("pair_")) return pairStart(ctx, env, ctx.match);
     const app = { text: t(ctx.lang, "app_button"), web_app: { url: `${env.PUBLIC_URL.replace(/\/$/, "")}/` } };
     const keyboard = [
       [app],
@@ -91,7 +98,9 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
       ],
       [{ text: t(ctx.lang, "start_help"), callback_data: "help" }],
     ];
-    await ctx.reply(t(ctx.lang, "start", { bot: ctx.me.username }), { ...html, reply_markup: { inline_keyboard: keyboard } });
+    if (!(await sendStartWidget(ctx.api, ctx.chat.id, ctx.lang, ctx.me.username, keyboard))) {
+      await ctx.reply(t(ctx.lang, "start", { bot: ctx.me.username }), { ...html, reply_markup: { inline_keyboard: keyboard } });
+    }
     if (ctx.user.role === "paid" && !isActive(ctx.user)) {
       const card = await subscribeCard(env, ctx.api, ctx.user, ctx.lang);
       await ctx.reply(card.text, { ...html, reply_markup: card.reply_markup });
@@ -121,6 +130,7 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
     const all = ctx.match.trim() === "all" && ctx.user.role === "admin";
     if (all) return ctx.reply(await allStatsText(env, ctx.lang), html);
     const more = { inline_keyboard: [[{ text: t(ctx.lang, "stats_more"), callback_data: "analysis:ask" }]] };
+    if (await sendStatsWidget(env, ctx.api, ctx.user, ctx.lang, more)) return;
     await ctx.reply(await statsText(env, ctx.user, ctx.lang), { ...html, reply_markup: more });
   });
   bot.callbackQuery("analysis:ask", async (ctx) => {
@@ -135,8 +145,15 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
     await ctx.answerCallbackQuery();
     const llm = ctx.match[1] === "llm";
     if (llm && !(await allowAi(env, ctx))) return;
-    const msgId = ctx.callbackQuery.message?.message_id;
+    // The widget replaces the question and becomes the run's status message (the report replies to it).
+    const widget = await sendAnalysisStatus(ctx.api, ctx.chat!.id, ctx.lang, llm);
+    const msgId = widget ?? ctx.callbackQuery.message?.message_id;
     const run = await startAnalysis(env, ctx.user.id, { llm, chat: true, msgId });
+    if (widget) {
+      await ctx.deleteMessage().catch(() => {});
+      if (run?.status === "done") await showAnalysis(env, { user_id: ctx.user.id, pair_id: null, chat: 1, llm: +llm, status_msg_id: widget }, { d: 1 });
+      return;
+    }
     await ctx.editMessageText(t(ctx.lang, run?.status === "done" ? "analysis_cached" : "analysis_started"), html).catch(() => {});
   });
 
@@ -154,7 +171,8 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
     await ctx.reply(t(ctx.lang, "deleted"), html);
   });
 
-  bot.command("settings", (ctx) =>
+  bot.command("settings", async (ctx) =>
+    (await sendSettingsWidget(ctx.api, ctx.user, ctx.lang)) ||
     ctx.reply(t(ctx.lang, "settings") + "\n\n" + t(ctx.lang, "tier_hint"), { ...html, reply_markup: settingsKeyboard(ctx.user, ctx.lang) }),
   );
 
@@ -206,8 +224,7 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
   bot.command("export", async (ctx) => {
     const res = await startExport(env, ctx.user.id);
     if ("next_at" in res) return ctx.reply(t(ctx.lang, "export_limit", { time: utc(res.next_at) }), html);
-    const msg = await ctx.reply(t(ctx.lang, "export_started"), html);
-    await setExportStatusMessage(env.DB, res.id, msg.message_id);
+    await setExportStatusMessage(env.DB, res.id, await sendExportStatus(ctx.api, ctx.chat.id, ctx.lang));
   });
 
   bot.command("delete_all", async (ctx) => {

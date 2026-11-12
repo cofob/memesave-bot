@@ -2,6 +2,7 @@ import { Bot, type Context } from "grammy";
 import { retryOn429 } from "./botapi";
 import { registerAdmin } from "./admin";
 import { registerFeed } from "./feedbot";
+import { registerPairs } from "./pairbot";
 import { resolveUser } from "./auth";
 import { setCommandScope } from "./botcommands";
 import { registerCommands } from "./commands";
@@ -13,6 +14,10 @@ import { findLink, importLink } from "./ingest/link";
 import { handleInline } from "./search/inline";
 import { allowAi, registerBilling, registerPayments } from "./billingbot";
 import { captionReply, onBotMembership, registerChannels } from "./channels";
+import { pairQuery } from "./pairwidget";
+import { statsQuery } from "./statswidget";
+import { settingsQuery } from "./settingswidget";
+import { answerWidget, type WidgetQuery } from "./widget";
 
 export type Ctx = Context & { user: User; lang: Lang };
 
@@ -20,6 +25,15 @@ export function createBot(env: Env) {
   const bot = new Bot<Ctx>(env.BOT_TOKEN);
   bot.api.config.use(retryOn429());
   const html = { parse_mode: "HTML" } as const;
+
+  // Widget queries (grammy 1.46 does not know them, so ctx.from is unset): routed by the first byte of the data.
+  bot.use(async (ctx, next) => {
+    const q = (ctx.update as { widget_query?: WidgetQuery }).widget_query;
+    if (!q) return next();
+    const res = await resolveUser(env, q.from);
+    const data = !res ? undefined : q.data[0] === "s" ? await statsQuery(env, ctx.api, q, res.user).catch(console.error) : q.data[0] === "p" ? await pairQuery(env, q, res.user).catch(console.error) : q.data[0] === "c" ? await settingsQuery(env, ctx.api, q, res.user).catch(console.error) : undefined;
+    await answerWidget(ctx.api, q.id, data ?? undefined).catch(console.error);
+  });
 
   bot.use(async (ctx, next) => {
     if (!ctx.from) return;
@@ -55,6 +69,7 @@ export function createBot(env: Env) {
   registerAdmin(pm, env);
   registerBilling(pm, env);
   registerChannels(pm, env);
+  registerPairs(pm, env);
   pm.on(["message:photo", "message:video", "message:animation"], async (ctx) => (await allowAi(env, ctx)) && receiveMedia(ctx, env));
   pm.on("message:text", async (ctx) => {
     const text = ctx.msg.text.trim();

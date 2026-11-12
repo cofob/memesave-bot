@@ -67,6 +67,20 @@ describe("data export", () => {
     expect(memes.rows).toHaveLength(1);
     expect(memes.rows[0][memes.columns.indexOf("has_file")]).toBe(1);
     expect(memes.next).toBeNull();
+    await e.DB.prepare("INSERT INTO meme_views (user_id, meme_id) VALUES (42, 'a'), (43, 'b')").run();
+    expect((await (await call(e, id, "table/meme_views")).json<any>()).rows).toEqual([["a", 1, expect.any(Number)]]);
+    expect((await (await call(e, id, "table/meme_views?after=a")).json<any>()).rows).toEqual([]);
+    await e.DB.prepare("INSERT INTO posts (id, user_id, audio_r2) VALUES ('p1', 42, 'k/p1.mp3'), ('p2', 43, 'k/p2.mp3')").run();
+    await e.MEDIA.put("k/p1.mp3", "S", { httpMetadata: { contentType: "audio/mpeg" } });
+    const posts = await (await call(e, id, "table/posts")).json<any>();
+    expect(posts.rows.map((r: any[]) => [r[0], r[posts.columns.indexOf("has_audio")], r[posts.columns.indexOf("has_clip")]])).toEqual([["p1", 1, 0]]);
+    const audio = await call(e, id, "post/p1/audio");
+    expect([audio.headers.get("Content-Type"), await audio.text()]).toEqual(["audio/mpeg", "S"]);
+    expect((await call(e, id, "post/p1/clip")).status).toBe(404);
+    expect((await call(e, id, "post/p2/audio")).status).toBe(404); // not the user's
+    for (const t of ["channels", "posts", "post_items", "meme_uses", "api_tokens", "analyses", "pairs", "pair_quiz", "notices"]) {
+      expect((await call(e, id, `table/${t}`)).status).toBe(200);
+    }
 
     expect(await (await call(e, id, "vectors?ids=a,b")).json()).toEqual([{ id: "a:t", values: [0.5, 1], metadata: { kind: "photo" } }]);
     expect(await (await call(e, id, "media/a/file")).text()).toBe("A");

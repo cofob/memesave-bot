@@ -8,9 +8,9 @@ import { collectingImport } from "./batch";
 import { MODELS } from "./config";
 import { handleAccount } from "./webaccount";
 import { addToPost, albumMemes } from "./channels";
-import { billingStatus, canUseAi } from "./billing";
+import { billingStatus, canUseAi, langOfUser } from "./billing";
 import { facets, filterSql, list } from "./filters";
-import { feedMode, feedPage, markSeen } from "./feed";
+import { feedMode, feedPage, markSeen, type FeedMeme } from "./feed";
 import { getCookie, readSession } from "./session";
 import { TOKEN_PREFIX, tokenUser } from "./tokens";
 import { serveOpenapi } from "./openapi";
@@ -21,6 +21,14 @@ import { agentSearch } from "./search/agent";
 import { shareLinks } from "./share";
 import { keywordSearch } from "./search/hybrid";
 import { cachedFastSearch } from "./search/inline";
+import { esc, t } from "./i18n";
+import { acceptPair, canView, createInvite, declinePair, endPair, getPair, listPairs, setShares } from "./pairs";
+import { botName, inviteLink, pairAnswered, pairEnded, pickButton } from "./pairbot";
+import { updateCard } from "./pairwidget";
+import { pairStats } from "./pairstats";
+import { analysisResult, analysisStatus, startPairAnalysis } from "./analysis";
+import { attachAudio, audioError, audioPosts, ensureClip, postOf, sendClip, sendPostAudio } from "./audio";
+import { checkGuess, copyMeme, ownerOf, pairFeed, pairMode, pairPage } from "./pairfeed";
 
 const PAGE = 60;
 const FEED_PAGE = 10;
@@ -76,6 +84,29 @@ export async function brief(env: Env, m: Meme) {
 const fileUrl = async (env: Env, m: Meme) =>
   fileFits(m) ? `${base(env)}/app/file/${m.id}${await signedQuery(env, `file|${m.id}`, URL_TTL)}` : null;
 
+/** Signed URL of a post's audio; a new audio has a new key, so a new URL. */
+const audioUrl = async (env: Env, p?: { id: string; audio_r2: string | null } | null) =>
+  p?.audio_r2 ? `${base(env)}/app/audio/${p.id}${await signedQuery(env, `audio|${p.id}|${p.audio_r2}`, URL_TTL)}` : null;
+
+/** A feed media: the brief with its file URL. */
+const media = async (env: Env, m: Meme) => ({ ...(await brief(env, m)), file: await fileUrl(env, m) });
+
+/** Feed API items: briefs with the file URL, uses, date, album size and memes, and audio. */
+async function feedItems(env: Env, memes: FeedMeme[]) {
+  const sizes = await albumSizes(env.DB, memes.map((m) => m.id));
+  const audio = await audioPosts(env.DB, memes.map((m) => m.id));
+  return Promise.all(
+    memes.map(async (m) => ({
+      ...(await media(env, m)),
+      audio: await audioUrl(env, audio.get(m.id)),
+      uses: m.uses,
+      date: m.date,
+      album: (sizes.get(m.id) ?? 0) > 1 ? sizes.get(m.id) : undefined,
+      slides: (sizes.get(m.id) ?? 0) > 1 ? await Promise.all((await albumMemes(env.DB, m.id)).map((a) => media(env, a))) : undefined,
+    })),
+  );
+}
+
 export async function detail(env: Env, m: Meme) {
   const album = await albumMemes(env.DB, m.id);
   return {
@@ -89,6 +120,7 @@ export async function detail(env: Env, m: Meme) {
     meme_context: m.meme_context,
     cultural_meaning: m.cultural_meaning,
     file: await fileUrl(env, m),
+    audio: await audioUrl(env, await postOf(env.DB, m.id)),
     album: album.length > 1 ? await Promise.all(album.map((a) => brief(env, a))) : [],
   };
 }
@@ -138,7 +170,7 @@ export async function tagCounts(env: Env, user: User) {
 }
 
 /** Mini App: `Authorization: tma <initData>`; scripts: `Bearer <API token>`; web: the session cookie from Telegram Login. */
-async function authUser(req: Request, env: Env): Promise<{ user: User; token?: { write: boolean }; via: AddedVia } | null> {
+async function authUser(req: Request, env: Env): Promise<{ user: User; token?: { write: boolean }; via: AddedVia; name?: string } | null> {
   const header = req.headers.get("Authorization") ?? "";
   if (header.startsWith(`Bearer ${TOKEN_PREFIX}`)) {
     const t = await tokenUser(env.DB, header.slice(7));
@@ -147,7 +179,7 @@ async function authUser(req: Request, env: Env): Promise<{ user: User; token?: {
   if (header.startsWith("tma ")) {
     const from = await checkInitData(env.BOT_TOKEN, header.slice(4));
     const user = from && (await resolveUser(env, from))?.user;
-    return user ? { user, via: "miniapp" } : null;
+    return user ? { user, via: "miniapp", name: from.first_name } : null;
   }
   const userId = await readSession(env, getCookie(req, "session"));
   const user = userId && (await getUser(env.DB, userId));
@@ -160,11 +192,13 @@ export const kindOf = (mime: string): Kind | null =>
 const str = (v: File | string | null, max: number) => (typeof v === "string" && v ? v.slice(0, max) : null);
 const num = (v: File | string | null) => (typeof v === "string" && v ? Math.round(Number(v)) || null : null);
 
-/** POST /app/api/upload (multipart: file, thumb?, width?, height?, duration?, source?, saved_at?, caption?, album?, position?, description?) — stored in R2 until the first send. */
+/** POST /app/api/upload (multipart: file, thumb?, width?, height?, duration?, source?, saved_at?, caption?, album?, position?, description?, audio?) — stored in R2 until the first send. */
 async function upload(env: Env, user: User, req: Request, via: AddedVia) {
   const form = await req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) return json({ error: "file required" }, 400);
+  const audio = form.get("audio");
+  if (audio instanceof File && (kindOf(file.type) !== "photo" || audioError(audio))) return json({ error: audioError(audio) ?? "audio is only for photos" }, 415);
   const album = str(form.get("album"), 100);
   const raw = str(form.get("description"), 100_000);
   let description: Description | undefined;
@@ -186,7 +220,9 @@ async function upload(env: Env, user: User, req: Request, via: AddedVia) {
     description,
     via,
   });
-  return "error" in res ? json({ error: res.error }, res.status) : json(res);
+  if ("error" in res) return json({ error: res.error }, res.status);
+  if (audio instanceof File) await attachAudio(env, (await getMeme(env.DB, res.id))!, audio); // one audio per album: send it with one file
+  return json(res);
 }
 
 type UploadMeta = {
@@ -273,6 +309,106 @@ export async function retryMeme(env: Env, meme: Meme) {
   return true;
 }
 
+/** /app/api/pairs[/<id>[/accept|decline|share|stats]] (src/pairs.ts). */
+async function pairsApi(req: Request, env: Env, user: User, name: string | null, via: AddedVia, id: string, action: string) {
+  const m = req.method;
+  const notFound = json({ error: "not found" }, 404);
+  if (!id && m === "GET") return json({ pairs: await listPairs(env.DB, user.id), bot: await botName(env) });
+  if (!id && m === "POST") {
+    const p = await createInvite(env.DB, user.id, name);
+    if (!p) return json({ error: "pair_limit" }, 400);
+    const link = inviteLink(await botName(env), p.id);
+    const lang = langOfUser(user);
+    // The Mini App shares it with WebApp.shareMessage(prepared): Telegram shows its chat picker.
+    const article = {
+      type: "article" as const,
+      id: p.id,
+      title: t(lang, "pair_share_title"),
+      input_message_content: { message_text: t(lang, "pair_share_text", { name: esc(name ?? "?") }), parse_mode: "HTML" as const },
+      reply_markup: { inline_keyboard: [[{ text: t(lang, "pair_btn_open"), url: link }]] },
+    };
+    const prepared =
+      via === "miniapp"
+        ? await botApi(env.BOT_TOKEN)
+            .savePreparedInlineMessage(user.id, article, { allow_user_chats: true, allow_group_chats: true })
+            .then((r) => r.id, () => null)
+        : null;
+    return json({ id: p.id, link, prepared });
+  }
+  if (id === "pick" && m === "POST") {
+    // Bot API 9.6: the Mini App opens Telegram's user picker with it; the choice comes to the bot as users_shared.
+    const button = await (botApi(env.BOT_TOKEN).raw as any).savePreparedKeyboardButton({ user_id: user.id, button: pickButton(langOfUser(user)) }).catch(console.error);
+    return button ? json({ id: button.id as string }) : json({ error: "telegram" }, 502);
+  }
+  const view = async () => {
+    const p = await getPair(env.DB, user.id, id);
+    return p ? json(p) : notFound;
+  };
+  // The same side effects as the bot: the inviter hears back, the cards, the analysis; the partner hears of the end.
+  if (m === "DELETE" && !action) {
+    const p = await endPair(env.DB, id, user.id);
+    return p ? (await pairEnded(env, p, user.id), json({ ok: true })) : notFound;
+  }
+  if (m === "POST" && (action === "accept" || action === "decline")) {
+    const ok = action === "accept";
+    const p = ok ? await acceptPair(env.DB, id, user.id, name) : await declinePair(env.DB, id, user.id);
+    if (!p) return notFound;
+    await pairAnswered(env, p, ok, name ?? "?");
+    return ok ? view() : json({ ok: true });
+  }
+  if (m === "POST" && action === "share") {
+    const body = await req.json<{ on?: boolean }>().catch(() => null);
+    if (!body) return json({ error: "bad body" }, 400);
+    const p = await setShares(env.DB, id, user.id, !!body.on);
+    if (p?.status === "active") await updateCard(env, p);
+    return p ? view() : notFound;
+  }
+  if (m === "GET" && action === "stats") {
+    const p = await getPair(env.DB, user.id, id);
+    return p?.status === "active" ? json(await pairStats(env, user.id, p.partner.id!)) : json({ error: "no access" }, 403);
+  }
+  if (action === "feed" || action === "guess") {
+    // feed[/seen], guess: the pair feed (src/pairfeed.ts); guess pages hide whose meme it is.
+    const url = new URL(req.url);
+    const sub = url.pathname.split("/")[6] ?? "";
+    const f = await pairFeed(env, user.id, id, m === "GET");
+    if (!f) return json({ error: "no access" }, 403);
+    if (m === "GET" && action === "feed" && !sub) {
+      const mode = pairMode(url.searchParams.get("mode"));
+      if (!mode || !f.modes.includes(mode)) return json({ error: "bad mode" }, 400);
+      const n = (k: string) => Math.trunc(Number(url.searchParams.get(k))) || 0;
+      const offset = Math.max(0, n("offset"));
+      const { memes, more } = await pairPage(env, f, mode, { seed: Math.max(1, n("seed")), offset, limit: FEED_PAGE, hidePorn: !!user.hide_porn });
+      const items = await feedItems(env, memes);
+      return json({ items: mode === "guess" ? items : items.map((x, i) => ({ ...x, owner: ownerOf(f, memes[i]) })), next_offset: more ? offset + FEED_PAGE : null, modes: f.modes });
+    }
+    const body = await req.json<{ ids?: string[]; id?: string; owner?: string }>().catch(() => ({}) as Record<string, never>);
+    if (m === "POST" && action === "feed" && sub === "seen") {
+      await markSeen(env.DB, user.id, Array.isArray(body.ids) ? body.ids : [], f.users);
+      return json({ ok: true });
+    }
+    if (m === "POST" && action === "guess") {
+      const answer = typeof body.id === "string" && (await checkGuess(env, f, body.id, String(body.owner)));
+      return answer ? json(answer) : notFound;
+    }
+  }
+  if (action === "analysis") {
+    // analysis[/result]: the embedding analysis of the pair (src/analysis.ts), paid by whoever starts it.
+    if ((await getPair(env.DB, user.id, id))?.status !== "active") return json({ error: "no access" }, 403);
+    const sub = new URL(req.url).pathname.split("/")[6] ?? "";
+    if (m === "GET" && sub === "result") return analysisResult(env, id);
+    if (m === "GET" && !sub) return json(await analysisStatus(env, id));
+    if (m === "POST" && !sub) {
+      const { llm = true } = await req.json<{ llm?: boolean }>().catch(() => ({ llm: true }));
+      const gate = llm ? await canUseAi(env.DB, user) : { ok: true as const };
+      if (!gate.ok) return json({ error: "payment required", reason: gate.reason }, 402);
+      const run = await startPairAnalysis(env, id, user.id, { llm: !!llm });
+      return run === "pair_too_small" ? json({ error: run }, 400) : run ? json(run) : json({ error: "no access" }, 403);
+    }
+  }
+  return notFound;
+}
+
 /** /app/api/* — Mini App and web API. */
 async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   const auth = await authUser(req, env);
@@ -281,6 +417,12 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   if (token && !token.write && req.method !== "GET") return json({ error: "read-only token" }, 403);
 
   const [, , , resource = "", id = "", action = ""] = url.pathname.split("/");
+  // ?owner=<id>: read a partner's memes (src/pairs.ts) with the viewer's own settings; writes stay on the own account.
+  const ownerId = url.searchParams.has("owner") ? Number(url.searchParams.get("owner")) : user.id;
+  if (ownerId !== user.id && (token || req.method !== "GET" || !(await canView(env.DB, user.id, ownerId)))) return json({ error: "no access" }, 403);
+  const owner: User = ownerId === user.id ? user : { ...user, id: ownerId };
+  // Semantic and agent search spend AI on the collection owner: the partner's memes are searched by keywords only.
+  if (owner !== user && resource === "search" && url.searchParams.get("mode") !== "fts") return json({ error: "owner_search_mode" }, 400);
   if (resource === "me" && req.method === "GET") {
     return json({
       id: user.id,
@@ -309,6 +451,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   // API tokens cannot change the account (tokens, keys, billing, deletion).
   const account = token && m !== "GET" ? null : await handleAccount(req, env, user, [resource, id, action]);
   if (account) return account;
+  if (resource === "pairs") return token ? json({ error: "no access" }, 403) : pairsApi(req, env, user, auth.name ?? user.username, via, id, action);
   if (resource === "upload" && req.method === "POST") return upload(env, user, req, via);
   if (resource === "import" && req.method === "POST") {
     // Media of a link (any cobalt service), saved in the background like a link sent to the bot.
@@ -327,20 +470,18 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
       .all();
     return json(results);
   }
-  if (resource === "memes" && !id && req.method === "GET") return json(await listMemes(env, user, url));
+  if (resource === "memes" && !id && req.method === "GET") {
+    const ids = url.searchParams.get("ids"); // previews of known memes (e.g. a partner's twins)
+    if (ids === null) return json(await listMemes(env, owner, url));
+    return json({ items: await Promise.all(visible(user, await ownMemes(env, owner.id, ids.split(","))).map((m) => brief(env, m))), next_offset: null });
+  }
   if (resource === "feed" && !id && req.method === "GET") {
     const mode = feedMode(url.searchParams.get("mode"));
     if (!mode) return json({ error: "bad mode" }, 400);
     const n = (k: string) => Math.trunc(Number(url.searchParams.get(k))) || 0;
     const offset = Math.max(0, n("offset"));
     const { memes, more } = await feedPage(env.DB, user.id, { mode, seed: Math.max(1, n("seed")), offset, limit: FEED_PAGE, newer: url.searchParams.get("newer") === "1", hidePorn: !!user.hide_porn });
-    const sizes = await albumSizes(env.DB, memes.map((m) => m.id));
-    return json({
-      items: await Promise.all(
-        memes.map(async (m) => ({ ...(await brief(env, m)), file: await fileUrl(env, m), uses: m.uses, date: m.date, album: (sizes.get(m.id) ?? 0) > 1 ? sizes.get(m.id) : undefined })),
-      ),
-      next_offset: more ? offset + FEED_PAGE : null,
-    });
+    return json({ items: await feedItems(env, memes), next_offset: more ? offset + FEED_PAGE : null });
   }
   if (resource === "feed" && id === "seen" && req.method === "POST") {
     const { ids = [] } = await req.json<{ ids?: string[] }>();
@@ -358,8 +499,8 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
     // Batch download: signed links that the browser saves as attachments.
     return json(await downloadLinks(env, user.id, (url.searchParams.get("ids") ?? "").split(",")));
   }
-  if (resource === "tags" && req.method === "GET") return json(await tagCounts(env, user));
-  if (resource === "facets" && req.method === "GET") return json(await facets(env.DB, user.id));
+  if (resource === "tags" && req.method === "GET") return json(await tagCounts(env, owner));
+  if (resource === "facets" && req.method === "GET") return json(await facets(env.DB, owner.id));
   if (resource === "search" && req.method === "GET") {
     // fts: keyword only (instant); fast: hybrid + LLM query rewrite; advanced: the chat agent.
     const q = (url.searchParams.get("q") ?? "").trim().slice(0, 300);
@@ -368,7 +509,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
       q.length < 2
         ? []
         : mode === "fts"
-          ? await keywordSearch(env, user.id, q, PAGE)
+          ? await keywordSearch(env, owner.id, q, PAGE)
           : mode === "advanced"
             ? await agentSearch(env, user.id, q)
             : await cachedFastSearch(env, user.id, q);
@@ -379,7 +520,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
     const { results } = await env.DB.prepare(
       `SELECT * FROM memes WHERE user_id = ? AND status != 'failed' ORDER BY created_at DESC`,
     )
-      .bind(user.id)
+      .bind(owner.id)
       .all<Meme>();
     const items = await Promise.all(
       visible(user, results, list(url, "porn")).map(async (m) => ({
@@ -393,7 +534,14 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   }
 
   const meme = resource === "memes" && id ? await getMeme(env.DB, id) : null;
-  if (!meme || meme.user_id !== user.id) return json({ error: "not found" }, 404);
+  // A partner's meme can be sent to the viewer's own chat (a file_id works for the whole bot) or copied to the own collection.
+  const partner = !token && (action === "send" || action === "copy") && req.method === "POST" && !!meme && meme.user_id !== user.id && (await canView(env.DB, user.id, meme.user_id));
+  if (meme && action === "copy" && req.method === "POST") {
+    if (meme.user_id !== user.id && !partner) return json({ error: "no access" }, 403);
+    const copy = await copyMeme(env, user.id, meme);
+    return "error" in copy ? json({ error: copy.error }, copy.status) : json(copy);
+  }
+  if (!meme || (meme.user_id !== owner.id && !partner)) return json({ error: "not found" }, 404);
   if (!action && req.method === "GET") return json(await detail(env, meme));
   if (!action && req.method === "DELETE") {
     await deleteMeme(env, meme.id);
@@ -419,14 +567,33 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   }
   if (action === "send" && req.method === "POST") {
     await sendMeme(env, api, user.id, meme);
-    await recordUse(env.DB, user.id, meme.id, "send");
+    await sendPostAudio(env, api, user.id, meme.id);
+    if (!partner) await recordUse(env.DB, user.id, meme.id, "send");
     return json({ ok: true });
   }
   if (action === "send_album" && req.method === "POST") {
     const album = await albumMemes(env.DB, meme.id);
     await sendAlbum(env, api, user.id, album.length ? album : [meme]);
+    await sendPostAudio(env, api, user.id, meme.id);
     await recordUse(env.DB, user.id, meme.id, "send");
     return json({ ok: true });
+  }
+  if (action === "send_clip" && req.method === "POST") {
+    if (!(await sendClip(env, api, user.id, meme.id))) return json({ error: "no audio" }, 409);
+    await recordUse(env.DB, user.id, meme.id, "send");
+    return json({ ok: true });
+  }
+  if (action === "clip_link" && req.method === "POST") {
+    const clip = await ensureClip(env, meme.id);
+    if (!clip) return json({ error: "no audio" }, 409);
+    const { id: postId, clip_r2 } = clip.post;
+    return json({ url: `${base(env)}/app/clip/${postId}${await signedQuery(env, `clip|${postId}|${clip_r2}`, URL_TTL)}&dl=${encodeURIComponent(`${fileName(meme).replace(/\.[^.]+$/, "")}.mp4`)}` });
+  }
+  if (action === "audio" && (req.method === "POST" || req.method === "DELETE")) {
+    const file = req.method === "POST" ? (await req.formData()).get("audio") : null;
+    if (req.method === "POST" && !(file instanceof File)) return json({ error: "audio required" }, 400);
+    const error = await attachAudio(env, meme, file as File | null);
+    return error ? json({ error }, 415) : json({ audio: await audioUrl(env, await postOf(env.DB, meme.id)) });
   }
   return json({ error: "not found" }, 404);
 }
@@ -446,6 +613,20 @@ async function handleMedia(req: Request, env: Env, ctx: ExecutionContext, url: U
   });
 }
 
+/** /app/audio/<postId> and /app/clip/<postId> — the post's audio or clip, authorized by a signed query over its current key. */
+async function handlePostMedia(req: Request, env: Env, ctx: ExecutionContext, url: URL, col: "audio" | "clip"): Promise<Response> {
+  const id = url.pathname.split("/")[3] ?? "";
+  const key = await env.DB.prepare(`SELECT ${col}_r2 AS k FROM posts WHERE id = ?`).bind(id).first<string | null>("k");
+  if (!key || !(await verifyQuery(env, `${col}|${id}|${key}`, url))) return new Response("Not found", { status: 404 });
+  const dl = url.searchParams.get("dl");
+  return cachedMedia(req, ctx, async () => {
+    const obj = await env.MEDIA.get(key);
+    const headers: Record<string, string> = { "Content-Type": obj?.httpMetadata?.contentType ?? (col === "clip" ? "video/mp4" : "audio/mpeg") };
+    if (dl) headers["Content-Disposition"] = `attachment; filename*=UTF-8''${encodeURIComponent(dl)}`;
+    return obj && new Response(obj.body, { headers });
+  });
+}
+
 export async function handleApp(req: Request, env: Env, ctx: ExecutionContext): Promise<Response | null> {
   const url = new URL(req.url);
   if (url.pathname === "/app" || url.pathname === "/app/") return Response.redirect(`${base(env)}/`, 301); // old Mini App URL
@@ -453,5 +634,7 @@ export async function handleApp(req: Request, env: Env, ctx: ExecutionContext): 
   if (url.pathname.startsWith("/app/api/")) return handleApi(req, env, url);
   if (req.method === "GET" && url.pathname.startsWith("/app/thumb/")) return handleMedia(req, env, ctx, url, "thumb");
   if (req.method === "GET" && url.pathname.startsWith("/app/file/")) return handleMedia(req, env, ctx, url, "file");
+  if (req.method === "GET" && url.pathname.startsWith("/app/audio/")) return handlePostMedia(req, env, ctx, url, "audio");
+  if (req.method === "GET" && url.pathname.startsWith("/app/clip/")) return handlePostMedia(req, env, ctx, url, "clip");
   return null;
 }

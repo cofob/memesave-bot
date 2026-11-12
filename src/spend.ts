@@ -1,4 +1,5 @@
 import { spendNotices, splitCost } from "./billing";
+import { pushBalance } from "./billingbot";
 import { getUser } from "./db";
 import type { Env } from "./env";
 
@@ -46,5 +47,6 @@ export async function recordSpend(env: Env, s: Spend, model: string, keySource: 
   ]);
   if (user && (billed.fromAllowance || billed.fromBalance)) {
     await spendNotices(env, user, billed.fromAllowance, billed.fromBalance).catch(console.error);
+    await pushBalance(env, user.id).catch(console.error);
   }
 }

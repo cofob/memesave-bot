@@ -188,3 +188,71 @@ func TestPeriods(t *testing.T) {
 		t.Errorf("long range by month: %d %v", len(xs), xs[:1])
 	}
 }
+
+// pairSynthetic: synthetic() memes of 5 blobs with owner a in blobs 0–2 and b in blobs 2–4 (blob 2 is a's
+// alone unless shared); b re-saves 3 of a's memes (twins). Mood anchors are 5 memes' text vectors.
+func pairSynthetic(n int, shared bool) ([]meme, map[string][]float32, []mood) {
+	memes, vectors, truth := synthetic(n, 5, 64)
+	for i := range memes {
+		if truth[i] > 2 || (truth[i] == 2 && shared && i%2 == 1) {
+			memes[i].Owner = 1
+		}
+	}
+	if n > 1 {
+		memes[1].Owner = memes[0].Owner // synthetic's own copy stays with one owner
+	}
+	var moods []mood
+	for i, copies := 100, 0; i < n; i++ {
+		id := memes[i].ID
+		if memes[i].Owner == 0 && copies < 3 {
+			copies++
+			c := meme{ID: "c" + id, Kind: "photo", Created: memes[i].Created + 86400, Tags: memes[i].Tags, Owner: 1}
+			memes, vectors[c.ID+":i"], vectors[c.ID+":t"] = append(memes, c), vectors[id+":i"], vectors[id+":t"]
+		}
+		if v, ok := vectors[id+":t"]; ok && len(moods) < 5 {
+			moods = append(moods, mood{Key: id, NameEn: id, NameRu: id, Vector: v})
+		}
+	}
+	return memes, vectors, moods
+}
+
+func TestPair(t *testing.T) {
+	memes, vectors, moods := pairSynthetic(1500, true)
+	r := analyzePair(memes, vectors, moods, 0.5, &progress{})
+	sharedBlob := false
+	for _, c := range r.Clusters {
+		if c.Tags[0] == "c2" {
+			sharedBlob = true
+			if c.Type != "shared" {
+				t.Errorf("blob 2 is shared: %+v", c)
+			}
+		}
+	}
+	if !sharedBlob || len(r.Twins) != 3 || len(r.Bridge) < 2 || r.Moods == nil {
+		t.Errorf("clusters %d, twins %v, bridge %v", len(r.Clusters), r.Twins, r.Bridge)
+	}
+	memes, vectors, moods = pairSynthetic(1500, false)
+	disjoint := analyzePair(memes, vectors, moods, 0.5, &progress{})
+	if r.Scores.Compat <= disjoint.Scores.Compat {
+		t.Errorf("compat: overlapping %+v, disjoint %+v", r.Scores, disjoint.Scores)
+	}
+	images := pairCharts(&pairAnalytics{Lang: "ru", Me: pairSide{Name: "Аня", Heatmap: []struct{ H, N float64 }{{9, 3}, {22, 5}}}}, r)
+	for _, name := range []string{"pair_map", "pair_clusters", "pair_moods", "pair_hours"} {
+		img, err := png.Decode(bytes.NewReader(images[name]))
+		if err != nil || img.Bounds().Dx() != width*scale {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := json.Marshal(r); err != nil {
+		t.Error(err)
+	}
+	if dir := os.Getenv("CHARTS_DIR"); dir != "" {
+		for name, b := range images {
+			_ = os.WriteFile(filepath.Join(dir, name+".png"), b, 0o644)
+		}
+	}
+	for _, n := range []int{0, 1, 10, 40} {
+		memes, vectors, moods := pairSynthetic(2*n, true)
+		pairCharts(&pairAnalytics{}, analyzePair(memes, vectors, moods, 0, &progress{}))
+	}
+}

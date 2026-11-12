@@ -5,6 +5,7 @@ import { t, type Key } from "./i18n";
 import { memeVectors } from "./ingest/embed";
 import { JobContainer } from "./job";
 import { memeMedia, sign, signedQuery, tmpKey, variantOf, verify, verifyQuery } from "./media";
+import { showExport } from "./exportwidget";
 
 const DAY = 86400;
 const LINK_TTL = 7 * DAY; // the bucket deletes "tmp/" after 7 days
@@ -28,16 +29,16 @@ interface Export {
  * Exported columns of the user's rows. A whitelist: secrets and internal handles (OpenRouter key,
  * Telegram file ids, payment charge ids, R2 keys, message ids) stay out, also in columns added later.
  */
-const TABLES: Record<string, { from: string; where: string; cols: string }> = {
+const TABLES: Record<string, { from: string; where: string; cols: string; key?: string }> = {
   profile: {
     from: "users",
     where: "id = ?",
-    cols: "id, username, role, lang, search_mode, describe_tier, total_cost, plan, plan_byok, paid_until, allowance_until, plan_started, balance, sub_state, created_at",
+    cols: "id, username, role, lang, search_mode, describe_tier, total_cost, plan, plan_byok, paid_until, allowance_until, plan_started, balance, sub_state, hide_porn, created_at",
   },
   memes: {
     from: "memes",
     where: "user_id = ?",
-    cols: "id, kind, mime, file_size, width, height, duration, caption, source, tg_meta, status, title, description, ocr_text, speech_text, meme_context, cultural_meaning, language, tags, search_phrases, porn, import_id, sha256, error, created_at, updated_at, COALESCE(r2_file, '') != '' AS has_file, r2_preview IS NOT NULL AS has_preview",
+    cols: "id, kind, mime, file_size, width, height, duration, caption, source, tg_meta, status, title, description, ocr_text, speech_text, meme_context, cultural_meaning, language, tags, search_phrases, porn, import_id, sha256, share_id, added_via, error, created_at, updated_at, saved_at, COALESCE(r2_file, '') != '' AS has_file, r2_preview IS NOT NULL AS has_preview",
   },
   transactions: {
     from: "transactions",
@@ -53,6 +54,24 @@ const TABLES: Record<string, { from: string; where: string; cols: string }> = {
     cols: "id, provider, kind, byok, usd, crypto, crypto_amount, status, credited_usd, created_at, paid_at",
   },
   exports: { from: "exports", where: "user_id = ?", cols: "id, status, size, files, failed, error, created_at" },
+  channels: { from: "channels", where: "user_id = ?", cols: "chat_id, title, username, enabled, caption, storage, created_at" },
+  posts: {
+    from: "posts",
+    where: "user_id = ?",
+    cols: "id, caption, status, error, created_at, updated_at, audio_r2 IS NOT NULL AS has_audio, clip_r2 IS NOT NULL AS has_clip",
+  },
+  post_items: { from: "post_items", where: "post_id IN (SELECT id FROM posts WHERE user_id = ?)", cols: "post_id, meme_id, position" },
+  meme_uses: { from: "meme_uses", where: "user_id = ?", cols: "id, meme_id, via, created_at" },
+  meme_views: { from: "meme_views", where: "user_id = ?", cols: "meme_id, views, seen_at", key: "meme_id" },
+  api_tokens: { from: "api_tokens", where: "user_id = ?", cols: "id, name, write, created_at, used_at" },
+  analyses: { from: "analyses", where: "user_id = ?", cols: "id, pair_id, status, stage, error, llm, labeled, created_at, updated_at" },
+  pairs: {
+    from: "pairs",
+    where: "? IN (a, b)",
+    cols: "id, a, b, status, a_name, b_name, a_shares, b_shares, compat, created_at, accepted_at",
+  },
+  pair_quiz: { from: "pair_quiz", where: "user_id = ?", cols: "pair_id, meme_id, score, total", key: "pair_id" },
+  notices: { from: "notices", where: "user_id = ?", cols: "key, sent_at" },
 };
 
 /** Job container (same image as the importer, MODE=export): builds one export. */
@@ -114,6 +133,7 @@ export async function failExport(env: Env, id: string, error: string) {
     .bind(error.slice(0, 1000), id)
     .first<Export>();
   if (!ex) return;
+  await showExport(env, ex, { s: 3 });
   if (ex.upload_id) await env.MEDIA.resumeMultipartUpload(exportKey(id), ex.upload_id).abort().catch(console.error);
   await say(env, ex, "export_failed", { error: error.slice(0, 300).replace(/[<>&]/g, "") });
 }
@@ -126,12 +146,13 @@ export const expireExports = (db: D1Database) =>
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 
-/** A page of the user's rows of one table: `{ columns, rows, next }`, ordered by rowid. */
-async function tablePage(db: D1Database, userId: number, name: string, after: number) {
+/** A page of the user's rows of one table: `{ columns, rows, next }`, ordered by rowid (or `key` in WITHOUT ROWID tables). */
+async function tablePage(db: D1Database, userId: number, name: string, after: number | string) {
   const table = TABLES[name];
   if (!table) return json({ error: "unknown table" }, 400);
+  const key = table.key ?? "rowid";
   const [columns = [], ...rows] = await db
-    .prepare(`SELECT rowid AS _r, ${table.cols} FROM ${table.from} WHERE ${table.where} AND rowid > ? ORDER BY rowid LIMIT ?`)
+    .prepare(`SELECT ${key} AS _r, ${table.cols} FROM ${table.from} WHERE ${table.where} AND ${key} > ? ORDER BY ${key} LIMIT ?`)
     .bind(userId, after, PAGE)
     .raw({ columnNames: true });
   const next = rows.length === PAGE ? rows[rows.length - 1][0] : null;
@@ -160,7 +181,10 @@ export async function handleExport(req: Request, env: Env): Promise<Response> {
   const ex = (await verify(env, `export|${id}`, token)) ? await getExport(env.DB, id) : null;
   if (ex?.status !== "running") return json({ error: "not running" }, 403);
 
-  if (action === "table" && req.method === "GET") return tablePage(env.DB, ex.user_id, arg, Number(url.searchParams.get("after")) || 0);
+  if (action === "table" && req.method === "GET") {
+    const after = url.searchParams.get("after") ?? "0"; // a text key: 0 sorts before any text
+    return tablePage(env.DB, ex.user_id, arg, /^\d+$/.test(after) ? Number(after) : after);
+  }
 
   if (action === "vectors" && req.method === "GET") {
     return json(await memeVectors(env, ex.user_id, url.searchParams.get("ids") ?? ""));
@@ -176,11 +200,19 @@ export async function handleExport(req: Request, env: Env): Promise<Response> {
     return media ? new Response(media.bytes, { headers: { "Content-Type": media.mime } }) : json({ error: "not found" }, 404);
   }
 
+  if (action === "post" && req.method === "GET" && (variant === "audio" || variant === "clip")) {
+    const key = await env.DB.prepare(`SELECT ${variant}_r2 FROM posts WHERE id = ? AND user_id = ?`).bind(arg, ex.user_id).first<string>(`${variant}_r2`);
+    const obj = key ? await env.MEDIA.get(key) : null;
+    if (!obj) return json({ error: "not found" }, 404);
+    return new Response(obj.body, { headers: { "Content-Type": obj.httpMetadata?.contentType ?? "application/octet-stream" } });
+  }
+
   if (action === "start" && req.method === "POST") {
     // A restarted container (rollout) uploads the archive again.
     if (ex.upload_id) await env.MEDIA.resumeMultipartUpload(exportKey(id), ex.upload_id).abort().catch(console.error);
     const upload = await env.MEDIA.createMultipartUpload(exportKey(id), { httpMetadata: { contentType: "application/zip" } });
     await env.DB.prepare("UPDATE exports SET upload_id = ?, updated_at = unixepoch() WHERE id = ?").bind(upload.uploadId, id).run();
+    await showExport(env, ex, { s: 1 });
     return json({ ok: true });
   }
   if ((action === "part" || action === "complete") && !ex.upload_id) return json({ error: "upload not started" }, 409);
@@ -201,6 +233,7 @@ export async function handleExport(req: Request, env: Env): Promise<Response> {
       .run();
     const lang = await userLang(env.DB, ex.user_id);
     const button = { text: t(lang, "export_button"), url: await downloadUrl(env, id) };
+    await showExport(env, ex, { s: 2, z: Math.round(done.size / 2 ** 20), f: done.files, x: done.failed, u: button.url });
     await say(env, ex, "export_done", { ...done, size: (done.size / 2 ** 20).toFixed(1) }, { reply_markup: { inline_keyboard: [[button]] } });
     return json({ ok: true });
   }

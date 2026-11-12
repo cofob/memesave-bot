@@ -16,12 +16,20 @@ const EXT_MIME: Record<string, string> = {
   mp4: "video/mp4",
   mov: "video/mov",
   webm: "video/webm",
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  ogg: "audio/ogg",
+  opus: "audio/opus",
+  aac: "audio/aac",
+  wav: "audio/wav",
 };
 
 const MIME_EXT: Record<string, string> = {
   ...Object.fromEntries(Object.entries(EXT_MIME).map(([ext, mime]) => [mime, ext])),
   "video/quicktime": "mov",
   "image/heic": "heic",
+  "audio/x-m4a": "m4a",
+  "audio/webm": "webm",
 };
 export const extOf = (mime: string) => MIME_EXT[mime] ?? "bin";
 

@@ -12,6 +12,7 @@ import type { AddedVia } from "./ingest/receive";
 import { failSearch, searchJob } from "./search/chat";
 import { thumbStage } from "./thumb";
 import { reportFailed, sendReport } from "./analysisreport";
+import { sendPairReport } from "./pairreport";
 
 export type SearchJob = { type: "search"; userId: number; messageId: number; placeholderId: number; query: string; lang: Lang };
 export type Job =
@@ -23,6 +24,7 @@ export type Job =
   | { type: "purge"; userId: number; before: number }
   | { type: "link"; userId: number; url: string; via?: AddedVia } // API import (src/ingest/link.ts)
   | { type: "analysis_report"; analysisId: string; msgId?: number } // bot report of an embedding analysis
+  | { type: "pair_report"; analysisId: string; msgId?: number; only?: number } // to both members of the pair, or only to one
   | SearchJob;
 
 async function run(env: Env, job: Job) {
@@ -31,6 +33,8 @@ async function run(env: Env, job: Job) {
       return searchJob(env, job);
     case "analysis_report":
       return sendReport(env, job.analysisId, job.msgId);
+    case "pair_report":
+      return sendPairReport(env, job.analysisId, job.msgId, job.only);
     case "batch_submit":
       return submitImport(env, job.importId);
     case "batch_poll":
@@ -68,7 +72,7 @@ async function fail(env: Env, job: Job, error: unknown) {
   if (job.type === "batch_submit") return failImport(env, job.importId, error);
   if (job.type === "batch_poll" || job.type === "hash" || job.type === "rekey") return; // cron runs them again
   if (job.type === "thumb") return env.JOBS.send({ type: "embed", memeId: job.memeId }); // goes on without a preview
-  if (job.type === "analysis_report") return reportFailed(env, job.analysisId, error);
+  if (job.type === "analysis_report" || job.type === "pair_report") return reportFailed(env, job.analysisId, error);
   if (job.type === "purge" || job.type === "post" || job.type === "link") return; // idempotent: the dead letter queue keeps it for a manual re-run
   return failIngest(env, job.memeId, error);
 }

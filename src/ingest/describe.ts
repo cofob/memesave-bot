@@ -7,6 +7,7 @@ import { esc, t, type Lang } from "../i18n";
 import { memeMedia, toDataUrl, variantOf } from "../media";
 import { chat, embed, errorNote, type Part } from "../openrouter";
 import { namespace, upsertVectors } from "./embed";
+import { showSaveStatus } from "../savewidget";
 
 export interface Description {
   title: string;
@@ -280,7 +281,8 @@ export async function finishStage(env: Env, memeId: string) {
 
   const tags = d.tags.slice(0, 8).map((x) => "#" + esc(x.replace(/[^\p{L}\p{N}_]+/gu, "_"))).join(" ");
   const lang = await userLang(env.DB, m.user_id);
-  await editStatus(env, m, t(lang, "saved", { title: esc(d.title), tags }) + (await firstMemeTip(env, m, lang)));
+  const state = { s: "r", t: d.title.slice(0, 120), g: d.tags.slice(0, 8).map((x) => x.slice(0, 24)) };
+  await editStatus(env, m, t(lang, "saved", { title: esc(d.title), tags }) + (await firstMemeTip(env, m, lang)), state);
   await queuePosts(env, memeId);
 }
 
@@ -293,8 +295,11 @@ async function firstMemeTip(env: Env, m: Meme, lang: Lang) {
   return t(lang, "first_meme", { bot: username });
 }
 
-/** Edits the meme's status message; a message shared by an album shows the progress of all its memes instead. */
-export async function editStatus(env: Env, m: Meme, text: string) {
+/**
+ * Edits the meme's status message (widget state, see src/savewidget.ts); a message shared by an album shows the
+ * progress of all its memes instead. Without a state the widget shows the text.
+ */
+export async function editStatus(env: Env, m: Meme, text: string, state: object = { s: "m", x: text.replace(/<[^>]+>/g, "") }) {
   if (!m.status_msg_id) return;
   const { results } = await env.DB.prepare(
     "SELECT m.status, m.title FROM memes m LEFT JOIN post_items i ON i.meme_id = m.id WHERE m.user_id = ? AND m.status_msg_id = ? ORDER BY i.position",
@@ -305,12 +310,15 @@ export async function editStatus(env: Env, m: Meme, text: string) {
     const lang = await userLang(env.DB, m.user_id);
     const ready = results.filter((r) => r.status === "ready");
     const done = ready.length + results.filter((r) => r.status === "failed").length;
-    const titles = ready.slice(0, 50).map((r) => `• <b>${esc(r.title ?? "")}</b>`).join("\n");
-    text = done < results.length
-      ? t(lang, "album_progress", { done, total: results.length })
-      : t(lang, "album_saved", { ready: ready.length, total: results.length, titles });
+    const titles = (n: number) => ready.slice(0, n).map((r) => `• <b>${esc(r.title ?? "")}</b>`).join("\n");
+    const final = done === results.length;
+    const saved = (n: number) => t(lang, "album_saved", { ready: ready.length, total: results.length, titles: titles(n) });
+    text = final ? saved(50) : t(lang, "album_progress", { done, total: results.length });
+    const r = ready.slice(0, 8).map((x) => (x.title ?? "").slice(0, 60));
+    // A caption holds 1024 characters: 10 titles.
+    return showSaveStatus(env, m.user_id, m.status_msg_id, text, { n: results.length, d: done, r, s: final ? "r" : "i" }, final, final ? saved(10) : text);
   }
-  await botApi(env.BOT_TOKEN).editMessageText(m.user_id, m.status_msg_id, text, { parse_mode: "HTML" }).catch(console.error);
+  await showSaveStatus(env, m.user_id, m.status_msg_id, text, state, true);
 }
 
 /** Marks a meme as failed after the last retry and tells the user. */
@@ -318,6 +326,6 @@ export async function failIngest(env: Env, memeId: string, error: unknown) {
   const m = await getMeme(env.DB, memeId);
   if (!m) return;
   await setStatus(env.DB, memeId, "failed", String(error).slice(0, 1000));
-  await editStatus(env, m, t(await userLang(env.DB, m.user_id), "index_failed", { error: errorNote(error) }));
+  await editStatus(env, m, t(await userLang(env.DB, m.user_id), "index_failed", { error: errorNote(error) }), { s: "f", e: errorNote(error) });
   await queuePosts(env, memeId); // the media is fine: post it anyway
 }

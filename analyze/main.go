@@ -6,11 +6,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -41,6 +44,9 @@ func main() {
 // otherwise it is the full analysis with a fresh snapshot of the SQL stats.
 func run() error {
 	p := &progress{}
+	if os.Getenv("MODE") == "pair" {
+		return runPair(p)
+	}
 	var r *result
 	stage := "write"
 	if os.Getenv("MODE") == "render" {
@@ -50,7 +56,7 @@ func run() error {
 			return err
 		}
 	} else {
-		memes, vectors, err := fetch(p)
+		memes, vectors, err := fetch(p, math.MaxInt)
 		if err != nil {
 			return err
 		}
@@ -63,17 +69,27 @@ func run() error {
 	if err := json.Unmarshal(r.Analytics, &a); err != nil {
 		log.Print("analytics: ", err)
 	}
-	images := charts(&a, r)
+	r.Images = upload(p, stage, charts(&a, r))
+	return finish(r)
+}
+
+// upload puts the chart PNGs; returns the names of the uploaded ones.
+func upload(p *progress, stage string, images map[string][]byte) []string {
 	p.report(stage, 0, len(images)+1)
-	r.Images = []string{}
+	names := []string{}
 	for name, png := range images {
 		if err := put("/image/"+name, png); err != nil {
 			log.Print("image ", name, ": ", err)
 			continue
 		}
-		r.Images = append(r.Images, name)
-		p.report(stage, len(r.Images), len(images)+1)
+		names = append(names, name)
+		p.report(stage, len(names), len(images)+1)
 	}
+	return names
+}
+
+// finish stores the result JSON and marks the analysis done.
+func finish(r any) error {
 	if err := call("PUT", "/result", r, nil); err != nil {
 		return err
 	}
@@ -84,10 +100,12 @@ type meme struct {
 	ID, Kind, Lang string
 	Created        int64
 	Tags           []string
+	Owner          int // pair analysis: 0 = pair.a, 1 = pair.b
 }
 
-// fetch reads the ready memes and their image (":i") and text (":t") vectors, 10 memes per request.
-func fetch(p *progress) ([]meme, map[string][]float32, error) {
+// fetch reads the ready memes (at most limit per owner) and their image (":i") and text (":t") vectors,
+// 10 memes per request.
+func fetch(p *progress, limit int) ([]meme, map[string][]float32, error) {
 	var memes []meme
 	for after := any(0); after != nil; {
 		var page struct {
@@ -107,10 +125,16 @@ func fetch(p *progress) ([]meme, map[string][]float32, error) {
 					m.Tags = append(m.Tags, t)
 				}
 			}
+			if len(r) > 5 {
+				if f, ok := r[5].(float64); ok {
+					m.Owner = int(f)
+				}
+			}
 			memes = append(memes, m)
 		}
 		after = page.Next
 	}
+	memes = sample(memes, limit)
 
 	vectors := map[string][]float32{}
 	var mu sync.Mutex
@@ -152,6 +176,31 @@ func fetch(p *progress) ([]meme, map[string][]float32, error) {
 	close(jobs)
 	wg.Wait()
 	return memes, vectors, firstErr
+}
+
+// sample keeps at most n memes per owner, in order: the ones with the lowest id hash, so a restart keeps the same.
+func sample(memes []meme, n int) []meme {
+	hash := func(id string) uint32 {
+		h := fnv.New32a()
+		h.Write([]byte(id))
+		return h.Sum32()
+	}
+	byHash := append([]meme(nil), memes...)
+	sort.SliceStable(byHash, func(a, b int) bool { return hash(byHash[a].ID) < hash(byHash[b].ID) })
+	keep, per := map[string]bool{}, map[int]int{}
+	for _, m := range byHash {
+		if per[m.Owner] < n {
+			per[m.Owner]++
+			keep[m.ID] = true
+		}
+	}
+	out := memes[:0:0]
+	for _, m := range memes {
+		if keep[m.ID] {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 func str(v any) string {

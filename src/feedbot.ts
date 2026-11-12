@@ -6,6 +6,7 @@ import type { Env } from "./env";
 import { FEED_MODES, feedMode, feedPage, markSeen, startSeed, type FeedMeme, type FeedMode } from "./feed";
 import { editMeme, sendMeme } from "./search/deliver";
 import { EMOJI, esc, t, type Key, type Lang } from "./i18n";
+import { ownerOf, pairFeed, pairPage, type PairMode } from "./pairfeed";
 
 // Callback data: f:<mode code>:<seed base36>:<offset>. A negative offset: the "time" mode above its point (newer memes).
 const CODES: Record<FeedMode, string> = { new: "n", old: "o", random: "r", favorites: "f", forgotten: "g", time: "t", unseen: "u" };
@@ -50,12 +51,50 @@ export async function showFeed(env: Env, api: Api, chatId: number, user: Pick<Us
     parse_mode: "HTML" as const,
     reply_markup: feedKeyboard(env, lang, mode, seed, offset, more, back),
   };
+  await show(env, api, chatId, m, other, messageId);
+  await markSeen(env.DB, user.id, [m.id]);
+  return true;
+}
+
+async function show(env: Env, api: Api, chatId: number, m: FeedMeme, other: Parameters<typeof sendMeme>[4], messageId?: number) {
   try {
     await (messageId ? editMeme(env, api, chatId, messageId, m, other) : sendMeme(env, api, chatId, m, other));
   } catch (e) {
     if (!(e instanceof GrammyError && e.description.includes("not modified"))) throw e; // the same meme tapped again
   }
-  await markSeen(env.DB, user.id, [m.id]);
+}
+
+// Pair feed: pf:<pair id>:<mode code>:<seed base36>:<offset>; guess answers: pg:<pair id>:<seed base36>:<offset>:<m|p>.
+const PAIR_CODES: Record<PairMode, string> = { mix: "x", theirs: "t", twins: "w", rhymes: "r", foryou: "y", surprise: "s", bridge: "b", guess: "g" };
+const BY_PAIR_CODE = Object.fromEntries(Object.entries(PAIR_CODES).map(([mode, code]) => [code, mode as PairMode]));
+const pairData = (id: string, mode: PairMode, seed: number, offset: number) => `pf:${id}:${PAIR_CODES[mode]}:${seed.toString(36)}:${offset}`;
+/** The first button of a pair feed mode: theirs starts a session (unseen memes first), the others a random order. */
+export const pairButton = (id: string, mode: PairMode, text: string) => ({ text, callback_data: pairData(id, mode, startSeed(mode === "theirs" ? "unseen" : "random"), 0) });
+
+/** Shows the pair feed meme at `offset` like showFeed; the caption says whose meme it is, except in the guess game. */
+export async function showPairFeed(env: Env, api: Api, chatId: number, user: Pick<User, "id" | "hide_porn">, lang: Lang, pairId: string, mode: PairMode, seed: number, offset: number, messageId?: number) {
+  const f = await pairFeed(env, user.id, pairId);
+  if (!f?.modes.includes(mode)) return false;
+  const {
+    memes: [m],
+    more,
+  } = await pairPage(env, f, mode, { seed, offset, limit: 1, hidePorn: !!user.hide_porn });
+  if (!m) return false;
+  const nav = [
+    ...(offset > 0 ? [{ text: "◀", callback_data: pairData(f.id, mode, seed, offset - 1) }] : []),
+    ...(more ? [{ text: "▶", callback_data: pairData(f.id, mode, seed, offset + 1) }] : []),
+  ];
+  const answer = (o: "m" | "p", text: string) => ({ text, callback_data: `pg:${f.id}:${seed.toString(36)}:${offset}:${o}` });
+  const modes = f.modes.map((x) => ({ ...pairButton(f.id, x, t(lang, `pf_mode_${x}` as Key)), ...(x === mode ? { icon_custom_emoji_id: EMOJI.done[0] } : {}) }));
+  const app = { text: t(lang, "app_button"), web_app: { url: `${env.PUBLIC_URL.replace(/\/$/, "")}/?pair=${f.id}&feed=${mode}` } };
+  const top = mode === "guess" ? [answer("m", t(lang, "pg_mine")), answer("p", t(lang, "pg_partner", { name: f.name }))] : nav;
+  const whose = mode === "guess" ? t(lang, "pg_ask") : t(lang, ownerOf(f, m) === "me" ? "pf_mine" : "pf_theirs", { name: esc(f.name) });
+  await show(env, api, chatId, m, {
+    caption: `${whose}\n${feedCaption(lang, m, offset, (await albumSizes(env.DB, [m.id])).get(m.id))}`,
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: [top, modes.slice(0, 4), modes.slice(4), [app]].filter((row) => row.length) },
+  }, messageId);
+  await markSeen(env.DB, user.id, [m.id], f.users);
   return true;
 }
 
@@ -69,5 +108,23 @@ export function registerFeed<C extends Ctx>(bot: Composer<C>, env: Env) {
     const msg = ctx.callbackQuery.message;
     const shown = !!msg && (await showFeed(env, ctx.api, msg.chat.id, ctx.user, ctx.lang, BY_CODE[code], parseInt(seed, 36), Number(offset), msg.message_id));
     await ctx.answerCallbackQuery(shown ? undefined : t(ctx.lang, "feed_end"));
+  });
+  bot.callbackQuery(/^pf:([\w-]{12}):([xtwrysbg]):([0-9a-z]+):(\d+)$/, async (ctx) => {
+    const [, id, code, seed, offset] = ctx.match;
+    const msg = ctx.callbackQuery.message;
+    const media = msg && ("photo" in msg || "video" in msg || "animation" in msg) ? msg.message_id : undefined; // else (the /pair card) a new message
+    const shown = !!msg && (await showPairFeed(env, ctx.api, msg.chat.id, ctx.user, ctx.lang, id, BY_PAIR_CODE[code], parseInt(seed, 36), Number(offset), media));
+    await ctx.answerCallbackQuery(shown ? undefined : t(ctx.lang, "feed_end"));
+  });
+  bot.callbackQuery(/^pg:([\w-]{12}):([0-9a-z]+):(\d+):([mp])$/, async (ctx) => {
+    const [, id, seed36, offset, pick] = ctx.match;
+    const [msg, seed] = [ctx.callbackQuery.message, parseInt(seed36, 36)];
+    const f = await pairFeed(env, ctx.user.id, id, false);
+    const m = f && (await pairPage(env, f, "guess", { seed, offset: Number(offset), limit: 1, hidePorn: !!ctx.user.hide_porn })).memes[0];
+    if (!f || !m || !msg) return ctx.answerCallbackQuery(t(ctx.lang, "feed_end"));
+    const owner = ownerOf(f, m);
+    const verdict = t(ctx.lang, owner === (pick === "m" ? "me" : "partner") ? "pg_right" : owner === "me" ? "pg_wrong_mine" : "pg_wrong", { name: f.name });
+    const shown = await showPairFeed(env, ctx.api, msg.chat.id, ctx.user, ctx.lang, id, "guess", seed, Number(offset) + 1, msg.message_id);
+    await ctx.answerCallbackQuery(shown ? verdict : `${verdict}\n${t(ctx.lang, "feed_end")}`);
   });
 }

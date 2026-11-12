@@ -11,11 +11,11 @@ var lang = "en"
 var words = map[string]map[string]string{
 	"ru": {
 		"photo": "фото", "video": "видео", "animation": "GIF", "other": "другое", "less": "меньше", "more": "больше",
-		"text": "по смыслу", "image": "по картинке", "saved": "сохранено",
+		"text": "по смыслу", "image": "по картинке", "saved": "сохранено", "twins": "двойники",
 		"channel": "каналы", "group": "группы", "user": "люди", "link": "ссылки", "direct": "напрямую",
 		"inline": "inline", "share": "поделились", "send": "в чат",
 		"key_global": "ключ бота", "key_user": "свой ключ",
-		"bot": "бот", "web": "веб", "miniapp": "Mini App", "api": "API", "mcp": "MCP", "zip": "архив", "unknown": "раньше",
+		"bot": "бот", "web": "веб", "miniapp": "Mini App", "api": "API", "mcp": "MCP", "zip": "архив", "pair": "от пары", "unknown": "раньше",
 		"Mon": "Пн", "Tue": "Вт", "Wed": "Ср", "Thu": "Чт", "Fri": "Пт", "Sat": "Сб", "Sun": "Вс",
 	},
 	"en": {
@@ -23,7 +23,7 @@ var words = map[string]map[string]string{
 		"channel": "channels", "group": "groups", "user": "people", "link": "links", "direct": "direct",
 		"share": "shared", "send": "sent to chat",
 		"key_global": "bot key", "key_user": "own key",
-		"bot": "bot", "web": "web", "miniapp": "Mini App", "api": "API", "mcp": "MCP", "zip": "archive", "unknown": "earlier",
+		"bot": "bot", "web": "web", "miniapp": "Mini App", "api": "API", "mcp": "MCP", "zip": "archive", "pair": "from pair", "unknown": "earlier",
 	},
 }
 

@@ -138,10 +138,23 @@ export async function deleteMemes(env: MemeStores, ids: string[]) {
   const { results } = await env.DB.prepare(`DELETE FROM memes WHERE id IN (${ids.map(() => "?").join(",")}) RETURNING r2_file, r2_preview`)
     .bind(...ids)
     .all<{ r2_file: string | null; r2_preview: string | null }>();
-  await env.DB.prepare(`DELETE FROM post_items WHERE meme_id IN (${ids.map(() => "?").join(",")})`).bind(...ids).run();
+  // Posts of these memes: an emptied post goes with its audio; a changed album needs a new clip.
+  const { results: posts } = await env.DB.prepare(
+    `DELETE FROM post_items WHERE meme_id IN (${ids.map(() => "?").join(",")}) RETURNING post_id`,
+  ).bind(...ids).all<{ post_id: string }>();
+  const postIds = [...new Set(posts.map((p) => p.post_id))];
+  const { results: media } = postIds.length
+    ? await env.DB.prepare(`SELECT id, audio_r2, clip_r2, NOT EXISTS (SELECT 1 FROM post_items WHERE post_id = posts.id) AS empty FROM posts WHERE id IN (${postIds.map(() => "?").join(",")}) AND (audio_r2 IS NOT NULL OR clip_r2 IS NOT NULL)`)
+        .bind(...postIds)
+        .all<{ id: string; audio_r2: string | null; clip_r2: string | null; empty: number }>()
+    : { results: [] };
+  for (const p of media) {
+    if (p.empty) await env.DB.prepare("DELETE FROM posts WHERE id = ?").bind(p.id).run();
+    else await env.DB.prepare("UPDATE posts SET clip_r2 = NULL, clip_file_id = NULL WHERE id = ?").bind(p.id).run();
+  }
   await env.DB.prepare(`DELETE FROM meme_uses WHERE meme_id IN (${ids.map(() => "?").join(",")})`).bind(...ids).run();
   await env.DB.prepare(`DELETE FROM meme_views WHERE meme_id IN (${ids.map(() => "?").join(",")})`).bind(...ids).run();
-  const keys = results.flatMap((r) => [r.r2_file, r.r2_preview]).filter((k): k is string => !!k);
+  const keys = [...results.flatMap((r) => [r.r2_file, r.r2_preview]), ...media.flatMap((p) => [p.empty ? p.audio_r2 : null, p.clip_r2])].filter((k): k is string => !!k);
   if (keys.length) await env.MEDIA.delete(keys);
 }
 

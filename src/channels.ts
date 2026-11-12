@@ -6,6 +6,7 @@ import { loadMemes, userLang, type Meme } from "./db";
 import type { Env } from "./env";
 import { esc, t, type Lang } from "./i18n";
 import { sendAlbum } from "./search/deliver";
+import { sendPostAudio } from "./audio";
 
 // Auto-posting: each message with memes (a single meme or a media group) is saved as a post; once all its memes
 // are processed, the bot posts them to the owner's channels, an album as an album.
@@ -133,6 +134,7 @@ export async function postJob(env: Env, postId: string) {
   for (const ch of channels) {
     try {
       await sendAlbum(env, api, ch.chat_id, memes, {}, renderCaption(ch.caption, post, memes) || undefined);
+      await sendPostAudio(env, api, ch.chat_id, memes[0].id);
     } catch (e) {
       // No retry: a partly sent album must not be posted twice.
       errors.push(`${ch.chat_id}: ${String(e).slice(0, 200)}`);

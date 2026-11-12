@@ -29,7 +29,7 @@ describe("sha256 dedupe for forwarded memes", () => {
 
     await embedStage(e, "new");
     expect(await e.DB.prepare("SELECT id FROM memes WHERE id = 'new'").first()).toBeNull();
-    expect(telegram).toEqual(["editMessageText"]);
+    expect(telegram).toEqual(["editMessageWidgetData", "editMessageCaption"]); // the status widget and its caption
   });
 
   it("backfills hashes of existing memes", async () => {

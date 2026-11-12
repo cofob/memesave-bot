@@ -76,12 +76,13 @@ export async function upsertVectors(env: Env, vectors: VectorizeVector[], wait =
   }
 }
 
-/** Image and text vectors of up to 10 of the user's memes (comma-separated ids): 20 ids per Vectorize call. */
-export async function memeVectors(env: Env, userId: number, idList: string) {
+/** Image and text vectors of up to 10 of the user's (or users') memes (comma-separated ids): 20 ids per Vectorize call. */
+export async function memeVectors(env: Env, userId: number | number[], idList: string) {
   const ids = idList.split(",").filter(Boolean).slice(0, 10);
+  const users = [userId].flat();
   if (!ids.length) return [];
-  const { results } = await env.DB.prepare(`SELECT id FROM memes WHERE user_id = ? AND id IN (${ids.map(() => "?").join(",")})`)
-    .bind(userId, ...ids)
+  const { results } = await env.DB.prepare(`SELECT id FROM memes WHERE user_id IN (${users.map(() => "?").join(",")}) AND id IN (${ids.map(() => "?").join(",")})`)
+    .bind(...users, ...ids)
     .all<{ id: string }>();
   if (!results.length) return [];
   const vectors = await env.VECTORS.getByIds(results.flatMap((r) => [`${r.id}:i`, `${r.id}:t`]));

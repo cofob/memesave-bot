@@ -1,20 +1,22 @@
 <script lang="ts">
   // A grid of meme previews from the loaded search index; a click opens the meme. `note` adds a line under each.
+  import type { MemeBrief } from "./api";
   import { indexed, loadIndex, textIndex } from "./search.svelte";
 
   interface Props {
     ids: string[];
     onOpen: (id: string) => void;
     note?: (id: string) => string;
+    items?: Map<string, MemeBrief>; // memes outside the own index (a partner's)
   }
-  let { ids, onOpen, note }: Props = $props();
+  let { ids, onOpen, note, items }: Props = $props();
 
   if (!textIndex.version) loadIndex().catch(() => {});
 </script>
 
 <div class="thumbs">
   {#each ids as id (id)}
-    {@const m = textIndex.version >= 0 ? indexed(id) : undefined}
+    {@const m = items?.get(id) ?? (textIndex.version >= 0 ? indexed(id) : undefined)}
     <figure>
       <button class="thumb" onclick={() => onOpen(id)} aria-label={m?.title ?? id}>
         {#if m}<img src={m.thumb} alt={m.title ?? ""} loading="lazy" />{/if}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"math"
 	"strings"
@@ -523,18 +524,19 @@ type label struct {
 }
 
 // scatterChart: points fitted to the canvas, each with a thin surface ring; group -1 is gray and drawn first.
-// Labels are white pills; one that would overlap a placed one is skipped.
-func scatterChart(xy [][2]float64, group []int, labels []label, _ bool) []byte {
+// Labels are white pills; one that would overlap a placed one is skipped. A legend (2+ series) goes on top.
+func scatterChart(xy [][2]float64, group []int, labels []label, legend []series) []byte {
 	c := newCanvas(height)
 	if len(xy) == 0 {
 		return c.png()
 	}
+	top := c.legend(legend) // pad without a legend
 	minX, maxX, minY, maxY := xy[0][0], xy[0][0], xy[0][1], xy[0][1]
 	for _, p := range xy {
 		minX, maxX, minY, maxY = math.Min(minX, p[0]), math.Max(maxX, p[0]), math.Min(minY, p[1]), math.Max(maxY, p[1])
 	}
-	s := math.Min((c.w-2*pad)/math.Max(maxX-minX, 1e-9), (c.h-2*pad)/math.Max(maxY-minY, 1e-9))
-	ox, oy := (c.w-(maxX-minX)*s)/2, (c.h-(maxY-minY)*s)/2
+	s := math.Min((c.w-2*pad)/math.Max(maxX-minX, 1e-9), (c.h-pad-top)/math.Max(maxY-minY, 1e-9))
+	ox, oy := (c.w-(maxX-minX)*s)/2, (c.h+pad-top-(maxY-minY)*s)/2
 	at := func(x, y float64) (float64, float64) { return ox + (x-minX)*s, c.h - (oy + (y-minY)*s) }
 	r := math.Max(1.6, math.Min(4.5, 420/math.Sqrt(float64(len(xy)))))
 	for pass := range 2 {
@@ -578,6 +580,24 @@ func scatterChart(xy [][2]float64, group []int, labels []label, _ bool) []byte {
 		c.rect(bx[0]-1, bx[1]-1, bx[2]+1, bx[3]+1, 15, allCorners, gridInk)
 		c.rect(bx[0], bx[1], bx[2], bx[3], 14, allCorners, color.RGBA{0xff, 0xff, 0xff, 0xff})
 		c.text(x, y, l.text, st)
+	}
+	return c.png()
+}
+
+// vstack puts chart PNGs of the same width one under another.
+func vstack(pngs ...[]byte) []byte {
+	var imgs []image.Image
+	h := 0
+	for _, b := range pngs {
+		if img, err := png.Decode(bytes.NewReader(b)); err == nil {
+			imgs, h = append(imgs, img), h+img.Bounds().Dy()
+		}
+	}
+	c := newCanvas(float64(h) / scale)
+	y := 0
+	for _, img := range imgs {
+		draw.Draw(c.img, img.Bounds().Add(image.Pt(0, y)), img, image.Point{}, draw.Src)
+		y += img.Bounds().Dy()
 	}
 	return c.png()
 }

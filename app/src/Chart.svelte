@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  import { BarChart, HeatmapChart, LineChart, ScatterChart, TreemapChart } from "echarts/charts";
+  import { BarChart, HeatmapChart, LineChart, RadarChart, ScatterChart, TreemapChart } from "echarts/charts";
   import { DataZoomComponent, GridComponent, LegendComponent, TooltipComponent, VisualMapComponent } from "echarts/components";
   import { init, use, type ECharts, type EChartsCoreOption } from "echarts/core";
   import { LabelLayout } from "echarts/features";
@@ -7,7 +7,7 @@
 
   import { isDark, PALETTE } from "./charts";
 
-  use([BarChart, HeatmapChart, LineChart, ScatterChart, TreemapChart, DataZoomComponent, GridComponent, LegendComponent, TooltipComponent, VisualMapComponent, CanvasRenderer, LabelLayout]); // LabelLayout: hideOverlap of labels
+  use([BarChart, HeatmapChart, LineChart, RadarChart, ScatterChart, TreemapChart, DataZoomComponent, GridComponent, LegendComponent, TooltipComponent, VisualMapComponent, CanvasRenderer, LabelLayout]); // LabelLayout: hideOverlap of labels
 </script>
 
 <script lang="ts">

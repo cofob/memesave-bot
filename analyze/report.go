@@ -219,14 +219,7 @@ func charts(a *analytics, r *result) map[string][]byte {
 		lang = a.Lang
 	}
 	out := map[string][]byte{}
-	add := func(name string, f func() []byte) {
-		defer func() {
-			if e := recover(); e != nil {
-				log.Printf("chart %s: %v", name, e)
-			}
-		}()
-		out[name] = f()
-	}
+	add := func(name string, f func() []byte) { addChart(out, name, f) }
 
 	if a != nil && len(a.Timeline) > 0 {
 		var days []string
@@ -441,7 +434,7 @@ func charts(a *analytics, r *result) map[string][]byte {
 				gs[i] = color(r.Text.Labels[i])
 			}
 		}
-		add("map_text", func() []byte { return scatterChart(r.Text.XY, gs, centers, false) })
+		add("map_text", func() []byte { return scatterChart(r.Text.XY, gs, centers, nil) })
 	}
 	if len(r.Image.XY) > 0 {
 		byID := map[string]int{}
@@ -457,7 +450,7 @@ func charts(a *analytics, r *result) map[string][]byte {
 				gs[i] = color(l)
 			}
 		}
-		add("map_image", func() []byte { return scatterChart(r.Image.XY, gs, nil, false) })
+		add("map_image", func() []byte { return scatterChart(r.Image.XY, gs, nil, nil) })
 	}
 	if len(r.TagMap) > 0 {
 		add("tag_map", func() []byte { return bubbleChart(r.TagMap) })
@@ -505,6 +498,16 @@ func charts(a *analytics, r *result) map[string][]byte {
 	return out
 }
 
+// addChart draws out[name]; a chart that panics is logged and left out.
+func addChart(out map[string][]byte, name string, f func() []byte) {
+	defer func() {
+		if e := recover(); e != nil {
+			log.Printf("chart %s: %v", name, e)
+		}
+	}()
+	out[name] = f()
+}
+
 var originOrder = []string{"channel", "group", "user", "link", "direct"}
 
 func percent(v float64) string { return fmt.Sprintf("%.0f%%", v*100) }
@@ -529,7 +532,7 @@ func trendSeries(t trends, groups []cluster) []series {
 	return append(ss, series{tr("other"), share(t.Other), other})
 }
 
-var viaOrder = []string{"bot", "web", "miniapp", "api", "mcp", "zip", "unknown"}
+var viaOrder = []string{"bot", "web", "miniapp", "api", "mcp", "zip", "pair", "unknown"}
 
 func uniqueSorted(v []string) []string {
 	seen := map[string]bool{}
