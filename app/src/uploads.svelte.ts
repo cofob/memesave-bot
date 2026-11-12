@@ -1,4 +1,5 @@
 import { api, ApiError, type UploadMeta } from "./api";
+import { onLive, type LiveEvent } from "./live";
 
 export type UploadState = "queued" | "uploading" | "processing" | "batched" | "ready" | "duplicate" | "error";
 
@@ -22,7 +23,7 @@ const queue: { item: UploadItem; file: File }[] = [];
 const readyListeners = new Set<(id: string) => void>();
 let active = 0;
 let nextKey = 0;
-let pollTimer: ReturnType<typeof setTimeout> | undefined;
+let live: (() => void) | undefined;
 
 export const onUploadReady = (fn: (id: string) => void) => (readyListeners.add(fn), () => readyListeners.delete(fn));
 
@@ -73,7 +74,7 @@ async function run(item: UploadItem, file: File) {
     item.id = res.id;
     // Photos in an open batch wait for /batch_finish, so they are not polled.
     item.state = res.duplicate ? "duplicate" : res.batched ? "batched" : "processing";
-    if (item.state === "processing") schedulePoll();
+    if (item.state === "processing") watch();
   } catch (e) {
     item.state = "error";
     item.error = e instanceof ApiError ? e.message : String(e);
@@ -102,7 +103,7 @@ async function runZip(item: UploadItem, file: File) {
     }
     await ok(await fetch(at("complete"), { method: "POST", body: JSON.stringify({ parts }), headers: { "Content-Type": "application/json" } }));
     item.state = "processing";
-    schedulePoll();
+    watch();
   } catch (e) {
     item.state = "error";
     item.error = e instanceof ApiError ? e.message : String(e);
@@ -121,25 +122,26 @@ async function pollZip(item: UploadItem) {
   }
 }
 
-/** Polls processing items until they are ready or failed. */
-function schedulePoll() {
-  pollTimer ??= setTimeout(async () => {
-    pollTimer = undefined;
-    const waiting = uploads.items.filter((i) => i.state === "processing" && i.id && i.kind !== "zip");
-    await Promise.all(uploads.items.filter((i) => i.state === "processing" && i.kind === "zip").map((i) => pollZip(i).catch(() => {})));
-    try {
-      if (waiting.length) for (const row of await api.status(waiting.map((i) => i.id!))) {
-        const item = waiting.find((i) => i.id === row.id);
-        if (!item || (row.status !== "ready" && row.status !== "failed")) continue;
-        item.state = row.status === "ready" ? "ready" : "error";
-        if (row.title) item.name = row.title;
-        if (item.state === "ready") readyListeners.forEach((fn) => fn(item.id!));
-      }
-    } catch {
-      // try again on the next tick
-    }
-    if (uploads.items.some((i) => i.state === "processing")) schedulePoll();
-  }, 3000);
+const processing = (kind: "zip" | "media") => uploads.items.filter((i) => i.state === "processing" && i.id && (i.kind === "zip") === (kind === "zip"));
+const pollZips = () => Promise.all(processing("zip").map((i) => pollZip(i).catch(() => {})));
+
+function settle(item: UploadItem, status: string, title?: string | null) {
+  if (status !== "ready" && status !== "failed") return;
+  item.state = status === "ready" ? "ready" : "error";
+  if (title) item.name = title;
+  if (item.state === "ready") readyListeners.forEach((fn) => fn(item.id!));
+}
+
+/** Server push updates processing items; after a reconnect they are checked once (events may be lost). */
+function watch() {
+  live ??= onLive((e: LiveEvent) => {
+    if (e.t === "job" && e.kind === "zip") pollZips();
+    if (e.t === "meme") processing("media").filter((i) => i.id === e.id).forEach((i) => settle(i, e.status, e.title));
+    if (e.t !== "reconnect") return;
+    pollZips();
+    const waiting = processing("media");
+    if (waiting.length) api.status(waiting.map((i) => i.id!)).then((rows) => rows.forEach((r) => waiting.filter((i) => i.id === r.id).forEach((i) => settle(i, r.status, r.title))), () => {});
+  });
 }
 
 async function imageMeta(file: File): Promise<UploadMeta> {

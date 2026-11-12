@@ -1,6 +1,7 @@
 import { botApi } from "./botapi";
 import { getMeme, userLang } from "./db";
 import type { Env } from "./env";
+import { push } from "./live";
 import { t, type Key } from "./i18n";
 import { memeVectors } from "./ingest/embed";
 import { JobContainer } from "./job";
@@ -141,6 +142,7 @@ export async function failExport(env: Env, id: string, error: string) {
     .bind(error.slice(0, 1000), id)
     .first<Export>();
   if (!ex) return;
+  await push(env, ex.user_id, { t: "job", kind: "export" });
   await showExport(env, ex, { s: 3 });
   if (ex.upload_id) await env.MEDIA.resumeMultipartUpload(exportKey(id), ex.upload_id).abort().catch(console.error);
   await say(env, ex, "export_failed", { error: error.slice(0, 300).replace(/[<>&]/g, "") });
@@ -239,6 +241,7 @@ export async function handleExport(req: Request, env: Env): Promise<Response> {
     await env.DB.prepare("UPDATE exports SET status = 'done', size = ?, files = ?, failed = ?, updated_at = unixepoch() WHERE id = ?")
       .bind(done.size, done.files, done.failed, id)
       .run();
+    await push(env, ex.user_id, { t: "job", kind: "export" });
     const lang = await userLang(env.DB, ex.user_id);
     const button = { text: t(lang, "export_button"), url: await downloadUrl(env, id) };
     await showExport(env, ex, { s: 2, z: Math.round(done.size / 2 ** 20), f: done.files, x: done.failed, u: button.url });

@@ -1,5 +1,6 @@
 import { deleteMeme, getMeme, setStatus, userLang, type Meme } from "../db";
 import type { Env } from "../env";
+import { push } from "../live";
 import { t } from "../i18n";
 import { memeMedia, tmpKey, toDataUrl, variantOf } from "../media";
 import { embed } from "../openrouter";
@@ -121,6 +122,7 @@ export async function embedStage(env: Env, memeId: string, gen = 0) {
       });
     }
     if (!(await setStatus(env.DB, memeId, "describing", null, gen)).meta.changes) return; // an edit restarted it
+    await push(env, m.user_id, { t: "meme", id: memeId, status: "describing" }); // a new (or retried) meme shows up in the web app
   }
   // Batch import memes wait for /batch_finish instead.
   if (!m.import_id) await env.JOBS.send({ type: "describe", memeId, gen });

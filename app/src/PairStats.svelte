@@ -7,6 +7,7 @@
   import { onDestroy, untrack } from "svelte";
   import { api, ApiError, type AnalysisRun, type MemeBrief, type PairFeedMode, type PairResult, type PairStats, type PairView, type PornSide, type SharedParts } from "./api";
   import Chart from "./Chart.svelte";
+  import { onLive } from "./live";
   import { autoHeight, bars, heatmap, line, stacked } from "./charts";
   import PairMap, { clusterName } from "./PairMap.svelte";
   import { indexed } from "./search.svelte";
@@ -165,16 +166,13 @@
   let tooSmall = $state(false);
   let llm = $state(true);
   let previews = $state.raw(new Map<string, MemeBrief>());
-  let timer: ReturnType<typeof setTimeout>;
 
   async function refresh() {
-    clearTimeout(timer);
     try {
       const a = await api.pairAnalysis(id);
       run = a.current;
       if (a.ready && (a.ready.id !== ready?.id || a.ready.labeled !== ready?.labeled)) result = await api.pairAnalysisResult(id);
       ready = a.ready;
-      if (run?.status === "running") timer = setTimeout(refresh, 2000);
     } catch {
       error = true;
     } finally {
@@ -196,7 +194,8 @@
   }
 
   if (!shared) refresh();
-  onDestroy(() => clearTimeout(timer));
+  // Server push (live.ts) instead of polling: each progress step of the run.
+  if (!shared) onDestroy(onLive((e) => void ((e.t === "reconnect" || (e.t === "job" && e.kind === "analysis")) && refresh())));
 
   const running = $derived(run?.status === "running");
   const canStart = $derived(!running && (!ready || Date.now() / 1000 > ready.fresh_until));

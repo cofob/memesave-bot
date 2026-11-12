@@ -4,6 +4,7 @@ import type { ZipImporter } from "./zip";
 import type { DataExporter } from "./export";
 import type { Thumbnailer } from "./thumb";
 import type { Analyzer } from "./analysis";
+import type { Live } from "./live";
 
 export interface Env {
   DB: D1Database;
@@ -16,6 +17,7 @@ export interface Env {
   EXPORT: DurableObjectNamespace<DataExporter>;
   THUMB: DurableObjectNamespace<Thumbnailer>;
   ANALYZE: DurableObjectNamespace<Analyzer>;
+  LIVE: DurableObjectNamespace<Live>; // push events to the web app (src/live.ts)
   ADMIN_ID: string;
   STORAGE_CHAT_ID?: string; // system channel for silent uploads (the bot is its admin)
   PUBLIC_URL: string; // base URL of this Worker, e.g. https://memereserve.cfb.wtf

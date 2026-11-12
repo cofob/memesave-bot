@@ -4,6 +4,7 @@ import { userAnalytics } from "./analytics";
 import { getUser } from "./db";
 import { userStats } from "./stats";
 import type { Env } from "./env";
+import { push } from "./live";
 import { parseJson } from "./ingest/describe";
 import { memeVectors } from "./ingest/embed";
 import { failedReport } from "./analysisreport";
@@ -241,6 +242,12 @@ export async function analysisResult(env: Env, of: number | string) {
   return obj ? new Response(obj.body, { headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } }) : json(null, 404);
 }
 
+/** Tells the web app of the owners (both members of a pair) that the run changed. */
+async function pushAnalysis(env: Env, a: Analysis) {
+  const p = a.pair_id ? await env.DB.prepare("SELECT a, b FROM pairs WHERE id = ?").bind(a.pair_id).first<Pick<Pair, "a" | "b">>() : null;
+  for (const id of p ? [p.a, p.b] : [a.user_id]) if (id) await push(env, id, { t: "job", kind: "analysis" });
+}
+
 /** A failed redraw keeps the finished result (with the new names, but the old charts). */
 export async function failAnalysis(env: Env, id: string, error: string) {
   const a = await env.DB.prepare(
@@ -248,6 +255,7 @@ export async function failAnalysis(env: Env, id: string, error: string) {
   )
     .bind(error.slice(0, 1000), id)
     .first<Analysis>();
+  if (a) await pushAnalysis(env, a);
   if (a) await showAnalysis(env, a, a.status === "failed" ? { e: 1 } : { d: 1 });
   if (a?.status === "failed" && a.chat) await failedReport(env, a);
   if (a?.status === "done" && a.chat) await env.JOBS.send({ type: a.pair_id ? "pair_report" : "analysis_report", analysisId: id });
@@ -315,6 +323,7 @@ export async function handleAnalysis(req: Request, env: Env): Promise<Response> 
     await env.DB.prepare("UPDATE analyses SET stage = ?, done = ?, total = ?, updated_at = unixepoch() WHERE id = ?")
       .bind(body.stage ?? null, body.done ?? 0, body.total ?? 0, id)
       .run();
+    await pushAnalysis(env, a);
     const r = await analysisDue(env, id);
     if (r && !p) await showAnalysisProgress(env, a, r);
     if (r && p) {
@@ -326,6 +335,7 @@ export async function handleAnalysis(req: Request, env: Env): Promise<Response> 
   }
   if (action === "done" && m === "POST") {
     await env.DB.prepare("UPDATE analyses SET status = 'done', stage = 'done', updated_at = unixepoch() WHERE id = ?").bind(id).run();
+    await pushAnalysis(env, a);
     if (a.chat) await env.JOBS.send({ type: a.pair_id ? "pair_report" : "analysis_report", analysisId: id });
     await showAnalysis(env, a, { d: 1 });
     if (p) await updateCard(env, p); // the new compatibility and title

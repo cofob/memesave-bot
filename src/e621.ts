@@ -74,10 +74,13 @@ export async function syncE621(env: Env, userId: number) {
 }
 
 export async function e621Status(db: D1Database, userId: number) {
-  const acc = await db.prepare("SELECT username, lists, pools, backfill_done, last_sync, error FROM e621_accounts WHERE user_id = ?").bind(userId).first<{ username: string; lists: Lists; pools: number; backfill_done: number; last_sync: number; error: string | null }>();
-  if (!acc) return { connected: false as const };
+  const row = await db.prepare("SELECT username, lists, pools, backfill_done, last_sync, error, fav_page, fav_total FROM e621_accounts WHERE user_id = ?").bind(userId).first<{ username: string; lists: Lists; pools: number; backfill_done: number; last_sync: number; error: string | null; fav_page: number; fav_total: number | null }>();
+  if (!row) return { connected: false as const };
+  const { fav_page, fav_total: total, ...acc } = row;
   const imported = await db.prepare("SELECT COUNT(*) AS n FROM e621_posts WHERE user_id = ?").bind(userId).first<number>("n");
-  return { connected: true as const, ...acc, pools: !!acc.pools, backfill_done: !!acc.backfill_done, imported };
+  // Favorites progress of a full scan by pages: e621 counts only favorites, not upvotes.
+  const fav = total && acc.lists !== "up" ? { done: fav_page ? Math.min(total, (fav_page - 1) * PAGE) : total, total } : null;
+  return { connected: true as const, ...acc, pools: !!acc.pools, backfill_done: !!acc.backfill_done, imported, fav };
 }
 
 /** Cron: a quick scan for new posts; a full rescan once a day (old posts can be upvoted later); a stalled scan restarts. */
@@ -143,6 +146,11 @@ export async function e621Sync(env: Env, job: E621Job) {
   const list = job.list ?? (wantFav && !(full && !acc.fav_page) ? "fav" : "vote");
   const page = !full || (list === "vote" && acc.vote_before === null) ? "1" : list === "fav" ? String(acc.fav_page) : `b${acc.vote_before}`;
   try {
+    if (full && list === "fav" && acc.fav_page === 1) {
+      // The total of the progress bar; without it the bar is hidden.
+      const u = await e621Get<{ favorite_count?: number }>(env, `/users/${encodeURIComponent(acc.username)}.json`, auth).catch(() => null);
+      await db.prepare("UPDATE e621_accounts SET fav_total = ? WHERE user_id = ?").bind(u?.favorite_count ?? null, userId).run();
+    }
     const query = new URLSearchParams({ ...(list === "vote" && { tags: `votedup:${acc.username}` }), limit: String(PAGE), page });
     const { posts } = await e621Get<{ posts: Post[] }>(env, `/${list === "fav" ? "favorites" : "posts"}.json?${query}`, auth);
     const seen = await handled(db, userId, posts.map((p) => p.id));

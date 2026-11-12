@@ -148,6 +148,7 @@ export interface E621Status {
   backfill_done?: boolean; // false: the first full import (or the daily rescan) is running
   last_sync?: number;
   imported?: number; // posts handled so far
+  fav?: { done: number; total: number } | null; // favorites progress of a full scan (by pages)
   error?: string | null; // unauthorized | payment required | storage full
 }
 
@@ -533,6 +534,7 @@ export const api = {
   zipCreate: () => post<{ id: string; url: string }>("zip"),
   zipStatus: (id: string) => call<ZipStatus>(`zip/${id}`),
   exportStatus: () => call<ExportStatus | null>("export"),
+  live: () => call<{ url: string }>("live"), // a ticket for the push WebSocket (live.ts)
   exportStart: () => post<{ id: string }>("export"),
   accountSummary: () => call<{ memes: number; payments: number }>("account"),
   deleteAccount: (confirm: string) => post<{ ok: true }>("account/delete", { confirm }),

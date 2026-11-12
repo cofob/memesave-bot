@@ -32,6 +32,7 @@
   import { confirm, saveFile, syncTheme, tg } from "./telegram";
   import UploadPanel from "./UploadPanel.svelte";
   import { addFiles, onUploadReady } from "./uploads.svelte";
+  import { onLive, type LiveEvent } from "./live";
   import { forget, loadIndex, localSearch, textIndex } from "./search.svelte";
   import { viewing } from "./viewing.svelte";
   import { onRoute, show } from "./route";
@@ -213,7 +214,8 @@
     try {
       const page = await api.list(sort, tag, reset ? 0 : (nextOffset ?? 0), toQuery(filters));
       if (gen !== generation) return;
-      items = reset ? page.items : [...items, ...page.items];
+      // New memes at the top shift the offsets: skip the ones already shown (a duplicate key breaks the grid).
+      items = reset ? page.items : [...items, ...page.items.filter((m) => !items.some((x) => x.id === m.id))];
       nextOffset = page.next_offset;
       // The observer fires only when the sentinel starts intersecting: if the page is still
       // shorter than the screen, load the next one right away.
@@ -389,12 +391,35 @@
     );
     // New uploads: add to the search index and show at the top of the default view.
     const offUpload = onUploadReady(refreshNew);
-    return () => (offRoute(), offUpload());
+    const offLive = onLive(onLiveEvent);
+    return () => (offRoute(), offUpload(), offLive());
   });
 
   function refreshNew() {
     loadIndex().catch(() => {});
-    if (sort === "new" && !tag) load(true);
+    mergeTop();
+  }
+
+  /** Puts new memes at the top of the default view and updates the first page; the scroll stays. */
+  async function mergeTop() {
+    if (sort !== "new" || tag || viewing.who) return;
+    const gen = generation;
+    const page = await api.list(sort, tag, 0, toQuery(filters)).catch(() => null);
+    if (!page || gen !== generation) return;
+    const fresh = page.items.filter((m) => !items.some((x) => x.id === m.id));
+    if (items.length && fresh.length === page.items.length) return load(true); // more new memes than a page
+    const byId = new Map(page.items.map((m) => [m.id, m]));
+    items = [...fresh, ...items.map((m) => byId.get(m.id) ?? m)];
+  }
+
+  // Server push: statuses change at once; the first page and the search index (a full download) are throttled.
+  let topTimer: ReturnType<typeof setTimeout> | undefined;
+  let indexTimer: ReturnType<typeof setTimeout> | undefined;
+  function onLiveEvent(e: LiveEvent) {
+    if (viewing.who || (e.t === "job" && e.kind !== "zip")) return;
+    if (e.t === "meme") items = items.map((m) => (m.id === e.id ? { ...m, status: e.status, title: e.title ?? m.title } : m));
+    topTimer ??= setTimeout(() => ((topTimer = undefined), mergeTop()), 1000);
+    if (e.t !== "meme" || e.status === "ready") indexTimer ??= setTimeout(() => ((indexTimer = undefined), loadIndex().catch(() => {})), 10_000);
   }
 
   // Infinite scroll: the sentinel exists only after login.
@@ -712,10 +737,7 @@
 <ImportLink
   open={importOpen}
   onClose={() => (importOpen = false)}
-  onStarted={() => {
-    notice = { tone: "success", text: s.importStarted };
-    setTimeout(refreshNew, 20000); // a link import has no status to poll: look again after a while
-  }}
+  onStarted={() => (notice = { tone: "success", text: s.importStarted })}
 />
 <FilterDrawer open={filtersOpen} {filters} onChange={(f) => (filters = f)} onClose={() => (filtersOpen = false)} />
 {#if me}

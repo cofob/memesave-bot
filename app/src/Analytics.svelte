@@ -4,6 +4,7 @@
   import { onDestroy, untrack } from "svelte";
   import { api, type AdminAnalytics, type AnalysisResult, type AnalysisRun, type Me, type PornSide, type SharedParts } from "./api";
   import Chart from "./Chart.svelte";
+  import { onLive } from "./live";
   import { autoHeight, bars, columns, hexAlpha, isDark, PALETTE, cumulative, dayRange, esc, heatmap, line, money, stacked, topGroups } from "./charts";
   import Embeddings from "./Embeddings.svelte";
   import ShareLink from "./ShareLink.svelte";
@@ -39,20 +40,17 @@
   let loading = $state(!shared);
   let starting = $state(false);
   let llm = $state(true);
-  let timer: ReturnType<typeof setTimeout>;
   const data = $derived(parts.normal ? (result?.analytics ?? null) : null);
   const porn = $derived(parts.porn && !me?.hide_porn ? (result?.analytics?.porn ?? null) : null);
   const stats = $derived(data?.stats ?? null);
 
   async function refresh() {
-    clearTimeout(timer);
     try {
       const st = await api.analysis();
       run = st.current;
       // AI names added later keep the analysis id: reload the result when they appear.
       if (st.ready && (st.ready.id !== ready?.id || st.ready.labeled !== ready?.labeled)) result = await api.analysisResult();
       ready = st.ready;
-      if (run?.status === "running") timer = setTimeout(refresh, 2000);
     } catch {
       error = true;
     } finally {
@@ -73,7 +71,8 @@
   }
 
   if (!shared) refresh();
-  onDestroy(() => clearTimeout(timer));
+  // Server push (live.ts) instead of polling: each progress step of the run.
+  if (!shared) onDestroy(onLive((e) => void ((e.t === "reconnect" || (e.t === "job" && e.kind === "analysis")) && refresh())));
 
   const running = $derived(run?.status === "running");
   // A result from before moods can be redone at once (the server agrees when AI is available).

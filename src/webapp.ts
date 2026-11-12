@@ -33,6 +33,7 @@ import { analysisResult, analysisStatus, startPairAnalysis } from "./analysis";
 import { handleShare, handleSharedAnalysis, revokeShares } from "./analysisshare";
 import { editMeme, parseEdit } from "./ingest/edit";
 import { attachAudio, audioError, audioPosts, ensureClip, postOf, sendClip, sendPostAudio } from "./audio";
+import { handleLive } from "./live";
 import { checkGuess, copyMeme, ownerOf, pairFeed, pairMode, pairPage } from "./pairfeed";
 
 const PAGE = 60;
@@ -156,7 +157,7 @@ export async function ownMemes(env: Env, userId: number, ids: string[]) {
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 
 export async function listMemes(env: Env, user: User, url: URL) {
-  const sort = { new: "created_at DESC", old: "created_at ASC", title: "title IS NULL, title COLLATE NOCASE" }[url.searchParams.get("sort") ?? "new"];
+  const sort = { new: "created_at DESC, id", old: "created_at ASC, id", title: "title IS NULL, title COLLATE NOCASE, id" }[url.searchParams.get("sort") ?? "new"];
   const tag = url.searchParams.get("tag");
   const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
   const filters = filterSql(url);
@@ -487,6 +488,8 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
     else await env.JOBS.send({ type: "link", userId: user.id, url: link, via });
     return json({ queued: true }, 202);
   }
+  // A ticket for the push WebSocket (src/live.ts): browsers cannot send the Mini App header there.
+  if (resource === "live" && m === "GET") return json({ url: `/app/live/${user.id}${await signedQuery(env, `live|${user.id}`, 60)}` });
   if (resource === "status" && req.method === "GET") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").filter(Boolean).slice(0, 50);
     if (!ids.length) return json([]);
@@ -701,6 +704,7 @@ export async function handleApp(req: Request, env: Env, ctx: ExecutionContext): 
   if (req.method === "GET" && url.pathname.startsWith("/app/thumb/")) return handleMedia(req, env, ctx, url, "thumb");
   if (req.method === "GET" && url.pathname.startsWith("/app/file/")) return handleMedia(req, env, ctx, url, "file");
   if (req.method === "GET" && url.pathname.startsWith("/app/zip/")) return handleZip(env, url);
+  if (req.method === "GET" && url.pathname.startsWith("/app/live/")) return handleLive(req, env, url);
   if (req.method === "GET" && url.pathname.startsWith("/app/audio/")) return handlePostMedia(req, env, ctx, url, "audio");
   if (req.method === "GET" && url.pathname.startsWith("/app/clip/")) return handlePostMedia(req, env, ctx, url, "clip");
   return null;

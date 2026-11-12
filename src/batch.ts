@@ -2,6 +2,7 @@ import { botApi } from "./botapi";
 import { DESCRIBE_MODELS, MODELS } from "./config";
 import { getMeme, userLang, type Meme } from "./db";
 import type { Env } from "./env";
+import { push } from "./live";
 import { esc, t, usd, type Key } from "./i18n";
 import { describeRequest, isBlocked, parseAnswer, saveDescription, topTags, userTier } from "./ingest/describe";
 import { hasExt, memeMedia, signedMediaUrl } from "./media";
@@ -36,6 +37,7 @@ type Status = Pick<Import, "user_id" | "status_msg_id">;
 
 /** Progress: edits the import's status message from /batch_finish. */
 async function progress(env: Env, imp: Status, key: Key, params: Record<string, string | number> = {}) {
+  await push(env, imp.user_id, { t: "job", kind: "batch" });
   const text = t(await userLang(env.DB, imp.user_id), key, params);
   const api = botApi(env.BOT_TOKEN);
   const html = { parse_mode: "HTML" } as const;
@@ -45,6 +47,7 @@ async function progress(env: Env, imp: Status, key: Key, params: Record<string, 
 
 /** Completion: a new message (so the user gets a notification), as a reply to the status message. */
 async function notify(env: Env, imp: Status, key: Key, params: Record<string, string | number> = {}) {
+  await push(env, imp.user_id, { t: "job", kind: "batch" });
   const text = t(await userLang(env.DB, imp.user_id), key, params);
   const reply = imp.status_msg_id ? { reply_parameters: { message_id: imp.status_msg_id, allow_sending_without_reply: true } } : {};
   await botApi(env.BOT_TOKEN).sendMessage(imp.user_id, text, { parse_mode: "HTML", ...reply }).catch(console.error);
@@ -354,6 +357,7 @@ async function pollImport(env: Env, imp: Import) {
         await db.prepare(`UPDATE memes SET status = 'failed', error = ?, updated_at = unixepoch() WHERE id IN (${ids.map(() => "?").join(",")})`)
           .bind(`batch: ${reason}`.slice(0, 1000), ...ids)
           .run();
+        for (const id of ids) await push(env, imp.user_id, { t: "meme", id, status: "failed" });
       }
     }
     const status = (described || blocked.length) && fallback ? "done" : "failed";

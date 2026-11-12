@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBot } from "../src/bot";
-import { connectE621, e621Status, e621Sync, queueE621, setE621Lists, setE621Pools } from "../src/e621";
+import { connectE621, disconnectE621, e621Status, e621Sync, queueE621, setE621Lists, setE621Pools } from "../src/e621";
 import type { Env } from "../src/env";
 import { saveDescription, toDescription } from "../src/ingest/describe";
 import { galleryJob, gallerySource, startGallery } from "../src/ingest/gallery";
@@ -29,7 +29,7 @@ const post = (id: number, o: Partial<Post> = {}) =>
 const mp4 = (id: number) => post(id, { file: { ext: "webm", size: 99 << 20, url: `${S}/${id}.webm` }, sample: { url: null, alternates: { samples: { "720p": { url: `${S}/${id}_720p.mp4`, size: 5 << 20 } } } } as any });
 
 /** A fake e621 behind a fake scraper: lists (by page), posts and pools; every image has its own bytes. */
-function mockSite(o: { fav?: Post[][]; vote?: Post[][]; posts?: Post[]; pools?: Record<number, { category: string; post_ids: number[] }>; auth?: number } = {}) {
+function mockSite(o: { fav?: Post[][]; vote?: Post[][]; posts?: Post[]; pools?: Record<number, { category: string; post_ids: number[] }>; auth?: number; favCount?: number } = {}) {
   const seen: { url: string; headers: Record<string, string> }[] = [];
   const site = async (href: string, headers: HeadersInit = {}) => {
     const url = new URL(href);
@@ -37,6 +37,7 @@ function mockSite(o: { fav?: Post[][]; vote?: Post[][]; posts?: Post[]; pools?: 
     if (url.host === "static1.e621.net") return new Response(`IMG ${url.href}`, { headers: { "Content-Type": url.pathname.endsWith(".mp4") ? "video/mp4" : "image/jpeg" } });
     if (o.auth && !seen.at(-1)!.headers.authorization) return new Response("", { status: o.auth });
     const q = url.searchParams;
+    if (url.pathname.startsWith("/users/") && o.favCount !== undefined) return Response.json({ favorite_count: o.favCount });
     if (url.pathname === "/favorites.json") return Response.json({ posts: (o.fav ?? [])[Number(q.get("page") ?? 1) - 1] ?? [] });
     if (url.pathname === "/posts.json" && q.get("tags")!.startsWith("votedup:")) {
       const pages = o.vote ?? [];
@@ -91,6 +92,20 @@ const memes = (id: number) =>
     .bind(id)
     .all<{ kind: string; source: string; source_meta: string; porn: number; status: string; position: number | null }>()
     .then((r) => r.results);
+
+describe("e621 progress", () => {
+  it("shows the favorites of a full scan by pages", async () => {
+    await user(390);
+    mockSite({ fav: [[post(3901)], []], favCount: 500 });
+    await connectE621(c, 390, "ann", "KEY");
+    expect(await e621Status(c.DB, 390)).toMatchObject({ fav: null }); // the total comes with the first step
+    await e621Sync(c, jobs.shift()); // page 1 is handled
+    expect(await e621Status(c.DB, 390)).toMatchObject({ backfill_done: false, fav: { done: 320, total: 500 } });
+    await drain();
+    expect(await e621Status(c.DB, 390)).toMatchObject({ backfill_done: true, fav: { done: 500, total: 500 } });
+    await disconnectE621(c.DB, 390); // the cron of the next tests must not sync it
+  });
+});
 
 describe("e621 links", () => {
   it("go to the scraper with the user's account and the size limits", async () => {

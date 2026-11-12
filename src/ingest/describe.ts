@@ -3,6 +3,7 @@ import { DEFAULT_TIER, DESCRIBE_FALLBACKS, DESCRIBE_MODELS, DESCRIBE_UNCENSORED,
 import { getMeme, getUser, setStatus, userLang, type Meme } from "../db";
 import { ALBUM_WAIT, albumMemes, albumPhotos, queuePosts } from "../channels";
 import type { Env } from "../env";
+import { push } from "../live";
 import { esc, t, type Lang } from "../i18n";
 import { memeMedia, toDataUrl, variantOf } from "../media";
 import { chat, embed, errorNote, type Part } from "../openrouter";
@@ -355,6 +356,7 @@ export async function finishStage(env: Env, memeId: string, gen = 0) {
   const d = fromRow(m);
   await embedText(env, m);
   if (!(await setStatus(env.DB, memeId, "ready", null, gen)).meta.changes) return; // an edit restarted it
+  await push(env, m.user_id, { t: "meme", id: memeId, status: "ready", title: m.title });
 
   const tags = d.tags.slice(0, 8).map((x) => "#" + esc(x.replace(/[^\p{L}\p{N}_]+/gu, "_"))).join(" ");
   const lang = await userLang(env.DB, m.user_id);
@@ -410,6 +412,7 @@ export async function editStatus(env: Env, m: Meme, text: string, state: object 
 export async function failIngest(env: Env, memeId: string, error: unknown, gen = 0) {
   const m = await getMeme(env.DB, memeId);
   if (!m || !(await setStatus(env.DB, memeId, "failed", String(error).slice(0, 1000), gen)).meta.changes) return; // an edit restarted it
+  await push(env, m.user_id, { t: "meme", id: memeId, status: "failed" });
   await editStatus(env, m, t(await userLang(env.DB, m.user_id), "index_failed", { error: errorNote(error) }), { s: "f", e: errorNote(error) });
   await queuePosts(env, memeId); // the media is fine: post it anyway
 }

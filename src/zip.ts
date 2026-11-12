@@ -2,6 +2,7 @@ import { botApi } from "./botapi";
 import { EMBED_DIMS } from "./config";
 import { storageFull, userLang, type Kind } from "./db";
 import type { Env } from "./env";
+import { push } from "./live";
 import { t, type Key, type Lang } from "./i18n";
 import type { SourceMeta } from "./ingest/describe";
 import { namespace, upsertVectors } from "./ingest/embed";
@@ -131,6 +132,7 @@ async function progressWidget(env: Env, zip: ZipImport, lang: Lang, format: stri
 
 /** Updates the progress at most once per 8 s (Telegram limits message edits): the widget, or the text when it is refused; web imports have none. */
 async function progress(env: Env, zip: ZipImport, p: { found: number; total: number; skipped: number; done: number }) {
+  await push(env, zip.user_id, { t: "job", kind: "zip" });
   if (!zip.status_msg_id) return;
   const due = await env.DB.prepare(
     "UPDATE zip_imports SET edited_at = unixepoch() WHERE id = ? AND (edited_at IS NULL OR edited_at <= unixepoch() - 8) RETURNING id",
@@ -182,6 +184,7 @@ export async function failZip(env: Env, id: string, error: string) {
     .bind(error.slice(0, 1000), id)
     .first<ZipImport>();
   if (!zip) return;
+  await push(env, zip.user_id, { t: "job", kind: "zip" });
   await env.MEDIA.delete(zipKey(id));
   await say(env, zip, "zip_failed", { error: error.slice(0, 300).replace(/[<>&]/g, "") }, false);
   await submitZipPhotos(env, zip); // photos saved before the failure still get described
@@ -329,6 +332,7 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
 
   if (action === "done") {
     await db.prepare("UPDATE zip_imports SET status = 'done', updated_at = unixepoch() WHERE id = ?").bind(id).run();
+    await push(env, zip.user_id, { t: "job", kind: "zip" });
     await env.MEDIA.delete(zipKey(id));
     if (zip.widget_msg_id) {
       const state = progressState((zip.total ?? 0) + zip.skipped, zip.total ?? 0, zip.skipped, zip.imported, 1);

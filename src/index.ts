@@ -27,6 +27,7 @@ export { ZipImporter } from "./zip";
 export { DataExporter } from "./export";
 export { Thumbnailer } from "./thumb";
 export { Analyzer } from "./analysis";
+export { Live } from "./live";
 
 let handler: ((req: Request) => Promise<Response>) | undefined;
 let synced: Promise<unknown> | undefined;

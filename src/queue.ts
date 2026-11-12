@@ -1,5 +1,6 @@
 import { MAX_BUSY_ATTEMPTS, MAX_JOB_ATTEMPTS } from "./config";
 import type { Env } from "./env";
+import { push } from "./live";
 import type { Lang } from "./i18n";
 import { failImport, pollImports, submitImport } from "./batch";
 import { describeStage, failIngest, finishStage } from "./ingest/describe";
@@ -70,7 +71,8 @@ async function run(env: Env, job: Job) {
     case "gallery":
       return galleryJob(env, job.importId, job.from);
     case "e621_sync":
-      return e621Sync(env, job);
+      await e621Sync(env, job);
+      return push(env, job.userId, { t: "job", kind: "e621" }); // the progress in the web app
     case "thumb":
       return thumbStage(env, job.memeId);
     case "source_meta":

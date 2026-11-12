@@ -5,6 +5,7 @@
   import { fileSize, fill, s, usd } from "./strings";
   import { confirm, openExternal, tg } from "./telegram";
   import { addFiles } from "./uploads.svelte";
+  import { onLive } from "./live";
   import Billing from "./Billing.svelte";
   import Channels from "./Channels.svelte";
   import Connections from "./Connections.svelte";
@@ -50,11 +51,14 @@
     if (tab === "settings") api.accountSummary().then((v) => (summary = v), () => {});
   });
 
-  // Export progress while the Settings tab is open.
+  // Export and batch status by server push (live.ts) while their tab is open.
   $effect(() => {
-    if (!open || tab !== "settings") return;
-    const timer = setInterval(() => exp?.status === "running" && api.exportStatus().then((v) => (exp = v), () => {}), 10_000);
-    return () => clearInterval(timer);
+    if (!open || (tab !== "settings" && tab !== "batch")) return;
+    return onLive((e) => {
+      const kind = e.t === "reconnect" ? null : e.t === "job" ? e.kind : "-";
+      if (tab === "settings" && (kind === null || kind === "export")) api.exportStatus().then((v) => (exp = v), () => {});
+      if (tab === "batch" && (kind === null || kind === "batch")) api.batch().then((v) => (batch = v), () => {});
+    });
   });
   const DELETE_CONFIRM = "DELETE"; // same phrase as the bot's /delete_all
   let summary = $state<{ memes: number; payments: number } | null>(null);
@@ -67,7 +71,7 @@
   }
   const exportBlocked = $derived(!!exp?.next_at && exp.next_at > Date.now() / 1000);
 
-  // Live batch progress while the Batch tab is open and something is running.
+  // Provider counters (not in the DB, so no push) while the Batch tab is open and something is running.
   const running = (r: ImportRow) => ["submitting", "submitted", "processing"].includes(r.status) || r.pending > 0;
   $effect(() => {
     if (!open || tab !== "batch") return;

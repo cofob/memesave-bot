@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { Alert, Button, Heading, Inline, Select, Stack, Switch, Text, TextField } from "@cofob2/design-system-svelte";
+  import { Alert, Button, Heading, Inline, Progress, Select, Stack, Switch, Text, TextField } from "@cofob2/design-system-svelte";
+  import { onDestroy } from "svelte";
   import { api, ApiError, type ApiToken, type Connection, type E621Lists, type E621Status } from "./api";
   import { fill, s } from "./strings";
+  import { onLive } from "./live";
 
   let items = $state<Connection[]>([]);
   let mcpUrl = $state("");
@@ -34,6 +36,7 @@
   let e621Msg = $state("");
   const loadE621 = async () => (e621 = await api.e621());
   loadE621().catch(() => {});
+  onDestroy(onLive((e) => void ((e.t === "reconnect" || (e.t === "job" && e.kind === "e621")) && loadE621().catch(() => {})))); // each sync step
   const connectE621 = async () => {
     e621Msg = "";
     try {
@@ -93,6 +96,9 @@
 <Text tone="muted" size="sm">{s.e621Hint}</Text>
 {#if e621.connected}
   <Text size="sm">{fill(e621.backfill_done ? s.e621Synced : s.e621Importing, { user: e621.username ?? "", n: String(e621.imported ?? 0) })}</Text>
+  {#if !e621.backfill_done && e621.fav}
+    <Progress value={Math.round((100 * e621.fav.done) / e621.fav.total)} label={fill(s.e621FavProgress, e621.fav)} animated showValue />
+  {/if}
   {#if e621.error}<Alert tone="danger" title={e621Error[e621.error] ?? e621.error} />{/if}
   {#if e621.last_sync}<Text tone="muted" size="sm">{fill(s.e621Last, { date: new Date(e621.last_sync * 1000).toLocaleString() })}</Text>{/if}
   <Select
