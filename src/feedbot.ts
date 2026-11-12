@@ -1,7 +1,7 @@
 import { GrammyError, type Api, type Composer } from "grammy";
 import type { InlineKeyboardMarkup } from "grammy/types";
 import type { Ctx } from "./bot";
-import { albumSizes } from "./db";
+import { albumSizes, type User } from "./db";
 import type { Env } from "./env";
 import { FEED_MODES, feedMode, feedPage, markSeen, startSeed, type FeedMeme, type FeedMode } from "./feed";
 import { editMeme, sendMeme } from "./search/deliver";
@@ -38,10 +38,10 @@ export function feedCaption(lang: Lang, m: FeedMeme, offset: number, album?: num
 }
 
 /** Shows the feed meme at `offset`: a new message, or the media of `messageId` replaced. False when there is none. */
-export async function showFeed(env: Env, api: Api, chatId: number, userId: number, lang: Lang, mode: FeedMode, seed: number, offset: number, messageId?: number) {
+export async function showFeed(env: Env, api: Api, chatId: number, user: Pick<User, "id" | "hide_porn">, lang: Lang, mode: FeedMode, seed: number, offset: number, messageId?: number) {
   // Below 0 only the "time" mode has memes: the newer ones, nearest first.
   const at = async (i: number) =>
-    i >= 0 || mode === "time" ? (await feedPage(env.DB, userId, { mode, seed, offset: i < 0 ? -i - 1 : i, limit: 1, newer: i < 0 })).memes[0] : undefined;
+    i >= 0 || mode === "time" ? (await feedPage(env.DB, user.id, { mode, seed, offset: i < 0 ? -i - 1 : i, limit: 1, newer: i < 0, hidePorn: !!user.hide_porn })).memes[0] : undefined;
   const m = await at(offset);
   if (!m) return false;
   const [more, back] = [!!(await at(offset + 1)), offset > 0 || !!(await at(offset - 1))];
@@ -55,19 +55,19 @@ export async function showFeed(env: Env, api: Api, chatId: number, userId: numbe
   } catch (e) {
     if (!(e instanceof GrammyError && e.description.includes("not modified"))) throw e; // the same meme tapped again
   }
-  await markSeen(env.DB, userId, [m.id]);
+  await markSeen(env.DB, user.id, [m.id]);
   return true;
 }
 
 export function registerFeed<C extends Ctx>(bot: Composer<C>, env: Env) {
   bot.command("feed", async (ctx) => {
     const mode = feedMode(ctx.match.trim()) ?? "new";
-    if (!(await showFeed(env, ctx.api, ctx.chat.id, ctx.user.id, ctx.lang, mode, startSeed(mode), 0))) await ctx.reply(t(ctx.lang, "feed_empty"));
+    if (!(await showFeed(env, ctx.api, ctx.chat.id, ctx.user, ctx.lang, mode, startSeed(mode), 0))) await ctx.reply(t(ctx.lang, "feed_empty"));
   });
   bot.callbackQuery(/^f:([norfgtu]):([0-9a-z]+):(-?\d+)$/, async (ctx) => {
     const [, code, seed, offset] = ctx.match;
     const msg = ctx.callbackQuery.message;
-    const shown = !!msg && (await showFeed(env, ctx.api, msg.chat.id, ctx.user.id, ctx.lang, BY_CODE[code], parseInt(seed, 36), Number(offset), msg.message_id));
+    const shown = !!msg && (await showFeed(env, ctx.api, msg.chat.id, ctx.user, ctx.lang, BY_CODE[code], parseInt(seed, 36), Number(offset), msg.message_id));
     await ctx.answerCallbackQuery(shown ? undefined : t(ctx.lang, "feed_end"));
   });
 }

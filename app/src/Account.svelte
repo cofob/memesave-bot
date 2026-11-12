@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Alert, Button, Drawer, Heading, Inline, Progress, Select, Spinner, Stack, Tabs, Text, TextField } from "@cofob2/design-system-svelte";
+  import { Alert, Button, Drawer, Heading, Inline, Progress, Select, Spinner, Stack, Switch, Tabs, Text, TextField } from "@cofob2/design-system-svelte";
   import { Archive } from "@lucide/svelte";
   import { api, type AllStats, type ExportStatus, type ImportRow, type Me, type Stats, type UsersList } from "./api";
   import { fileSize, fill, s, usd } from "./strings";
@@ -179,6 +179,12 @@
                 const tier = (e.currentTarget as HTMLSelectElement).value as Me["describe_tier"];
                 act(() => api.setSettings({ describe_tier: tier }), s.stateReady).then(() => onMeChange({ ...me, describe_tier: tier }));
               }}
+            />
+            <Switch
+              label={s.hidePorn}
+              description={s.hidePornHint}
+              checked={me.hide_porn}
+              onCheckedChange={(hide) => act(() => api.setSettings({ hide_porn: hide }), s.stateReady).then(() => onMeChange({ ...me, hide_porn: hide }))}
             />
             <Channels />
             <Connections />

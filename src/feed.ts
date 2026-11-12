@@ -7,7 +7,7 @@ export type FeedMode = (typeof FEED_MODES)[number];
  * first seen after it stay, so the offsets of the session do not shift; for "time", the point in time the feed starts at.
  * newer: the "time" mode only: the memes after that point, oldest first (the feed above it); else the ones at or before it.
  */
-export interface FeedQuery { mode: FeedMode; seed: number; offset: number; limit: number; newer?: boolean }
+export interface FeedQuery { mode: FeedMode; seed: number; offset: number; limit: number; newer?: boolean; hidePorn?: boolean }
 export type FeedMeme = Meme & { uses: number; date: number };
 
 /** When the user saved it at the source (e.g. the TikTok like), else when it came here. */
@@ -52,7 +52,7 @@ export function startSeed(mode: FeedMode) {
 /** One page of the user's feed; an album shows as its first meme. */
 export async function feedPage(db: D1Database, userId: number, q: FeedQuery) {
   const m = mode(q);
-  const where = ["user_id = ?", "status != 'failed'", ALBUM_FIRST, ...(m.where ? [m.where] : [])];
+  const where = ["user_id = ?", "status != 'failed'", ALBUM_FIRST, ...(m.where ? [m.where] : []), ...(q.hidePorn ? ["porn = 0"] : [])];
   const { results } = await db
     .prepare(`SELECT *, ${USES} AS uses, ${DATE} AS date FROM memes WHERE ${where.join(" AND ")} ORDER BY ${m.order} LIMIT ? OFFSET ?`)
     .bind(userId, ...(m.params ?? []), ...(m.orderParams ?? []), q.limit + 1, q.offset)

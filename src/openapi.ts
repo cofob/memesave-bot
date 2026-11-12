@@ -30,6 +30,7 @@ const FILTERS = [
   { name: "lang", in: "query", description: "Language codes of the meme text, comma separated (see /facets).", schema: { type: "string" }, example: "en,ru" },
   { name: "added", in: "query", description: "Added in the last N days.", schema: { type: "number", minimum: 0 } },
   csv("dur", ["short", "medium", "long"], "Video length: under 10 s, 10–60 s, over 60 s."),
+  csv("porn", ["yes", "no"], "Sexual content (the porn flag). Any value overrides the hide_porn setting: yes,no shows all."),
 ];
 
 const schemas = {
@@ -60,7 +61,10 @@ const schemas = {
       duration: nullable("integer", "Seconds; videos and GIFs."),
       language: nullable("string", "Language code of the meme text; 'none' without text."),
       has_text: { type: "boolean", description: "OCR found text on the image." },
-      porn: { type: "boolean", description: "The picture or video frames show sexual content (set by the AI; not from audio). False when not set." },
+      porn: {
+        type: "boolean",
+        description: "The picture or video frames show sexual content (set by the AI; not from audio). False when not set. With the hide_porn setting such memes are left out of lists, search and the feed.",
+      },
       created_at: { type: "integer", description: "Unix time when the meme was saved." },
       album: { type: "integer", description: "Only in /memes without tag or filters: the meme is the first one of an album with this many memes." },
     },

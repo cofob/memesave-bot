@@ -252,6 +252,8 @@ Own OpenRouter key: {own}`,
   tier_title: "Describe quality",
   tier_max: "Max",
   tier_medium: "Medium",
+  porn_shown: "🔞 Porn: shown (tap to hide)",
+  porn_hidden: "🔞 Porn: hidden (tap to show)",
   tier_hint: `${E.settings} <b>Describe quality</b>
 <b>Max</b> — Gemini 4 Argon: best recognition.
 <b>Medium</b> — GPT-6 Luna: about 20× cheaper. Videos always use Gemini Flash.`,
@@ -656,6 +658,8 @@ const ru: Record<Key, string> = {
   tier_title: "Качество описания",
   tier_max: "Максимум",
   tier_medium: "Среднее",
+  porn_shown: "🔞 Порно: показывается (нажмите, чтобы скрыть)",
+  porn_hidden: "🔞 Порно: скрыто (нажмите, чтобы показать)",
   tier_hint: `${E.settings} <b>Качество описания</b>
 <b>Максимум</b> — Gemini 4 Argon: лучшее распознавание.
 <b>Среднее</b> — GPT-6 Luna: примерно в 20 раз дешевле. Видео всегда описывает Gemini Flash.`,

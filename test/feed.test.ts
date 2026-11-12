@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { Api } from "grammy";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { visible } from "../src/db";
 import type { Env } from "../src/env";
 import { feedPage, markSeen, type FeedMode } from "../src/feed";
 import { showFeed } from "../src/feedbot";
@@ -119,9 +120,9 @@ describe("bot feed", () => {
       return Response.json({ ok: true, result: { message_id: 7, date: 0, chat: { id: 98, type: "private" }, photo: [{ file_id: "f", file_unique_id: "u", width: 1, height: 1 }] } });
     });
     const api = new Api("1:test");
-    expect(await showFeed(e, api, 98, 98, "en", "new", 1, 0)).toBe(true);
-    expect(await showFeed(e, api, 98, 98, "en", "new", 1, 1, 7)).toBe(true);
-    expect(await showFeed(e, api, 98, 98, "en", "new", 1, 2, 7)).toBe(false);
+    expect(await showFeed(e, api, 98, { id: 98, hide_porn: 0 }, "en", "new", 1, 0)).toBe(true);
+    expect(await showFeed(e, api, 98, { id: 98, hide_porn: 0 }, "en", "new", 1, 1, 7)).toBe(true);
+    expect(await showFeed(e, api, 98, { id: 98, hide_porn: 0 }, "en", "new", 1, 2, 7)).toBe(false);
     expect(calls.map((c) => c.method)).toEqual(["sendPhoto", "editMessageMedia"]);
     const edit = JSON.parse(calls[1].body);
     expect(edit).toMatchObject({ chat_id: 98, message_id: 7, media: { type: "photo", media: "f", parse_mode: "HTML" } });
@@ -131,11 +132,42 @@ describe("bot feed", () => {
 
     // time mode: ◀ goes to newer memes, above the point (negative offsets)
     calls.length = 0;
-    expect(await showFeed(e, api, 98, 98, "en", "time", now - 2, 0, 7)).toBe(true);
+    expect(await showFeed(e, api, 98, { id: 98, hide_porn: 0 }, "en", "time", now - 2, 0, 7)).toBe(true);
     const time = JSON.parse(calls[0].body).reply_markup.inline_keyboard[0].map((b: { callback_data: string }) => b.callback_data);
     expect(time).toEqual([`f:t:${(now - 2).toString(36)}:-1`]); // b1 is the oldest, b2 is newer
-    expect(await showFeed(e, api, 98, 98, "en", "time", now - 2, -1, 7)).toBe(true);
-    expect(await showFeed(e, api, 98, 98, "en", "time", now - 2, -2, 7)).toBe(false);
+    expect(await showFeed(e, api, 98, { id: 98, hide_porn: 0 }, "en", "time", now - 2, -1, 7)).toBe(true);
+    expect(await showFeed(e, api, 98, { id: 98, hide_porn: 0 }, "en", "time", now - 2, -2, 7)).toBe(false);
     expect(await e.DB.prepare("SELECT COUNT(*) AS n FROM meme_views WHERE user_id = 98").first("n")).toBe(2);
+  });
+});
+
+describe("hide porn setting", () => {
+  it("hides porn memes from the library, index, search results and feed, keeps them saved", async () => {
+    await e.DB.prepare("INSERT INTO users (id, role) VALUES (99, 'user')").run();
+    await add(99, "clean", 2);
+    await add(99, "nsfw", 1);
+    await e.DB.prepare("UPDATE memes SET porn = 1 WHERE id = 'nsfw'").run();
+    const auth = { Authorization: `tma ${await initData(e.BOT_TOKEN, { id: 99, first_name: "A" })}` };
+    const req = async (path: string, init: RequestInit = {}) =>
+      (await handleApp(new Request(`https://m.example/app/api/${path}`, { ...init, headers: { ...auth, "Content-Type": "application/json" } }), e, ctx))!;
+    const listed = async (path: string) => {
+      const body = await (await req(path)).json<any>();
+      return (body.items ?? body).map((m: any) => m.id); // index is a plain array
+    };
+
+    expect(await listed("memes")).toEqual(["nsfw", "clean"]);
+    expect((await (await req("me")).json<any>()).hide_porn).toBe(false);
+    expect((await req("settings", { method: "PUT", body: JSON.stringify({ hide_porn: true }) })).status).toBe(200);
+    expect((await (await req("me")).json<any>()).hide_porn).toBe(true);
+    expect(await listed("memes")).toEqual(["clean"]);
+    expect(await listed("index")).toEqual(["clean"]);
+    expect(await listed("feed?mode=new")).toEqual(["clean"]);
+    // the porn filter overrides the setting
+    expect(await listed("memes?porn=yes")).toEqual(["nsfw"]);
+    expect(await listed("memes?porn=yes,no")).toEqual(["nsfw", "clean"]);
+    expect(await listed("index?porn=yes,no")).toEqual(["nsfw", "clean"]);
+    expect(visible({ hide_porn: 1 }, [{ porn: 1 }, { porn: 0 }], ["yes"])).toEqual([{ porn: 1 }]);
+    expect(visible({ hide_porn: 1 }, [{ porn: 1 }, { porn: 0 }])).toEqual([{ porn: 0 }]);
+    expect(await e.DB.prepare("SELECT COUNT(*) AS n FROM memes WHERE user_id = 99").first("n")).toBe(2); // still saved
   });
 });

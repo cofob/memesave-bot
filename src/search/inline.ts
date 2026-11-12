@@ -1,7 +1,7 @@
 import type { Ctx } from "../bot";
 import { normQuery, sha256hex } from "../cache";
 import { INLINE_CACHE_SECONDS, INLINE_LIMIT } from "../config";
-import { loadMemes, recentMemes, type Meme } from "../db";
+import { loadMemes, recentMemes, visible, type Meme } from "../db";
 import type { Env } from "../env";
 import { tmpKey } from "../media";
 import { toInlineResult } from "./deliver";
@@ -29,7 +29,7 @@ export async function handleInline(ctx: Ctx, env: Env) {
     const [text, start] = gate.reason === "subscribe" ? ["bill_btn_subscribe", "subscribe"] as const : ["bill_btn_topup", "topup"] as const;
     return ctx.answerInlineQuery([], { cache_time: 30, is_personal: true, button: { text: t(ctx.lang, text), start_parameter: start } });
   }
-  const memes = query.length < 2 ? await recentMemes(env.DB, ctx.user.id, INLINE_LIMIT) : await cachedFastSearch(env, ctx.user.id, query);
+  const memes = visible(ctx.user, query.length < 2 ? await recentMemes(env.DB, ctx.user.id, INLINE_LIMIT) : await cachedFastSearch(env, ctx.user.id, query));
   const missing = needUpload(memes);
   if (missing.length) await env.UPLOADS.send({ userId: ctx.user.id, memeIds: missing }).catch(console.warn);
   const results = (await Promise.all(memes.map((m) => toInlineResult(env, m)))).filter((r) => r !== null);

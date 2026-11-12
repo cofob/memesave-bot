@@ -5,7 +5,7 @@ import { z } from "zod";
 import { billingStatus, canUseAi } from "./billing";
 import { botApi } from "./botapi";
 import { MCP_BODY_MAX, MCP_SCOPES } from "./config";
-import { deleteMemes, getMeme, getUser, recordUse, type Meme, type User } from "./db";
+import { deleteMemes, getMeme, getUser, recordUse, visible, type Meme, type User } from "./db";
 import type { Env } from "./env";
 import { filterSql, facets } from "./filters";
 import { memeMedia } from "./media";
@@ -37,6 +37,10 @@ const filters = z
     status: z.array(z.enum(["ready", "processing", "failed"])).optional(),
     orient: z.array(z.enum(["landscape", "portrait", "square"])).optional(),
     text: z.enum(["yes", "no"]).optional().describe("has text in the image (OCR)"),
+    porn: z
+      .array(z.enum(["yes", "no"]))
+      .optional()
+      .describe("sexual content: [\"yes\"] only porn, [\"no\"] none; any value overrides the user's hide porn setting"),
     lang: z.array(z.string()).optional().describe("language codes, see get_filter_counts"),
     added: z.number().positive().optional().describe("added in the last N days"),
     dur: z.array(z.enum(["short", "medium", "long"])).optional().describe("video length: under 10 s, 10-60 s, over 60 s"),
@@ -113,7 +117,7 @@ function buildServer(env: Env, user: User, scopes: string[]) {
       }
       const memes =
         mode === "fts" ? await keywordSearch(env, user.id, query, 60) : mode === "advanced" ? await agentSearch(env, user.id, query) : await cachedFastSearch(env, user.id, query);
-      const found = (await applyFilters(env, user.id, memes, f)).slice(0, limit);
+      const found = (await applyFilters(env, user.id, visible(user, memes, f?.porn), f)).slice(0, limit);
       return ok({ items: await Promise.all(found.map((m) => brief(env, m))) });
     },
   );

@@ -1,4 +1,5 @@
-// Metadata filters for the app list: ?kind=&status=&orient=&text=&lang=&added=&dur= (lists are comma separated).
+// Metadata filters for the app list: ?kind=&status=&orient=&text=&porn=&lang=&added=&dur= (lists are comma separated).
+// porn (any value) also turns off the hide_porn setting for the request.
 // The client applies the same rules to search results (app/src/filters.ts).
 
 const SQL: Record<string, Record<string, string>> = {
@@ -10,10 +11,11 @@ const SQL: Record<string, Record<string, string>> = {
     square: "width BETWEEN height * 0.9 AND height * 1.1",
   },
   text: { yes: "COALESCE(ocr_text, '') != ''", no: "COALESCE(ocr_text, '') = ''" },
+  porn: { yes: "porn = 1", no: "porn = 0" },
   dur: { short: "kind != 'photo' AND duration < 10", medium: "kind != 'photo' AND duration BETWEEN 10 AND 60", long: "kind != 'photo' AND duration > 60" },
 };
 
-const list = (url: URL, key: string) => (url.searchParams.get(key) ?? "").split(",").filter(Boolean);
+export const list = (url: URL, key: string) => (url.searchParams.get(key) ?? "").split(",").filter(Boolean);
 
 /** WHERE parts and their parameters; values inside one group are OR-ed, groups are AND-ed. */
 export function filterSql(url: URL): { where: string[]; params: (string | number)[] } {

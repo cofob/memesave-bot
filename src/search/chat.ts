@@ -1,6 +1,6 @@
 import { botApi } from "../botapi";
 import { CHAT_LIMIT } from "../config";
-import { getUser } from "../db";
+import { getUser, visible } from "../db";
 import type { Env } from "../env";
 import { t } from "../i18n";
 import { errorNote } from "../openrouter";
@@ -15,8 +15,7 @@ export async function searchJob(env: Env, job: SearchJob) {
   if (!user) return;
   const api = botApi(env.BOT_TOKEN);
   await api.sendChatAction(job.userId, "typing").catch(() => {});
-  const memes =
-    user.search_mode === "fast" ? await fastSearch(env, user.id, job.query, CHAT_LIMIT) : await agentSearch(env, user.id, job.query);
+  const memes = visible(user, user.search_mode === "fast" ? await fastSearch(env, user.id, job.query, CHAT_LIMIT) : await agentSearch(env, user.id, job.query));
   await api.deleteMessage(job.userId, job.placeholderId).catch(() => {});
   await sendResults(env, api, job.userId, job.messageId, memes, job.lang);
 }

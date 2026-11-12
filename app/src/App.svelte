@@ -129,7 +129,7 @@
   });
   // The server filters the list; search results are filtered here with the same rules.
   const shown = $derived(
-    !searching ? items : (mode === "quick" ? textItems : (aiItems ?? [])).filter((m) => matches(m, filters)),
+    !searching ? items : (mode === "quick" ? textItems : (aiItems ?? [])).filter((m) => matches(m, filters, me?.hide_porn)),
   );
   const noResults = $derived(
     searching && (mode === "quick" ? serverItems !== null && textItems.length === 0 : !aiLoading && aiItems !== null && aiItems.length === 0),

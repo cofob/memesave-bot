@@ -48,10 +48,14 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
   }
 
   if (resource === "settings" && m === "PUT") {
-    const { search_mode = user.search_mode, describe_tier = user.describe_tier } = await req.json<{ search_mode?: string; describe_tier?: string }>();
+    const body = await req.json<{ search_mode?: string; describe_tier?: string; hide_porn?: boolean }>();
+    const { search_mode = user.search_mode, describe_tier = user.describe_tier, hide_porn = !!user.hide_porn } = body;
     if (search_mode !== "advanced" && search_mode !== "fast") return json({ error: "bad search_mode" }, 400);
     if (describe_tier !== "max" && describe_tier !== "medium") return json({ error: "bad describe_tier" }, 400);
-    await env.DB.prepare("UPDATE users SET search_mode = ?, describe_tier = ? WHERE id = ?").bind(search_mode, describe_tier, user.id).run();
+    if (typeof hide_porn !== "boolean") return json({ error: "bad hide_porn" }, 400);
+    await env.DB.prepare("UPDATE users SET search_mode = ?, describe_tier = ?, hide_porn = ? WHERE id = ?")
+      .bind(search_mode, describe_tier, hide_porn ? 1 : 0, user.id)
+      .run();
     return json({ ok: true });
   }
 

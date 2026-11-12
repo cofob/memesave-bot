@@ -15,6 +15,7 @@ export interface MemeBrief {
   duration: number | null;
   language: string | null;
   has_text: boolean;
+  porn: boolean;
   created_at: number;
   album?: number; // memes in its media group (browsing shows an album as its first meme)
 }
@@ -83,6 +84,7 @@ export interface Me {
   role: "admin" | "user" | "paid";
   search_mode: "advanced" | "fast";
   describe_tier: "max" | "medium";
+  hide_porn: boolean;
   key: boolean;
   models: Record<string, string>;
   billing: Billing;
@@ -337,7 +339,7 @@ export const api = {
   analysis: () => call<{ current: AnalysisRun | null; ready: AnalysisRun | null }>("analysis"),
   analysisStart: (llm: boolean) => post<AnalysisRun>("analysis", { llm }),
   analysisResult: () => call<AnalysisResult>("analysis/result"),
-  setSettings: (settings: Partial<Pick<Me, "search_mode" | "describe_tier">>) => call("settings", { method: "PUT", body: JSON.stringify(settings) }),
+  setSettings: (settings: Partial<Pick<Me, "search_mode" | "describe_tier" | "hide_porn">>) => call("settings", { method: "PUT", body: JSON.stringify(settings) }),
   channels: () => call<{ channels: Channel[]; addUrl: string }>("channels"),
   setChannel: (id: number, body: { enabled?: boolean; caption?: string; storage?: boolean }) => call(`channels/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   removeChannel: (id: number) => call(`channels/${id}`, { method: "DELETE" }),
@@ -374,8 +376,9 @@ export const api = {
   list: (sort: Sort, tag: string | null, offset: number, filters: Record<string, string> = {}) =>
     call<Page>(`memes?${new URLSearchParams({ sort, offset: String(offset), ...(tag ? { tag } : {}), ...filters })}`),
   facets: () => call<{ counts: Record<string, number>; languages: { value: string; count: number }[] }>("facets"),
-  search: (q: string, mode: SearchMode) => call<Page>(`search?${new URLSearchParams({ q, mode })}`),
-  index: () => call<IndexItem[]>("index"),
+  // Search and index return porn memes too: the app hides them by the setting and the filters (matches()).
+  search: (q: string, mode: SearchMode) => call<Page>(`search?${new URLSearchParams({ q, mode, porn: "yes,no" })}`),
+  index: () => call<IndexItem[]>("index?porn=yes,no"),
   tags: () => call<{ tag: string; count: number }[]>("tags"),
   get: (id: string) => call<MemeDetail>(`memes/${id}`),
   /** newer: the "time" mode above its point (seed), oldest first. */

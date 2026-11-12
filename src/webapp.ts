@@ -1,7 +1,7 @@
 import { botApi } from "./botapi";
 import type { User as TgUser } from "grammy/types";
 import { resolveUser } from "./auth";
-import { ALBUM_FIRST, albumSizes, deleteMeme, deleteMemes, getMeme, getUser, recordUse, storageFull, type Kind, type Meme, type User } from "./db";
+import { ALBUM_FIRST, albumSizes, visible, deleteMeme, deleteMemes, getMeme, getUser, recordUse, storageFull, type Kind, type Meme, type User } from "./db";
 import { insertMeme, type AddedVia } from "./ingest/receive";
 import { parseJson, saveDescription, toDescription, type Description } from "./ingest/describe";
 import { collectingImport } from "./batch";
@@ -9,7 +9,7 @@ import { MODELS } from "./config";
 import { handleAccount } from "./webaccount";
 import { addToPost, albumMemes } from "./channels";
 import { billingStatus, canUseAi } from "./billing";
-import { facets, filterSql } from "./filters";
+import { facets, filterSql, list } from "./filters";
 import { feedMode, feedPage, markSeen } from "./feed";
 import { getCookie, readSession } from "./session";
 import { TOKEN_PREFIX, tokenUser } from "./tokens";
@@ -115,6 +115,7 @@ export async function listMemes(env: Env, user: User, url: URL) {
   const where = ["user_id = ?", ...(tag ? ["instr(char(10) || tags || char(10), char(10) || ? || char(10)) > 0"] : []), ...filters.where];
   // Plain browsing shows an album as its first meme; a tag or filters show every matching meme.
   if (where.length === 1) where.push(ALBUM_FIRST);
+  if (user.hide_porn && !list(url, "porn").length) where.push("porn = 0"); // a porn filter overrides the setting
   const { results } = await env.DB.prepare(`SELECT * FROM memes WHERE ${where.join(" AND ")} ORDER BY ${sort ?? "created_at DESC"} LIMIT ? OFFSET ?`)
     .bind(user.id, ...(tag ? [tag] : []), ...filters.params, PAGE + 1, offset)
     .all<Meme>();
@@ -289,6 +290,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
       key: user.openrouter_key !== null,
       models: MODELS,
       describe_tier: user.describe_tier,
+      hide_porn: !!user.hide_porn,
       billing: await billingStatus(env, user),
     });
   }
@@ -331,7 +333,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
     if (!mode) return json({ error: "bad mode" }, 400);
     const n = (k: string) => Math.trunc(Number(url.searchParams.get(k))) || 0;
     const offset = Math.max(0, n("offset"));
-    const { memes, more } = await feedPage(env.DB, user.id, { mode, seed: Math.max(1, n("seed")), offset, limit: FEED_PAGE, newer: url.searchParams.get("newer") === "1" });
+    const { memes, more } = await feedPage(env.DB, user.id, { mode, seed: Math.max(1, n("seed")), offset, limit: FEED_PAGE, newer: url.searchParams.get("newer") === "1", hidePorn: !!user.hide_porn });
     const sizes = await albumSizes(env.DB, memes.map((m) => m.id));
     return json({
       items: await Promise.all(
@@ -370,7 +372,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
           : mode === "advanced"
             ? await agentSearch(env, user.id, q)
             : await cachedFastSearch(env, user.id, q);
-    return json({ items: await Promise.all(memes.map((m) => brief(env, m))), next_offset: null });
+    return json({ items: await Promise.all(visible(user, memes, list(url, "porn")).map((m) => brief(env, m))), next_offset: null });
   }
   if (resource === "index" && req.method === "GET") {
     // Text of all memes for the client-side instant search.
@@ -380,7 +382,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
       .bind(user.id)
       .all<Meme>();
     const items = await Promise.all(
-      results.map(async (m) => ({
+      visible(user, results, list(url, "porn")).map(async (m) => ({
         ...(await brief(env, m)),
         ocr_text: m.ocr_text?.slice(0, 500) ?? "",
         phrases: m.search_phrases ?? "",

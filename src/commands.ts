@@ -36,7 +36,8 @@ function settingsKeyboard(user: User, lang: Lang) {
     callback_data: `tier:${tier}`,
     ...(user.describe_tier === tier ? { icon_custom_emoji_id: EMOJI.done[0] } : {}),
   });
-  return { inline_keyboard: [[button("advanced"), button("fast")], [tier("max"), tier("medium")]] };
+  const porn = { text: t(lang, user.hide_porn ? "porn_hidden" : "porn_shown"), callback_data: `porn:${user.hide_porn ? 0 : 1}` };
+  return { inline_keyboard: [[button("advanced"), button("fast")], [tier("max"), tier("medium")], [porn]] };
 }
 
 async function statsText(env: Env, user: User, lang: Lang) {
@@ -240,5 +241,12 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
     await env.DB.prepare("UPDATE users SET describe_tier = ? WHERE id = ?").bind(tier, ctx.user.id).run();
     await ctx.answerCallbackQuery(t(ctx.lang, "mode_saved"));
     await ctx.editMessageReplyMarkup({ reply_markup: settingsKeyboard({ ...ctx.user, describe_tier: tier }, ctx.lang) }).catch(() => {});
+  });
+
+  bot.callbackQuery(/^porn:([01])$/, async (ctx) => {
+    const hide = Number(ctx.match[1]);
+    await env.DB.prepare("UPDATE users SET hide_porn = ? WHERE id = ?").bind(hide, ctx.user.id).run();
+    await ctx.answerCallbackQuery(t(ctx.lang, "mode_saved"));
+    await ctx.editMessageReplyMarkup({ reply_markup: settingsKeyboard({ ...ctx.user, hide_porn: hide }, ctx.lang) }).catch(() => {});
   });
 }

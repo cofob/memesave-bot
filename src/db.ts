@@ -21,6 +21,7 @@ export interface User {
   balance: number;
   sub_charge_id: string | null;
   sub_state: string | null;
+  hide_porn: number; // 1: memes with the porn flag are hidden from search, the library and the feed
 }
 
 export interface Meme {
@@ -97,6 +98,12 @@ export const recentMemes = async (db: D1Database, userId: number, limit: number)
       .bind(userId, limit)
       .all<Meme>()
   ).results;
+
+/** Search results by the porn filter ("yes", "no"); without it, no porn memes when the user's setting hides them. */
+export function visible<M extends Pick<Meme, "porn">>(user: Pick<User, "hide_porn">, memes: M[], porn: string[] = []) {
+  const allow = porn.length ? porn : user.hide_porn ? ["no"] : ["yes", "no"];
+  return memes.filter((m) => allow.includes(m.porn ? "yes" : "no"));
+}
 
 /** Counts a use of the user's own meme (favorite and forgotten memes in analytics). */
 export const recordUse = (db: D1Database, userId: number, memeId: string, via: "inline" | "share" | "send") =>

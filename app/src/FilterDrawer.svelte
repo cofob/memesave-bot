@@ -22,6 +22,7 @@
     status: ["ready", "processing", "failed"],
     orient: ["landscape", "portrait", "square"],
     text: ["yes", "no"],
+    porn: ["yes", "no"],
     dur: ["short", "medium", "long"],
   };
   const values = (g: Group) => (g === "lang" ? (facets?.languages.map((l) => l.value) ?? []) : options[g]);
