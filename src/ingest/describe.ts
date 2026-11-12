@@ -222,7 +222,10 @@ const fromRow = (m: Meme): Description => ({
 export async function describeStage(env: Env, memeId: string, from = 0, single = false, gen = 0) {
   const m = await getMeme(env.DB, memeId);
   if (!m || m.gen !== gen || m.status !== "describing") return;
-  if (m.title === null) {
+  const edits = m.edits ? JSON.parse(m.edits) : {};
+  // The user set all description fields (an edit before the meme got ready): no AI call.
+  if (m.title === null && DESCRIPTION.every((k) => k in edits)) await saveDescription(env.DB, m, fromRow({ ...m, ...edits })).run();
+  else if (m.title === null) {
     // Photos of a media group are described in one request: wait until the album is complete and embedded.
     const album = m.kind === "photo" && !single ? await albumPhotos(env.DB, memeId) : [];
     if (album.some((a) => a.status === "embedding") || (album.length && Date.now() / 1000 - album[0].album_updated < ALBUM_WAIT)) {

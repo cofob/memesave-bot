@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
-import { failIngest, finishStage, saveDescription, toDescription } from "../src/ingest/describe";
+import { describeStage, failIngest, finishStage, saveDescription, toDescription } from "../src/ingest/describe";
 import { parseEdit } from "../src/ingest/edit";
 import { createToken } from "../src/tokens";
 import { handleApp } from "../src/webapp";
@@ -82,6 +82,15 @@ describe("meme edits", () => {
     // The new run: the AI fills only the fields the user did not edit.
     await saveDescription(e.DB, { id: "ep1", gen: 1 }, d).run();
     expect(await row("ep1")).toMatchObject({ title: "mine", tags: "cat", description: "ai text" });
+
+    // All description fields edited: the describe stage makes no AI call.
+    const full = { title: "t", ocr_text: "", speech_text: "", language: "en", description: "d", meme_context: "", cultural_meaning: "", tags: ["x"], search_phrases: [], porn: false };
+    expect((await patch("ep1", full))!.status).toBe(200);
+    await e.DB.prepare("UPDATE memes SET status = 'describing' WHERE id = 'ep1'").run();
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ data: [{ index: 0, embedding: [1, 0] }], usage: { cost: 0 } }));
+    await describeStage(e, "ep1", 0, false, 2);
+    expect(fetch.mock.calls.every(([u]) => String(u).includes("embeddings"))).toBe(true);
+    expect(await row("ep1")).toMatchObject({ status: "ready", title: "t", tags: "x", description: "d" });
 
     expect((await patch("ep2", { description: "fixed" }))!.status).toBe(200);
     expect(await row("ep2")).toMatchObject({ status: "embedding", gen: 1, title: null, error: null });
