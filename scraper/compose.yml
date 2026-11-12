@@ -1,0 +1,9 @@
+# Deploy like cobalt: TLS and the domain (memereserve-scraper.cfb.wtf) on the host's reverse proxy.
+# .env: API_KEYS, PROXIES, NOCAPTCHA_KEY (see README); HOST_PORT: the local port of the host (8080).
+services:
+  scraper:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports: ["127.0.0.1:${HOST_PORT:-8080}:8080"]
+    shm_size: 1gb # Chromium
