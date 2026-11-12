@@ -18,7 +18,7 @@ type analytics struct {
 		Day string
 		N   float64
 	} `json:"saved"`
-	Heatmap                                              []struct{ Wd, H, N float64 } `json:"heatmap"`
+	Heatmap                                              []heatCell `json:"heatmap"`
 	Kinds, Statuses, Languages, Sizes, Durations, Aspect []count
 	Tags                                                 struct {
 		Top []struct {
@@ -38,6 +38,17 @@ type analytics struct {
 			}
 		} `json:"trend"`
 	} `json:"tags"`
+	Porn *struct {
+		Months []struct {
+			Month   string
+			N, Porn float64
+		} `json:"months"`
+		Heatmap []heatCell `json:"heatmap"`
+		Tags    []struct {
+			Tag   string
+			Count float64
+		} `json:"tags"`
+	} `json:"porn"`
 	Spend struct {
 		Days []struct {
 			Day, Kind string
@@ -242,17 +253,7 @@ func charts(a *analytics, r *result) map[string][]byte {
 		add("saved", func() []byte { return stackedBars(xs, stack(xs, rows), number) })
 	}
 	if a != nil && len(a.Heatmap) > 0 {
-		cells := zeros(7, 24)
-		for _, c := range a.Heatmap {
-			cells[(int(c.Wd)+6)%7][int(c.H)] = c.N // SQLite %w: 0 = Sunday; rows start on Monday
-		}
-		hours := make([]string, 24)
-		for h := range hours {
-			hours[h] = fmt.Sprint(h)
-		}
-		add("heatmap", func() []byte {
-			return heatmapChart(hours, []string{tr("Mon"), tr("Tue"), tr("Wed"), tr("Thu"), tr("Fri"), tr("Sat"), tr("Sun")}, cells)
-		})
+		add("heatmap", func() []byte { return weekHeat(a.Heatmap) })
 	}
 	if a != nil {
 		for name, cs := range map[string][]count{"kinds": a.Kinds, "statuses": a.Statuses, "languages": a.Languages} {
@@ -285,6 +286,26 @@ func charts(a *analytics, r *result) map[string][]byte {
 				items = append(items, kv{"#" + t.Tag, t.Count})
 			}
 			add("top_tags", func() []byte { return hbars(items, number) })
+		}
+		if p := a.Porn; p != nil {
+			if len(p.Months) > 1 {
+				var xs []string
+				var share []float64
+				for _, m := range p.Months {
+					xs, share = append(xs, m.Month), append(share, m.Porn/math.Max(1, m.N))
+				}
+				add("porn_share", func() []byte { return lineChart(xs, []series{{"", share, palette[0]}}, percent) })
+			}
+			if len(p.Heatmap) > 0 {
+				add("porn_heatmap", func() []byte { return weekHeat(p.Heatmap) })
+			}
+			if len(p.Tags) > 0 {
+				var items []kv
+				for _, t := range p.Tags[:min(20, len(p.Tags))] {
+					items = append(items, kv{"#" + t.Tag, t.Count})
+				}
+				add("porn_tags", func() []byte { return hbars(items, number) })
+			}
 		}
 		if len(a.Tags.Cooc.Tags) > 1 {
 			n := min(16, len(a.Tags.Cooc.Tags)) // readable labels
@@ -543,6 +564,22 @@ func addChart(out map[string][]byte, name string, f func() []byte) {
 }
 
 var originOrder = []string{"channel", "group", "user", "link", "direct"}
+
+// heatCell is a (weekday, hour) count of the heatmap rows.
+type heatCell = struct{ Wd, H, N float64 }
+
+// weekHeat draws the weekday x hour heatmap.
+func weekHeat(rows []heatCell) []byte {
+	cells := zeros(7, 24)
+	for _, c := range rows {
+		cells[(int(c.Wd)+6)%7][int(c.H)] = c.N // SQLite %w: 0 = Sunday; rows start on Monday
+	}
+	hours := make([]string, 24)
+	for h := range hours {
+		hours[h] = fmt.Sprint(h)
+	}
+	return heatmapChart(hours, []string{tr("Mon"), tr("Tue"), tr("Wed"), tr("Thu"), tr("Fri"), tr("Sat"), tr("Sun")}, cells)
+}
 
 func percent(v float64) string { return fmt.Sprintf("%.0f%%", v*100) }
 

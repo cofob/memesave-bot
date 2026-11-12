@@ -64,6 +64,12 @@ type pairAnalytics struct {
 	Lang        string
 	Me, Partner pairSide
 	Shared      struct{ HourSim float64 }
+	Porn        *struct {
+		Tags []struct {
+			Tag         string
+			Me, Partner float64
+		}
+	}
 }
 
 type pairSide struct {
@@ -602,6 +608,17 @@ func pairCharts(a *pairAnalytics, r *pairResult) map[string][]byte {
 			}
 			return vstack(lineChart(months, []series{{"", sim, palette[2]}}, percent), bars)
 		})
+	}
+	if a.Porn != nil && len(a.Porn.Tags) > 0 {
+		tags := slices.Clone(a.Porn.Tags)
+		sort.SliceStable(tags, func(i, j int) bool { return tags[i].Me+tags[i].Partner > tags[j].Me+tags[j].Partner })
+		var xs []string
+		ss := []series{{names[0], nil, palette[0]}, {names[1], nil, palette[1]}}
+		for _, t := range tags[:min(10, len(tags))] {
+			xs = append(xs, "#"+t.Tag)
+			ss[0].values, ss[1].values = append(ss[0].values, t.Me), append(ss[1].values, t.Partner)
+		}
+		addChart(out, "pair_porn_tags", func() []byte { return stackedBars(xs, ss, number) })
 	}
 	var hours []series
 	for o, side := range [2]pairSide{a.Me, a.Partner} {

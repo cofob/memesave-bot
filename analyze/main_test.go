@@ -104,6 +104,7 @@ const sampleAnalytics = `{
  "timeline": [{"day":"2026-10-01","kind":"photo","n":5},{"day":"2026-10-03","kind":"video","n":2},{"day":"2026-10-04","kind":"photo","n":9}],
  "saved": [{"day":"2026-09-01","n":3}],
  "heatmap": [{"wd":0,"h":13,"n":4},{"wd":3,"h":22,"n":9}],
+ "porn": {"months": [{"month":"2026-09","n":10,"porn":2},{"month":"2026-10","n":8,"porn":4}], "heatmap": [{"wd":6,"h":23,"n":3}], "tags": [{"tag":"cat","count":5}]},
  "kinds": [{"k":"photo","n":14},{"k":"video","n":2}], "statuses": [{"k":"ready","n":16}],
  "languages": [{"k":"ru","n":10},{"k":null,"n":6}], "sources": [], "sizes": [{"k":"<1M","n":10}],
  "durations": [{"k":"<15s","n":2}], "aspect": [{"k":"square","n":12}],
@@ -146,7 +147,7 @@ func TestCharts(t *testing.T) {
 		t.Fatal(err)
 	}
 	images := charts(&a, back)
-	for _, name := range []string{"per_day", "total", "saved", "heatmap", "kinds", "languages", "top_tags", "cooc", "trend", "spend_day", "spend_models", "tokens", "albums", "map_text", "map_image", "tag_map", "similarity", "alignment", "origin_kinds", "top_sources", "origins_month", "uses_day", "interest_trend", "added_via", "added_month", "spend_keys", "pca", "kinds", "statuses", "sizes", "durations", "aspect", "tags_per_meme", "spend_total", "cost_per_meme", "moods", "mood_months"} {
+	for _, name := range []string{"per_day", "total", "saved", "heatmap", "kinds", "languages", "top_tags", "cooc", "trend", "spend_day", "spend_models", "tokens", "albums", "map_text", "map_image", "tag_map", "similarity", "alignment", "origin_kinds", "top_sources", "origins_month", "uses_day", "interest_trend", "added_via", "added_month", "spend_keys", "pca", "kinds", "statuses", "sizes", "durations", "aspect", "tags_per_meme", "spend_total", "cost_per_meme", "moods", "mood_months", "porn_share", "porn_heatmap", "porn_tags"} {
 		img, err := png.Decode(bytes.NewReader(images[name]))
 		if err != nil || img.Bounds().Dx() != width*scale {
 			t.Errorf("%s: %v", name, err)
@@ -243,8 +244,12 @@ func TestPair(t *testing.T) {
 	if r.Scores.Compat <= disjoint.Scores.Compat {
 		t.Errorf("compat: overlapping %+v, disjoint %+v", r.Scores, disjoint.Scores)
 	}
-	images := pairCharts(&pairAnalytics{Lang: "ru", Me: pairSide{Name: "Аня", Heatmap: []struct{ H, N float64 }{{9, 3}, {22, 5}}}}, r)
-	for _, name := range []string{"pair_map", "pair_clusters", "pair_moods", "pair_hours"} {
+	pa := &pairAnalytics{Lang: "ru", Me: pairSide{Name: "Аня", Heatmap: []struct{ H, N float64 }{{9, 3}, {22, 5}}}}
+	if err := json.Unmarshal([]byte(`{"porn": {"tags": [{"tag":"cat","me":3,"partner":1},{"tag":"dog","me":0,"partner":2}]}}`), pa); err != nil {
+		t.Fatal(err)
+	}
+	images := pairCharts(pa, r)
+	for _, name := range []string{"pair_map", "pair_clusters", "pair_moods", "pair_hours", "pair_porn_tags"} {
 		img, err := png.Decode(bytes.NewReader(images[name]))
 		if err != nil || img.Bounds().Dx() != width*scale {
 			t.Errorf("%s: %v", name, err)
