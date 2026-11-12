@@ -108,7 +108,9 @@ async function feedItems(env: Env, memes: FeedMeme[]) {
   );
 }
 
-export async function detail(env: Env, m: Meme) {
+export async function detail(env: Env, row: Meme) {
+  // Edits of an unfinished meme wait in `edits` until the AI step: show them already.
+  const m: Meme = row.status !== "ready" && row.edits ? { ...row, ...JSON.parse(row.edits) } : row;
   const album = await albumMemes(env.DB, m.id);
   return {
     ...(await brief(env, m)),
@@ -287,7 +289,7 @@ export async function saveUpload(env: Env, user: User, file: File, meta: UploadM
   });
   if (!id) return fail("already saved", 409);
   if (!importId || meta.post) await addToPost(env.DB, user.id, { memeId: id, ...meta.post });
-  if (meta.description) await saveDescription(env.DB, id, meta.description, "embedding").run();
+  if (meta.description) await saveDescription(env.DB, { id, gen: 0 }, meta.description, "embedding").run();
   await env.JOBS.send({ type: "embed", memeId: id });
   return { id, duplicate: false, batched: importId !== null };
 }
@@ -307,7 +309,7 @@ export async function downloadLinks(env: Env, userId: number, ids: string[]) {
 export async function retryMeme(env: Env, meme: Meme) {
   if (meme.status !== "failed") return false;
   await env.DB.prepare("UPDATE memes SET status = 'embedding', error = NULL, updated_at = unixepoch() WHERE id = ?").bind(meme.id).run();
-  await env.JOBS.send({ type: "embed", memeId: meme.id });
+  await env.JOBS.send({ type: "embed", memeId: meme.id, gen: meme.gen });
   return true;
 }
 

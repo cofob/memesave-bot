@@ -9,7 +9,7 @@ import { esc, t, type Lang } from "./i18n";
 import type { PairResult } from "./pairfacts";
 import type { Pair } from "./pairs";
 import { pairStats } from "./pairstats";
-import { editSharedWidget, sendSharedWidget, sendWidget, type WidgetQuery } from "./widget";
+import { editSharedWidget, progressApi, sendSharedWidget, sendWidget, type WidgetQuery } from "./widget";
 import { pairPage, pairsListPage, quizPage } from "./widgetpages";
 
 export const statsButton = (env: Env, text: string, id: string): InlineKeyboardButton => ({ text, web_app: { url: `${env.PUBLIC_URL.replace(/\/$/, "")}/?pair=${id}` } });
@@ -51,7 +51,9 @@ export async function updateCard(env: Env, p: Pair, ended = false, pr?: number) 
   if (dt < 1100) await sleep(1100 - dt); // the final state must not be dropped by the rate limit
   const state = pr != null && prev ? prev.state : await cardState(env, p, ended);
   last.set(p.id, { state, at: Date.now() });
-  await editSharedWidget(botApi(env.BOT_TOKEN), p.widget_id, JSON.stringify(pr != null ? { ...state, pr } : state)).catch(console.error);
+  // A progress tick does not wait on a 429 (see progressApi); the final state does.
+  const api = pr != null ? progressApi(env.BOT_TOKEN) : botApi(env.BOT_TOKEN);
+  await editSharedWidget(api, p.widget_id, JSON.stringify(pr != null ? { ...state, pr } : state)).catch(console.error);
 }
 
 const chatData = (p: Pair, userId: number, lang: Lang) => JSON.stringify({ me: userId === p.a ? "a" : "b", l: lang });

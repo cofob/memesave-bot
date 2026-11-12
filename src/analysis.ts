@@ -9,7 +9,7 @@ import { memeVectors } from "./ingest/embed";
 import { failedReport } from "./analysisreport";
 import { JobContainer } from "./job";
 import { updateCard } from "./pairwidget";
-import { showAnalysis } from "./analysiswidget";
+import { analysisDue, showAnalysis, showAnalysisProgress } from "./analysiswidget";
 import { sign, tmpKey, verify } from "./media";
 import { chat } from "./openrouter";
 import { analysisMoods } from "./moods";
@@ -305,11 +305,13 @@ export async function handleAnalysis(req: Request, env: Env): Promise<Response> 
     await env.DB.prepare("UPDATE analyses SET stage = ?, done = ?, total = ?, updated_at = unixepoch() WHERE id = ?")
       .bind(body.stage ?? null, body.done ?? 0, body.total ?? 0, id)
       .run();
-    // The pair card shows the run to both: stages in order, the current one by its done/total.
-    const stage = Math.max(0, PAIR_STAGES.indexOf(body.stage ?? ""));
-    const pct = body.total ? Math.round((100 * Math.min(1, (body.done ?? 0) / body.total))) : 0;
-    if (!p) await showAnalysis(env, a, { s: body.stage, p: pct });
-    if (p) await updateCard(env, p, false, Math.round((100 * (stage + (body.total ? Math.min(1, (body.done ?? 0) / body.total) : 0))) / PAIR_STAGES.length));
+    const r = await analysisDue(env, id);
+    if (r && !p) await showAnalysisProgress(env, a, r);
+    if (r && p) {
+      // The pair card shows the run to both: stages in order, the current one by its done/total.
+      const stage = Math.max(0, PAIR_STAGES.indexOf(r.stage ?? ""));
+      await updateCard(env, p, false, Math.round((100 * (stage + (r.total ? Math.min(1, r.done / r.total) : 0))) / PAIR_STAGES.length));
+    }
     return json({ ok: true });
   }
   if (action === "done" && m === "POST") {

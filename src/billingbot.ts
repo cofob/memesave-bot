@@ -30,7 +30,7 @@ import type { User } from "./db";
 import type { Env } from "./env";
 import { t, type Lang } from "./i18n";
 import { botApi } from "./botapi";
-import { editWidget, sendWidget } from "./widget";
+import { editWidget, progressApi, sendWidget } from "./widget";
 import { balancePage } from "./widgetpages";
 import { subscribePage } from "./subscribewidget";
 
@@ -132,15 +132,17 @@ async function sendBalanceWidget(env: Env, api: Api, u: User, lang: Lang, reply_
   return !!sent;
 }
 
-/** Silently updates the user's last /balance widget: at most every 10 s, unless forced (payments, plan changes). */
+/** Silently updates the user's last /balance widget: at most every 15 s, unless forced (payments, plan changes). */
 export async function pushBalance(env: Env, userId: number, force = false) {
   const u = await env.DB.prepare(
-    "UPDATE users SET balance_at = unixepoch() WHERE id = ?1 AND balance_msg_id IS NOT NULL AND (?2 OR balance_at IS NULL OR balance_at <= unixepoch() - 10) RETURNING *",
+    "UPDATE users SET balance_at = unixepoch() WHERE id = ?1 AND balance_msg_id IS NOT NULL AND (?2 OR balance_at IS NULL OR balance_at <= unixepoch() - 15) RETURNING *",
   )
     .bind(userId, force ? 1 : 0)
     .first<User & { balance_msg_id: number }>();
   if (!u) return;
-  await editWidget(botApi(env.BOT_TOKEN), u.id, u.balance_msg_id, await balanceState(env, u, langOfUser(u))).catch(async (e) => {
+  // Spend updates come from parallel queue jobs: they do not wait on a 429 (see progressApi); payments do.
+  const api = force ? botApi(env.BOT_TOKEN) : progressApi(env.BOT_TOKEN);
+  await editWidget(api, u.id, u.balance_msg_id, await balanceState(env, u, langOfUser(u))).catch(async (e) => {
     console.error("pushBalance", e);
     // The user deleted the message: stop updating it.
     if (String(e).includes("not found")) await env.DB.prepare("UPDATE users SET balance_msg_id = NULL WHERE id = ?").bind(u.id).run();

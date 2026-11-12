@@ -35,10 +35,32 @@ export function parseEdit(raw: unknown): MemeEdit | string {
   return out as MemeEdit;
 }
 
-/** Saves an edit of a ready meme (the AI stage would overwrite others); returns the meme or an error. */
-export async function editMeme(env: Env, m: Meme, edit: MemeEdit): Promise<Meme | string> {
-  if (m.status !== "ready") return "meme is not ready";
+/** Fields the AI writes (saveDescription): before the meme is ready they wait in `edits`. */
+const DESCRIBED = ["title", "ocr_text", "speech_text", "language", "description", "meme_context", "cultural_meaning", "tags", "search_phrases", "porn"];
+
+/**
+ * Saves an edit; returns the meme or an error. An unfinished (or failed) meme leaves its processing run: jobs of the
+ * old run do nothing (gen), and processing starts again, keeping the edited fields.
+ */
+export async function editMeme(env: Env, m: Meme, edit: MemeEdit, tries = 3): Promise<Meme | string> {
   const entries = Object.entries(edit).map(([k, v]) => [k, Array.isArray(v) ? v.join("\n") : typeof v === "boolean" ? Number(v) : v] as const);
+  if (m.status !== "ready") {
+    const direct = entries.filter(([k]) => !DESCRIBED.includes(k));
+    const described = Object.fromEntries(entries.filter(([k]) => DESCRIBED.includes(k)));
+    const row = await env.DB.prepare(
+      `UPDATE memes SET ${direct.map(([k]) => `${k} = ?, `).join("")}edits = json_patch(COALESCE(edits, '{}'), ?), title = NULL, status = 'embedding',
+        error = NULL, import_id = NULL, gen = gen + 1, updated_at = unixepoch() WHERE id = ? AND gen = ? AND status != 'ready' RETURNING *`,
+    )
+      .bind(...direct.map(([, v]) => v), JSON.stringify(described), m.id, m.gen)
+      .first<Meme>();
+    if (row) {
+      await env.JOBS.send({ type: "embed", memeId: m.id, gen: row.gen });
+      return row;
+    }
+    // Another edit, or the meme just got ready: try on the new state.
+    const fresh = await getMeme(env.DB, m.id);
+    return fresh && tries > 1 ? editMeme(env, fresh, edit, tries - 1) : "meme changed, try again";
+  }
   await env.DB.prepare(`UPDATE memes SET ${entries.map(([k]) => `${k} = ?`).join(", ")}, updated_at = unixepoch() WHERE id = ?`)
     .bind(...entries.map(([, v]) => v), m.id)
     .run();

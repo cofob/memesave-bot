@@ -84,7 +84,7 @@ describe("account API (web parity with bot commands)", () => {
     await e.DB.prepare("INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, status) VALUES ('f1', 86, 'photo', 'f', 'u-f1', 'failed')").run();
     expect((await call("POST", "memes/f1/retry")).status).toBe(200);
     expect(await e.DB.prepare("SELECT status FROM memes WHERE id = 'f1'").first<string>("status")).toBe("embedding");
-    expect(jobs).toContainEqual({ type: "embed", memeId: "f1" });
+    expect(jobs).toContainEqual({ type: "embed", memeId: "f1", gen: 0 });
     expect((await call("POST", "memes/f1/retry")).status).toBe(409);
   });
 

@@ -308,7 +308,7 @@
       </Button>
       <Button variant="secondary" onclick={() => (draft = null)} disabled={busy === "edit"}>{s.cancel}</Button>
     {:else}
-    {#if meme?.status === "ready" && own}
+    {#if meme && own}
       <Button variant="secondary" onclick={() => (draft = { ...fieldsOf(meme!), porn: meme!.porn })}>
         {#snippet leading()}<Pencil size={16} aria-hidden="true" />{/snippet}
         {s.edit}

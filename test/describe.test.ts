@@ -75,7 +75,7 @@ describe("album describe", () => {
     await add("al_a", "describing", 1);
     await add("al_b", "embedding", 2);
     await describeStage(e, "al_a");
-    expect(jobs).toEqual([{ body: { type: "describe", memeId: "al_a", from: 0 }, delay: 5 }]);
+    expect(jobs).toEqual([{ body: { type: "describe", memeId: "al_a", gen: 0, from: 0 }, delay: 5 }]);
     jobs.length = 0;
     await env.DB.prepare("UPDATE memes SET status = 'describing' WHERE id = 'al_b'").run();
     await env.DB.prepare("UPDATE posts SET updated_at = updated_at - 60 WHERE media_group_id = 'al1'").run();
@@ -86,7 +86,7 @@ describe("album describe", () => {
   it("describes the photos one by one when the album request fails", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("down", { status: 500 }));
     await describeStage(e, "al_a");
-    expect(jobs.map((j) => j.body)).toEqual(["al_a", "al_b"].map((memeId) => ({ type: "describe", memeId, single: true })));
+    expect(jobs.map((j) => j.body)).toEqual(["al_a", "al_b"].map((memeId) => ({ type: "describe", memeId, gen: 0, single: true })));
   });
   afterEach(() => {
     vi.restoreAllMocks();

@@ -1,5 +1,5 @@
 // HTML widgets (Bot API 10.4): fixed HTML plus state that only the bot writes. https://core.telegram.org/bots/widgets
-import type { Api } from "grammy";
+import { Api } from "grammy";
 import type { User } from "grammy/types";
 import { t, type Key, type Lang } from "./i18n";
 
@@ -51,6 +51,13 @@ const notModified = (e: unknown) => {
 /** A silent edit of the message's state: no "edited" mark, no notification. */
 export const editWidget = (api: Api, chat_id: number, message_id: number, chat_data: string): Promise<unknown> =>
   raw(api).editMessageWidgetData({ chat_id, message_id, chat_data }).catch(notModified);
+
+/**
+ * An Api for in-between progress edits: no retry on a 429. A retry waits up to a minute, so a late edit could land after
+ * newer ones and move the progress back (and the caller's request could time out and come again); the next update
+ * catches up. Final states use the retrying botApi.
+ */
+export const progressApi = (token: string) => new Api(token);
 
 /** At most once per second per shared widget. */
 export const editSharedWidget = (api: Api, widget_id: string, public_data: string): Promise<unknown> =>

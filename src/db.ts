@@ -58,6 +58,8 @@ export interface Meme {
   tg_meta: string | null; // Telegram message JSON without media fields
   saved_at: number | null; // when the user saved it at the source (e.g. the TikTok like)
   share_id: string | null; // public short id of /s/ and /d/ links, set on the first share
+  gen: number; // processing run: jobs of an older run (before an edit restarted it) do nothing
+  edits: string | null; // JSON of description fields the user set before the meme was ready; the AI keeps them
   created_at: number;
 }
 
@@ -77,8 +79,12 @@ export const storageFull = async (db: D1Database, userId: number, size = 0) =>
 export const getMeme = (db: D1Database, id: string) =>
   db.prepare("SELECT * FROM memes WHERE id = ?").bind(id).first<Meme>();
 
-export const setStatus = (db: D1Database, id: string, status: Meme["status"], error: string | null = null) =>
-  db.prepare("UPDATE memes SET status = ?, error = ?, updated_at = unixepoch() WHERE id = ?").bind(status, error, id).run();
+/** With `gen` only a meme of this processing run changes (meta.changes 0: an edit restarted it). */
+export const setStatus = (db: D1Database, id: string, status: Meme["status"], error: string | null = null, gen?: number) =>
+  db
+    .prepare(`UPDATE memes SET status = ?, error = ?, updated_at = unixepoch() WHERE id = ?${gen === undefined ? "" : " AND gen = ?"}`)
+    .bind(status, error, id, ...(gen === undefined ? [] : [gen]))
+    .run();
 
 /** Loads memes by id, keeping the order of `ids`. */
 export async function loadMemes(db: D1Database, ids: string[]): Promise<Meme[]> {

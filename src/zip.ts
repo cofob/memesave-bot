@@ -9,7 +9,7 @@ import { insertMeme } from "./ingest/receive";
 import { fileKey, previewKey, sign, signedQuery, tmpKey, verify, verifyQuery } from "./media";
 import type { Job } from "./queue";
 import { uploadPage } from "./uploadpage";
-import { editWidget, sendWidget } from "./widget";
+import { editWidget, progressApi, sendWidget } from "./widget";
 import { progressPage } from "./widgetpages";
 
 const LINK_TTL = 86400;
@@ -108,7 +108,8 @@ const progressState = (found: number, total: number, skipped: number, done: numb
 /** The progress widget: sent once as a reply to the status message, then edited silently; false when Telegram refuses it. */
 async function progressWidget(env: Env, zip: ZipImport, lang: Lang, format: string, state: string) {
   const api = botApi(env.BOT_TOKEN);
-  if (zip.widget_msg_id) return editWidget(api, zip.user_id, zip.widget_msg_id, state).then(() => true, (e) => (console.error(e), true));
+  // An in-between edit does not wait on a 429 (see progressApi): the next one catches up.
+  if (zip.widget_msg_id) return editWidget(progressApi(env.BOT_TOKEN), zip.user_id, zip.widget_msg_id, state).then(() => true, () => true);
   const sent = await sendWidget(api, {
     chat_id: zip.user_id,
     html: progressPage(lang),
@@ -122,11 +123,11 @@ async function progressWidget(env: Env, zip: ZipImport, lang: Lang, format: stri
   return !!sent;
 }
 
-/** Updates the progress at most once per 5 s (Telegram limits message edits): the widget, or the text when it is refused; web imports have none. */
+/** Updates the progress at most once per 8 s (Telegram limits message edits): the widget, or the text when it is refused; web imports have none. */
 async function progress(env: Env, zip: ZipImport, p: { found: number; total: number; skipped: number; done: number }) {
   if (!zip.status_msg_id) return;
   const due = await env.DB.prepare(
-    "UPDATE zip_imports SET edited_at = unixepoch() WHERE id = ? AND (edited_at IS NULL OR edited_at <= unixepoch() - 5) RETURNING id",
+    "UPDATE zip_imports SET edited_at = unixepoch() WHERE id = ? AND (edited_at IS NULL OR edited_at <= unixepoch() - 8) RETURNING id",
   )
     .bind(zip.id)
     .first();

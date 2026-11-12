@@ -316,7 +316,7 @@ function buildServer(env: Env, user: User, scopes: string[]) {
   server.registerTool(
     "edit_meme",
     {
-      description: "Change fields of a ready meme (the others stay); search uses the new text at once.",
+      description: "Change fields of a meme (the others stay); search uses the new text at once. A meme in processing (or failed) is processed again; the AI keeps the edited fields.",
       inputSchema: z.object({
         id: z.string(),
         title: z.string().min(1).max(120).optional(),

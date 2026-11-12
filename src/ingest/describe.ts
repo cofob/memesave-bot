@@ -174,12 +174,17 @@ const WEB_TOOLS = [
   { type: "openrouter:web_fetch", parameters: { max_uses: 3, max_content_tokens: 20000 } },
 ];
 
-/** Saves description fields (FTS updates by trigger); the meme stays 'describing' until finishStage. */
-export const saveDescription = (db: D1Database, memeId: string, d: Description, status: Meme["status"] = "describing") =>
+const DESCRIPTION = ["title", "ocr_text", "speech_text", "language", "description", "meme_context", "cultural_meaning", "tags", "search_phrases", "porn"];
+
+/**
+ * Saves description fields (FTS updates by trigger) of this processing run; fields the user edited (`edits`) stay.
+ * The meme stays 'describing' until finishStage.
+ */
+export const saveDescription = (db: D1Database, m: Pick<Meme, "id" | "gen">, d: Description, status: Meme["status"] = "describing") =>
   db
     .prepare(
-      `UPDATE memes SET title = ?, ocr_text = ?, speech_text = ?, language = ?, description = ?, meme_context = ?,
-        cultural_meaning = ?, tags = ?, search_phrases = ?, porn = ?, updated_at = unixepoch() WHERE id = ? AND status = ?`,
+      `UPDATE memes SET ${DESCRIPTION.map((k) => `${k} = COALESCE(json_extract(edits, '$.${k}'), ?)`).join(", ")},
+        updated_at = unixepoch() WHERE id = ? AND status = ? AND gen = ?`,
     )
     .bind(
       d.title.slice(0, 120),
@@ -192,8 +197,9 @@ export const saveDescription = (db: D1Database, memeId: string, d: Description, 
       d.tags.join("\n"),
       d.search_phrases.join("\n"),
       d.porn ? 1 : 0,
-      memeId,
+      m.id,
       status,
+      m.gen,
     );
 
 const fromRow = (m: Meme): Description => ({
@@ -213,14 +219,14 @@ const fromRow = (m: Meme): Description => ({
  * Stage 2: describes the meme with web tools, then finishes it. A retry skips the paid call when the description is saved.
  * When a provider blocks the meme or fails, the next model in describeModels tries it; `from` skips models that already refused.
  */
-export async function describeStage(env: Env, memeId: string, from = 0, single = false) {
+export async function describeStage(env: Env, memeId: string, from = 0, single = false, gen = 0) {
   const m = await getMeme(env.DB, memeId);
-  if (!m || m.status !== "describing") return;
+  if (!m || m.gen !== gen || m.status !== "describing") return;
   if (m.title === null) {
     // Photos of a media group are described in one request: wait until the album is complete and embedded.
     const album = m.kind === "photo" && !single ? await albumPhotos(env.DB, memeId) : [];
     if (album.some((a) => a.status === "embedding") || (album.length && Date.now() / 1000 - album[0].album_updated < ALBUM_WAIT)) {
-      await env.JOBS.send({ type: "describe", memeId, from }, { delaySeconds: ALBUM_WAIT });
+      await env.JOBS.send({ type: "describe", memeId, gen, from }, { delaySeconds: ALBUM_WAIT });
       return;
     }
     const pending = album.filter((a) => a.status === "describing" && a.title === null);
@@ -232,11 +238,11 @@ export async function describeStage(env: Env, memeId: string, from = 0, single =
       if (group.length === 1) throw e;
       // The album request failed: each photo is described alone.
       console.warn("album describe failed, one by one", memeId, String(e).slice(0, 200));
-      await Promise.all(group.map((g) => env.JOBS.send({ type: "describe", memeId: g.id, single: true })));
+      await Promise.all(group.map((g) => env.JOBS.send({ type: "describe", memeId: g.id, gen: g.gen, single: true })));
       return;
     }
   }
-  await finishStage(env, memeId);
+  await finishStage(env, memeId, gen);
 }
 
 /** Describes the memes in one request (the first one is `m`) and saves the descriptions; the others get finish jobs. */
@@ -260,8 +266,8 @@ async function describeGroup(env: Env, m: Meme, group: Meme[], from: number) {
       if (!msg.content?.trim()) throw new Error(`${models[i]}: empty answer`);
       const raw = parseJson(msg.content);
       const ds = group.length > 1 ? toDescriptions(raw, msg.content, group.length) : [toDescription(raw, msg.content)];
-      await env.DB.batch(group.map((g, j) => saveDescription(env.DB, g.id, ds[j])));
-      await Promise.all(group.slice(1).map((g) => env.JOBS.send({ type: "finish", memeId: g.id })));
+      await env.DB.batch(group.map((g, j) => saveDescription(env.DB, g, ds[j])));
+      await Promise.all(group.slice(1).map((g) => env.JOBS.send({ type: "finish", memeId: g.id, gen: g.gen })));
       break;
     } catch (e) {
       if (i + 1 >= models.length || !(isBlocked(e) || isTransient(e))) throw e;
@@ -277,12 +283,12 @@ export async function embedText(env: Env, m: Meme) {
 }
 
 /** Stage 3: embeds the saved description, marks the meme ready and updates the status message. */
-export async function finishStage(env: Env, memeId: string) {
+export async function finishStage(env: Env, memeId: string, gen = 0) {
   const m = await getMeme(env.DB, memeId);
-  if (!m || m.status !== "describing" || m.title === null) return;
+  if (!m || m.gen !== gen || m.status !== "describing" || m.title === null) return;
   const d = fromRow(m);
   await embedText(env, m);
-  await setStatus(env.DB, memeId, "ready");
+  if (!(await setStatus(env.DB, memeId, "ready", null, gen)).meta.changes) return; // an edit restarted it
 
   const tags = d.tags.slice(0, 8).map((x) => "#" + esc(x.replace(/[^\p{L}\p{N}_]+/gu, "_"))).join(" ");
   const lang = await userLang(env.DB, m.user_id);
@@ -327,10 +333,9 @@ export async function editStatus(env: Env, m: Meme, text: string, state: object 
 }
 
 /** Marks a meme as failed after the last retry and tells the user. */
-export async function failIngest(env: Env, memeId: string, error: unknown) {
+export async function failIngest(env: Env, memeId: string, error: unknown, gen = 0) {
   const m = await getMeme(env.DB, memeId);
-  if (!m) return;
-  await setStatus(env.DB, memeId, "failed", String(error).slice(0, 1000));
+  if (!m || !(await setStatus(env.DB, memeId, "failed", String(error).slice(0, 1000), gen)).meta.changes) return; // an edit restarted it
   await editStatus(env, m, t(await userLang(env.DB, m.user_id), "index_failed", { error: errorNote(error) }), { s: "f", e: errorNote(error) });
   await queuePosts(env, memeId); // the media is fine: post it anyway
 }

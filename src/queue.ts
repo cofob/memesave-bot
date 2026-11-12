@@ -16,8 +16,8 @@ import { sendPairReport } from "./pairreport";
 
 export type SearchJob = { type: "search"; userId: number; messageId: number; placeholderId: number; query: string; lang: Lang };
 export type Job =
-  | { type: "embed" | "finish" | "hash" | "rekey" | "thumb"; memeId: string }
-  | { type: "describe"; memeId: string; from?: number; single?: boolean } // from: index in describeModels (1 after a blocked batch request); single: not with its album
+  | { type: "embed" | "finish" | "hash" | "rekey" | "thumb"; memeId: string; gen?: number } // gen: the meme's processing run (0 when not set)
+  | { type: "describe"; memeId: string; gen?: number; from?: number; single?: boolean } // from: index in describeModels (1 after a blocked batch request); single: not with its album
   | { type: "batch_submit"; importId: string }
   | { type: "batch_poll" }
   | { type: "post"; postId: string }
@@ -42,11 +42,11 @@ async function run(env: Env, job: Job) {
     case "post":
       return postJob(env, job.postId);
     case "embed":
-      return embedStage(env, job.memeId);
+      return embedStage(env, job.memeId, job.gen);
     case "describe":
-      return describeStage(env, job.memeId, job.from, job.single);
+      return describeStage(env, job.memeId, job.from, job.single, job.gen);
     case "finish":
-      return finishStage(env, job.memeId);
+      return finishStage(env, job.memeId, job.gen);
     case "hash":
       return hashStage(env, job.memeId);
     case "rekey":
@@ -74,7 +74,7 @@ async function fail(env: Env, job: Job, error: unknown) {
   if (job.type === "thumb") return env.JOBS.send({ type: "embed", memeId: job.memeId }); // goes on without a preview
   if (job.type === "analysis_report" || job.type === "pair_report") return reportFailed(env, job.analysisId, error);
   if (job.type === "purge" || job.type === "post" || job.type === "link") return; // idempotent: the dead letter queue keeps it for a manual re-run
-  return failIngest(env, job.memeId, error);
+  return failIngest(env, job.memeId, error, job.gen);
 }
 
 export async function handleBatch(batch: MessageBatch<Job>, env: Env) {

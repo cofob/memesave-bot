@@ -61,7 +61,7 @@ describe("batch import", () => {
     const id = await e.DB.prepare("SELECT id FROM imports WHERE user_id = 22").first<string>("id");
     await addMeme("c1", 22, id!);
     expect(await cancelImport(e, 22)).toBe(1);
-    expect(sent.at(-1)).toEqual({ type: "describe", memeId: "c1" });
+    expect(sent.at(-1)).toEqual({ type: "describe", memeId: "c1", gen: 0 });
   });
 
   it("submits without tools, then imports completed results", async () => {
@@ -110,7 +110,7 @@ describe("batch import", () => {
     });
     expect(await e.DB.prepare("SELECT title, tags FROM memes WHERE id = 'p1'").first()).toEqual({ title: "Cat", tags: "cat" });
     expect(sent).toEqual([
-      { type: "finish", memeId: "p1" },
+      { type: "finish", memeId: "p1", gen: 0 },
       { type: "batch_submit", importId: "imp" },
     ]);
 
@@ -126,7 +126,7 @@ describe("batch import", () => {
       described: 1,
       cost: 0.03,
     });
-    expect(sent.at(-1)).toEqual({ type: "describe", memeId: "p2" });
+    expect(sent.at(-1)).toEqual({ type: "describe", memeId: "p2", gen: 0 });
     expect(telegram.at(-1)).toBe("sendMessage");
     const tx = await e.DB.prepare("SELECT kind, cost, key_source FROM transactions WHERE user_id = 23").first();
     expect(tx).toEqual({ kind: "describe_batch", cost: 0.01, key_source: "global" });
@@ -172,8 +172,8 @@ describe("batch failures", () => {
     });
     expect(await e.DB.prepare("SELECT import_id FROM memes WHERE id = 'rv'").first<string>("import_id")).toBeNull();
     expect(sent).toEqual([
-      { type: "embed", memeId: "rp" },
-      { type: "embed", memeId: "rv" },
+      { type: "embed", memeId: "rp", gen: 0 },
+      { type: "embed", memeId: "rv", gen: 0 },
       { type: "batch_submit", importId: photo.import_id },
     ]);
   });
@@ -187,7 +187,7 @@ describe("retry edge cases", () => {
     ).run();
     expect(await retryFailed(e, 26, null)).toEqual({ photos: 0, others: 1 });
     expect(await e.DB.prepare("SELECT status, import_id FROM memes WHERE id = 'hd'").first()).toEqual({ status: "embedding", import_id: null });
-    expect(sent).toEqual([{ type: "embed", memeId: "hd" }]);
+    expect(sent).toEqual([{ type: "embed", memeId: "hd", gen: 0 }]);
   });
 
   it("finishes already described memes stuck in a submitted batch", async () => {
@@ -198,7 +198,7 @@ describe("retry edge cases", () => {
     ).run();
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => json({ id: "b7", status: "in_progress" }));
     await pollImports(e);
-    expect(sent).toEqual([{ type: "finish", memeId: "s1" }]);
+    expect(sent).toEqual([{ type: "finish", memeId: "s1", gen: 0 }]);
     expect(await e.DB.prepare("SELECT import_id FROM memes WHERE id = 's1'").first<string>("import_id")).toBeNull();
   });
 });
@@ -257,7 +257,7 @@ describe("blocked photos", () => {
         : json({ id: "b9", status: "completed", results: [{ custom_id: "k1", response: null, error: { type: "content_policy_violation_error", message: "Gemini blocked the request: SAFETY" } }] }),
     );
     await pollImports(e);
-    expect(sent).toEqual([{ type: "describe", memeId: "k1", from: 1 }]);
+    expect(sent).toEqual([{ type: "describe", memeId: "k1", gen: 0, from: 1 }]);
     expect(await e.DB.prepare("SELECT import_id FROM memes WHERE id = 'k1'").first("import_id")).toBeNull();
     expect(await e.DB.prepare("SELECT status FROM imports WHERE id = 'ib'").first("status")).toBe("done");
   });

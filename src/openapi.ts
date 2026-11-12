@@ -251,9 +251,9 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
           parameters: [idParam],
           responses: { "200": ok("The meme.", ref("MemeDetail")), ...COMMON, ...NOT_FOUND },
         }),
-        patch: memeOps("Edit a meme", "Changes the given fields of a ready meme; search uses the new text at once. Needs a write token.", {
+        patch: memeOps("Edit a meme", "Changes the given fields of a meme; search uses the new text at once. A meme in processing (or failed) is processed again from the start; the AI keeps the edited fields. Needs a write token.", {
           requestBody: body(ref("MemeEdit")),
-          responses: { "200": ok("The edited meme.", ref("MemeDetail")), "400": err("Bad fields."), "409": err("The meme is not ready."), ...COMMON, ...NOT_FOUND },
+          responses: { "200": ok("The edited meme.", ref("MemeDetail")), "400": err("Bad fields."), "409": err("The meme changed during the edit: try again."), ...COMMON, ...NOT_FOUND },
         }),
         delete: memeOps("Delete a meme", "Deletes the meme with its files and search index. Cannot be undone. Needs a write token."),
       },

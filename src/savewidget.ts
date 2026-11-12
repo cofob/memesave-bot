@@ -3,7 +3,7 @@ import type { Api } from "grammy";
 import { botApi } from "./botapi";
 import type { Env } from "./env";
 import { t, type Lang } from "./i18n";
-import { editWidget, page, sendWidget, widgetLabels } from "./widget";
+import { editWidget, page, progressApi, sendWidget, widgetLabels } from "./widget";
 
 /**
  * State: {s: "i" indexing | "r" ready | "f" failed | "m" a message, t: title, g: tags, e: error, x: message text}
@@ -51,7 +51,8 @@ export async function sendSaveStatus(api: Api, chatId: number, lang: Lang, reply
 export async function showSaveStatus(env: Env, chatId: number, msgId: number, text: string, state: object, final: boolean, caption = text) {
   const api = botApi(env.BOT_TOKEN);
   const html = { parse_mode: "HTML" } as const;
-  const widget = await editWidget(api, chatId, msgId, fit(state)).then(
+  // An album's in-between progress does not wait on a 429 (see progressApi): the next meme or the final state catches up.
+  const widget = await editWidget(final ? api : progressApi(env.BOT_TOKEN), chatId, msgId, fit(state)).then(
     () => true,
     () => false,
   );

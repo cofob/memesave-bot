@@ -90,9 +90,9 @@ export async function memeVectors(env: Env, userId: number | number[], idList: s
 }
 
 /** Stage 1: embeds the image (or the video thumbnail) into Vectorize. */
-export async function embedStage(env: Env, memeId: string) {
+export async function embedStage(env: Env, memeId: string, gen = 0) {
   const m = await getMeme(env.DB, memeId);
-  if (!m || m.status === "ready" || m.status === "failed") return;
+  if (!m || m.gen !== gen || m.status === "ready" || m.status === "failed") return;
   if (m.status === "embedding") {
     if (m.sha256 === null && (await dedupe(env, m))) return;
     // Photos embed the image itself; videos and GIFs their preview frame, if there is one.
@@ -107,8 +107,8 @@ export async function embedStage(env: Env, memeId: string) {
       );
       await upsertVectors(env, [{ id: `${memeId}:i`, values, namespace: namespace(m.user_id), metadata: { kind: m.kind } }]);
     }
-    await setStatus(env.DB, memeId, "describing");
+    if (!(await setStatus(env.DB, memeId, "describing", null, gen)).meta.changes) return; // an edit restarted it
   }
   // Batch import memes wait for /batch_finish instead.
-  if (!m.import_id) await env.JOBS.send({ type: "describe", memeId });
+  if (!m.import_id) await env.JOBS.send({ type: "describe", memeId, gen });
 }

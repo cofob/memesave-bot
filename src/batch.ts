@@ -54,7 +54,7 @@ async function sendJobs(env: Env, jobs: Job[]) {
   for (let i = 0; i < jobs.length; i += 100) await env.JOBS.sendBatch(jobs.slice(i, i + 100).map((body) => ({ body })));
 }
 
-const describeJobs = (memes: Meme[]): Job[] => memes.map((m) => ({ type: "describe", memeId: m.id }));
+const describeJobs = (memes: Meme[]): Job[] => memes.map((m) => ({ type: "describe", memeId: m.id, gen: m.gen }));
 
 /** Memes of an import that still wait for a description. */
 const pending = async (db: D1Database, importId: string) =>
@@ -137,18 +137,18 @@ export async function retryFailed(env: Env, userId: number, statusMsgId: number 
   const db = env.DB;
   const importId = crypto.randomUUID().replaceAll("-", "");
   // Photos that already have a description skip the batch: describeStage reuses it and only finishes them.
-  const [photos, others] = await db.batch<{ id: string }>([
+  const [photos, others] = await db.batch<{ id: string; gen: number }>([
     db.prepare(
-      "UPDATE memes SET status = 'embedding', error = NULL, import_id = ?, updated_at = unixepoch() WHERE user_id = ? AND status = 'failed' AND kind = 'photo' AND title IS NULL RETURNING id",
+      "UPDATE memes SET status = 'embedding', error = NULL, import_id = ?, updated_at = unixepoch() WHERE user_id = ? AND status = 'failed' AND kind = 'photo' AND title IS NULL RETURNING id, gen",
     ).bind(importId, userId),
     db.prepare(
-      "UPDATE memes SET status = 'embedding', error = NULL, import_id = NULL, updated_at = unixepoch() WHERE user_id = ? AND status = 'failed' RETURNING id",
+      "UPDATE memes SET status = 'embedding', error = NULL, import_id = NULL, updated_at = unixepoch() WHERE user_id = ? AND status = 'failed' RETURNING id, gen",
     ).bind(userId),
   ]);
   if (photos.results.length) {
     await db.prepare("INSERT INTO imports (id, user_id, status, status_msg_id) VALUES (?, ?, 'submitting', ?)").bind(importId, userId, statusMsgId).run();
   }
-  const embed = [...photos.results, ...others.results].map((r): Job => ({ type: "embed", memeId: r.id }));
+  const embed = [...photos.results, ...others.results].map((r): Job => ({ type: "embed", memeId: r.id, gen: r.gen }));
   await sendJobs(env, photos.results.length ? [...embed, { type: "batch_submit", importId }] : embed);
   return { photos: photos.results.length, others: others.results.length };
 }
@@ -282,11 +282,11 @@ export async function pollImports(env: Env) {
  */
 async function finishDescribed(env: Env, importId: string) {
   const { results } = await env.DB.prepare(
-    "UPDATE memes SET import_id = NULL WHERE import_id = ? AND status = 'describing' AND title IS NOT NULL RETURNING id",
+    "UPDATE memes SET import_id = NULL WHERE import_id = ? AND status = 'describing' AND title IS NOT NULL RETURNING id, gen",
   )
     .bind(importId)
-    .all<{ id: string }>();
-  await sendJobs(env, results.map((r): Job => ({ type: "finish", memeId: r.id })));
+    .all<{ id: string; gen: number }>();
+  await sendJobs(env, results.map((r): Job => ({ type: "finish", memeId: r.id, gen: r.gen })));
 }
 
 async function pollImport(env: Env, imp: Import) {
@@ -301,34 +301,34 @@ async function pollImport(env: Env, imp: Import) {
 
   try {
     const byId = new Map((batch.results ?? []).map((r) => [r.custom_id, r]));
-    const saved: string[] = [];
+    const saved: Meme[] = [];
     const retry: Meme[] = [];
-    const blocked: string[] = [];
+    const blocked: Meme[] = [];
     const updates: D1PreparedStatement[] = [];
     for (const m of await pending(db, imp.id)) {
       const error = byId.get(m.id)?.error;
       if (error && isBlocked(JSON.stringify(error))) {
-        blocked.push(m.id); // a resubmit would be blocked again
+        blocked.push(m); // a resubmit would be blocked again
         continue;
       }
       const response = byId.get(m.id)?.response;
       const content: string = (response?.body ?? response)?.choices?.[0]?.message?.content ?? ""; // OpenRouter wraps it in "body"
       try {
-        updates.push(saveDescription(db, m.id, toDescription(parseJson(content), content)));
-        saved.push(m.id);
+        updates.push(saveDescription(db, m, toDescription(parseJson(content), content)));
+        saved.push(m);
       } catch {
         retry.push(m);
       }
     }
     for (let i = 0; i < updates.length; i += 100) await db.batch(updates.slice(i, i + 100));
     if (batch.usage) await recordSpend(env, { userId: imp.user_id, kind: "describe_batch" }, imp.model ?? MODELS.describeImage, imp.key_source!, batch.usage);
-    await sendJobs(env, saved.map((memeId): Job => ({ type: "finish", memeId })));
+    await sendJobs(env, saved.map((m): Job => ({ type: "finish", memeId: m.id, gen: m.gen })));
     // Blocked photos leave the import and go to the next describe model one by one.
     for (let i = 0; i < blocked.length; i += 50) {
-      const ids = blocked.slice(i, i + 50);
+      const ids = blocked.slice(i, i + 50).map((m) => m.id);
       await db.prepare(`UPDATE memes SET import_id = NULL WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).run();
     }
-    await sendJobs(env, blocked.map((memeId): Job => ({ type: "describe", memeId, from: 1 })));
+    await sendJobs(env, blocked.map((m): Job => ({ type: "describe", memeId: m.id, gen: m.gen, from: 1 })));
     const described = imp.described + saved.length;
     const cost = imp.cost + (batch.usage?.cost ?? 0);
     // Keep the batch status and the first errors to debug failures.
