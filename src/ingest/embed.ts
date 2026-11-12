@@ -1,7 +1,7 @@
 import { deleteMeme, getMeme, setStatus, userLang, type Meme } from "../db";
 import type { Env } from "../env";
 import { t } from "../i18n";
-import { memeMedia, toDataUrl, variantOf } from "../media";
+import { memeMedia, tmpKey, toDataUrl, variantOf } from "../media";
 import { embed } from "../openrouter";
 import { editStatus } from "./describe";
 
@@ -76,6 +76,22 @@ export async function upsertVectors(env: Env, vectors: VectorizeVector[], wait =
   }
 }
 
+/**
+ * Embeds (make) and upserts one vector. When the upsert fails, the vector waits in R2 (tmp/, 7 days) under `key`:
+ * the job retry takes it from there and does not pay for the embedding again.
+ */
+export async function upsertEmbedded(env: Env, key: string, v: Omit<VectorizeVector, "values">, make: () => Promise<number[]>) {
+  const k = tmpKey(`v/${key}`);
+  const hit = await env.MEDIA.get(k);
+  const values = hit ? Array.from(new Float32Array(await hit.arrayBuffer())) : await make();
+  try {
+    await upsertVectors(env, [{ ...v, values }]);
+  } catch (e) {
+    if (!hit) await env.MEDIA.put(k, new Float32Array(values).buffer);
+    throw e;
+  }
+}
+
 /** Image and text vectors of up to 10 of the user's (or users') memes (comma-separated ids): 20 ids per Vectorize call. */
 export async function memeVectors(env: Env, userId: number | number[], idList: string) {
   const ids = idList.split(",").filter(Boolean).slice(0, 10);
@@ -98,14 +114,11 @@ export async function embedStage(env: Env, memeId: string, gen = 0) {
     // Photos embed the image itself; videos and GIFs their preview frame, if there is one.
     const variant = m.kind === "photo" ? "file" : variantOf(m, "preview") === "preview" ? "preview" : null;
     if (variant) {
-      const media = await memeMedia(env, m, variant);
-      const [values] = await embed(
-        env,
-        [{ content: [{ type: "image_url", image_url: { url: toDataUrl(media) } }] }],
-        "search_document",
-        { userId: m.user_id, kind: "embed_image", memeId },
-      );
-      await upsertVectors(env, [{ id: `${memeId}:i`, values, namespace: namespace(m.user_id), metadata: { kind: m.kind } }]);
+      await upsertEmbedded(env, `${memeId}:i`, { id: `${memeId}:i`, namespace: namespace(m.user_id), metadata: { kind: m.kind } }, async () => {
+        const media = await memeMedia(env, m, variant);
+        const input = [{ content: [{ type: "image_url" as const, image_url: { url: toDataUrl(media) } }] }];
+        return (await embed(env, input, "search_document", { userId: m.user_id, kind: "embed_image", memeId }))[0];
+      });
     }
     if (!(await setStatus(env.DB, memeId, "describing", null, gen)).meta.changes) return; // an edit restarted it
   }

@@ -6,7 +6,8 @@ import type { Env } from "../env";
 import { esc, t, type Lang } from "../i18n";
 import { memeMedia, toDataUrl, variantOf } from "../media";
 import { chat, embed, errorNote, type Part } from "../openrouter";
-import { namespace, upsertVectors } from "./embed";
+import { sha256hex } from "../cache";
+import { namespace, upsertEmbedded } from "./embed";
 import { showSaveStatus } from "../savewidget";
 
 export interface Description {
@@ -281,8 +282,10 @@ async function describeGroup(env: Env, m: Meme, group: Meme[], from: number) {
 
 /** Embeds the saved description of the meme (its text vector). */
 export async function embedText(env: Env, m: Meme) {
-  const [values] = await embed(env, [docText(fromRow(m))], "search_document", { userId: m.user_id, memeId: m.id, kind: "embed_text" });
-  await upsertVectors(env, [{ id: `${m.id}:t`, values, namespace: namespace(m.user_id), metadata: { kind: m.kind } }]);
+  const doc = docText(fromRow(m));
+  // The key holds the text hash: an edited text is embedded again.
+  await upsertEmbedded(env, `${m.id}:t:${await sha256hex(doc)}`, { id: `${m.id}:t`, namespace: namespace(m.user_id), metadata: { kind: m.kind } }, async () =>
+    (await embed(env, [doc], "search_document", { userId: m.user_id, memeId: m.id, kind: "embed_text" }))[0]);
 }
 
 /** Stage 3: embeds the saved description, marks the meme ready and updates the status message. */
