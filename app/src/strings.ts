@@ -8,7 +8,13 @@ const en = {
   feedRandom: "Random",
   feedFavorites: "Favorites",
   feedForgotten: "Forgotten",
-  feedDay: "On this day",
+  feedTime: "Time travel",
+  feedJump: "Go to…",
+  feedMonthAgo: "A month ago",
+  feedHalfYearAgo: "Half a year ago",
+  feedYearAgo: "A year ago",
+  feedTwoYearsAgo: "2 years ago",
+  feedPickDate: "Date",
   feedUnseen: "Unseen",
   feedMode: "Feed mode",
   feedEnd: "That's all here",
@@ -424,7 +430,13 @@ const ru: Strings = {
   feedRandom: "Случайные",
   feedFavorites: "Любимые",
   feedForgotten: "Забытые",
-  feedDay: "В этот день",
+  feedTime: "Машина времени",
+  feedJump: "Перейти…",
+  feedMonthAgo: "Месяц назад",
+  feedHalfYearAgo: "Полгода назад",
+  feedYearAgo: "Год назад",
+  feedTwoYearsAgo: "2 года назад",
+  feedPickDate: "Дата",
   feedUnseen: "Не видел",
   feedMode: "Режим ленты",
   feedEnd: "Здесь всё",
@@ -833,6 +845,8 @@ const ru: Strings = {
 
 const lang = tg?.initDataUnsafe.user?.language_code ?? navigator.language;
 export const isRu = lang.startsWith("ru");
+/** Dates and numbers: the browser's locale has the region (en-GB, en-US); Telegram's language wins when it differs. */
+export const locale = navigator.language.startsWith(lang.slice(0, 2)) ? navigator.language : lang;
 export const s: Strings = isRu ? ru : en;
 
 export const fmt = (text: string, n: number) => text.replace("{n}", String(n));

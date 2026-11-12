@@ -68,6 +68,7 @@ export async function brief(env: Env, m: Meme) {
     duration: m.duration,
     language: m.language,
     has_text: !!m.ocr_text,
+    porn: !!m.porn,
     created_at: m.created_at,
   };
 }
@@ -330,7 +331,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
     if (!mode) return json({ error: "bad mode" }, 400);
     const n = (k: string) => Math.trunc(Number(url.searchParams.get(k))) || 0;
     const offset = Math.max(0, n("offset"));
-    const { memes, more } = await feedPage(env.DB, user.id, { mode, seed: Math.max(1, n("seed")), offset, limit: FEED_PAGE, tz: Math.max(-840, Math.min(840, n("tz"))) });
+    const { memes, more } = await feedPage(env.DB, user.id, { mode, seed: Math.max(1, n("seed")), offset, limit: FEED_PAGE, newer: url.searchParams.get("newer") === "1" });
     const sizes = await albumSizes(env.DB, memes.map((m) => m.id));
     return json({
       items: await Promise.all(

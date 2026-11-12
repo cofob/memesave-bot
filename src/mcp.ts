@@ -242,6 +242,7 @@ function buildServer(env: Env, user: User, scopes: string[]) {
             cultural_meaning: z.string().optional(),
             tags: z.array(z.string()).optional(),
             search_phrases: z.array(z.string()).optional(),
+            porn: z.boolean().optional().describe("sexual content in the picture or frames; default false"),
           })
           .optional()
           .describe(

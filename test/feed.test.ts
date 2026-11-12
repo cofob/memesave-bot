@@ -32,8 +32,8 @@ const add = (user: number, id: string, ago: number, saved: number | null = null,
     .bind(id, user, id, status, now - ago, saved === null ? null : now - saved)
     .run();
 const use = (user: number, id: string) => e.DB.prepare("INSERT INTO meme_uses (user_id, meme_id, via) VALUES (?, ?, 'send')").bind(user, id).run();
-const ids = async (user: number, mode: FeedMode, opts: { seed?: number; offset?: number; limit?: number; tz?: number } = {}) =>
-  (await feedPage(e.DB, user, { mode, seed: 1, offset: 0, limit: 50, tz: 0, ...opts })).memes.map((m) => m.id);
+const ids = async (user: number, mode: FeedMode, opts: { seed?: number; offset?: number; limit?: number; newer?: boolean } = {}) =>
+  (await feedPage(e.DB, user, { mode, seed: 1, offset: 0, limit: 50, ...opts })).memes.map((m) => m.id);
 
 describe("feed modes", () => {
   it("orders by saved_at or created_at, counts uses, skips failed and other users' memes", async () => {
@@ -50,7 +50,7 @@ describe("feed modes", () => {
     expect(await ids(91, "old")).toEqual(["b", "a", "c"]);
     expect(await ids(91, "favorites")).toEqual(["c", "a"]);
     expect(await ids(91, "forgotten")).toEqual(["b"]);
-    const page = await feedPage(e.DB, 91, { mode: "new", seed: 1, offset: 1, limit: 1, tz: 0 });
+    const page = await feedPage(e.DB, 91, { mode: "new", seed: 1, offset: 1, limit: 1 });
     expect(page.memes.map((m) => [m.id, m.uses])).toEqual([["a", 1]]);
     expect(page.more).toBe(true);
   });
@@ -64,20 +64,15 @@ describe("feed modes", () => {
     expect(pages).toEqual(all);
   });
 
-  it("day: the same day of the month in earlier months and years", async () => {
-    const at = (d: Date) => now - Math.floor(d.getTime() / 1000);
-    const today = new Date();
-    const monthAgo = new Date(today);
-    monthAgo.setUTCDate(1);
-    monthAgo.setUTCMonth(monthAgo.getUTCMonth() - 1);
-    monthAgo.setUTCDate(Math.min(today.getUTCDate(), 28));
-    const yearAgo = new Date(today);
-    yearAgo.setUTCFullYear(today.getUTCFullYear() - 1);
-    await add(94, "today", 60);
-    await add(94, "year", 0, at(yearAgo));
-    await add(94, "other", 0, at(new Date(yearAgo.getTime() - 3 * DAY * 1000)));
-    if (today.getUTCDate() <= 28) await add(94, "month", at(monthAgo));
-    expect(await ids(94, "day")).toEqual(today.getUTCDate() <= 28 ? ["month", "year"] : ["year"]);
+  it("time: older memes from the point down, newer ones up, nearest first", async () => {
+    await add(94, "t1", 400 * DAY);
+    await add(94, "t2", 300 * DAY);
+    await add(94, "t3", 100 * DAY, 365 * DAY); // liked a year ago: the like time counts
+    await add(94, "t4", 10 * DAY);
+    const point = now - 365 * DAY;
+    expect(await ids(94, "time", { seed: point })).toEqual(["t3", "t1"]);
+    expect(await ids(94, "time", { seed: point, newer: true })).toEqual(["t2", "t4"]);
+    expect(await ids(94, "time", { seed: point, newer: true, offset: 1 })).toEqual(["t4"]);
   });
 
   it("unseen: memes seen before the session go away, seen ones keep their place in it", async () => {
@@ -105,7 +100,7 @@ describe("feed API", () => {
     const req = async (path: string, init: RequestInit = {}) =>
       (await handleApp(new Request(`https://m.example/app/api/${path}`, { ...init, headers: { ...auth, "Content-Type": "application/json" } }), e, ctx))!;
 
-    const page = await (await req("feed?mode=favorites&tz=60")).json<any>();
+    const page = await (await req("feed?mode=favorites")).json<any>();
     expect(page.next_offset).toBeNull();
     expect(page.items).toMatchObject([{ id: "p1", uses: 1, file: expect.stringMatching(/^https:\/\/m\.example\/app\/file\/p1\?e=/) }]);
     expect((await req("feed?mode=nope")).status).toBe(400);
@@ -133,6 +128,14 @@ describe("bot feed", () => {
     expect(edit.media.caption).toContain("#2");
     const nav = edit.reply_markup.inline_keyboard[0].map((b: { callback_data: string }) => b.callback_data);
     expect(nav).toEqual(["f:n:1:0"]); // back only: b1 is the last one
+
+    // time mode: ◀ goes to newer memes, above the point (negative offsets)
+    calls.length = 0;
+    expect(await showFeed(e, api, 98, 98, "en", "time", now - 2, 0, 7)).toBe(true);
+    const time = JSON.parse(calls[0].body).reply_markup.inline_keyboard[0].map((b: { callback_data: string }) => b.callback_data);
+    expect(time).toEqual([`f:t:${(now - 2).toString(36)}:-1`]); // b1 is the oldest, b2 is newer
+    expect(await showFeed(e, api, 98, 98, "en", "time", now - 2, -1, 7)).toBe(true);
+    expect(await showFeed(e, api, 98, 98, "en", "time", now - 2, -2, 7)).toBe(false);
     expect(await e.DB.prepare("SELECT COUNT(*) AS n FROM meme_views WHERE user_id = 98").first("n")).toBe(2);
   });
 });

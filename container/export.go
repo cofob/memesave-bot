@@ -36,7 +36,8 @@ memesave-export.json    format marker. Do not remove it if you want to import th
 profile.csv             your account: role, language, settings, plan, balance, AI spend.
 memes.csv               one row per meme: kind, size, caption, forward source, status, the AI description
                         (title, description, ocr_text, speech_text, meme_context, cultural_meaning,
-                        language, tags, search_phrases; lists are separated by new lines), sha256, dates.
+                        language, tags, search_phrases; lists are separated by new lines), porn (1: sexual
+                        content in the picture), sha256, dates.
                         "file" and "preview" are the paths of the meme's files in this archive
                         (empty when the file could not be read).
 media/<id>.<ext>        the original photo, video or GIF of each meme.
@@ -73,6 +74,7 @@ type Restore struct {
 	Language        string    `json:"language,omitempty"`
 	Tags            string    `json:"tags,omitempty"`
 	SearchPhrases   string    `json:"search_phrases,omitempty"`
+	Porn            bool      `json:"porn,omitempty"`
 	CreatedAt       int64     `json:"created_at,omitempty"`
 	Image           []float32 `json:"image,omitempty"`
 	Text            []float32 `json:"text,omitempty"`
@@ -380,7 +382,7 @@ func readMemesave(byName map[string]*zip.File, dir string) ([]ref, error) {
 			x.restore = &Restore{
 				Title: val(row, "title"), Description: val(row, "description"), OCRText: val(row, "ocr_text"), SpeechText: val(row, "speech_text"),
 				MemeContext: val(row, "meme_context"), CulturalMeaning: val(row, "cultural_meaning"), Language: val(row, "language"),
-				Tags: val(row, "tags"), SearchPhrases: val(row, "search_phrases"), CreatedAt: int64(num(row, "created_at")),
+				Tags: val(row, "tags"), SearchPhrases: val(row, "search_phrases"), Porn: val(row, "porn") == "1", CreatedAt: int64(num(row, "created_at")),
 				embedding: byName[path.Join(dir, "embeddings", val(row, "id")+".json")],
 			}
 		}

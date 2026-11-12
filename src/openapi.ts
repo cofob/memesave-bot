@@ -60,6 +60,7 @@ const schemas = {
       duration: nullable("integer", "Seconds; videos and GIFs."),
       language: nullable("string", "Language code of the meme text; 'none' without text."),
       has_text: { type: "boolean", description: "OCR found text on the image." },
+      porn: { type: "boolean", description: "The picture or video frames show sexual content (set by the AI; not from audio). False when not set." },
       created_at: { type: "integer", description: "Unix time when the meme was saved." },
       album: { type: "integer", description: "Only in /memes without tag or filters: the meme is the first one of an album with this many memes." },
     },
@@ -192,11 +193,16 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
               name: "mode",
               in: "query",
               required: true,
-              schema: { type: "string", enum: ["new", "old", "random", "favorites", "forgotten", "day", "unseen"] },
-              description: "favorites: most used; forgotten: never used, oldest first; day: the same day of the month in earlier months and years; unseen: not seen in the feed.",
+              schema: { type: "string", enum: ["new", "old", "random", "favorites", "forgotten", "time", "unseen"] },
+              description: "favorites: most used; forgotten: never used, oldest first; time: a timeline from the time in seed, older memes first (newer=1: the memes after it, oldest first); unseen: not seen in the feed.",
             },
-            { name: "seed", in: "query", schema: { type: "integer", minimum: 1 }, description: "Order of the random mode: the same seed gives the same order." },
-            { name: "tz", in: "query", schema: { type: "integer", default: 0 }, description: "Minutes east of UTC, for the day mode." },
+            {
+              name: "seed",
+              in: "query",
+              schema: { type: "integer", minimum: 1 },
+              description: "random: the order (the same seed gives the same order); unseen: the session start (unix time); time: the point in time (unix time).",
+            },
+            { name: "newer", in: "query", schema: { type: "integer", enum: [0, 1], default: 0 }, description: "time mode: 1 gives the memes after the point, oldest first." },
             { name: "offset", in: "query", schema: { type: "integer", minimum: 0, default: 0 }, description: "next_offset of the previous page." },
           ],
           responses: {
@@ -345,7 +351,7 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
                 description: {
                   type: "string",
                   description:
-                    "Optional ready description as JSON: `title` (required), `ocr_text`, `speech_text`, `language`, `description`, `meme_context`, `cultural_meaning`, `tags` and `search_phrases` (string arrays). With it the AI description step is skipped and only embeddings are computed. Leave it out to let the AI describe the meme.",
+                    "Optional ready description as JSON: `title` (required), `ocr_text`, `speech_text`, `language`, `description`, `meme_context`, `cultural_meaning`, `tags` and `search_phrases` (string arrays), `porn` (boolean, default false). With it the AI description step is skipped and only embeddings are computed. Leave it out to let the AI describe the meme.",
                   example: '{"title":"Cat begs not to be turned into coffee","speech_text":"Noooo don\'t turn me into a coffee!","tags":["cat","latte art"]}',
                 },
               },

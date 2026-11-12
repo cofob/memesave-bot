@@ -18,6 +18,11 @@ describe("toDescription", () => {
     expect(toDescription([{ title: "A", tags: ["X ", 1] }], "")).toMatchObject({ title: "A", tags: ["x"], ocr_text: "", language: "none" });
     expect(toDescription({ meme: { title: "B" } }, "").title).toBe("B");
   });
+  it("sets porn only when the model says true", () => {
+    expect(toDescription({ title: "A" }, "").porn).toBe(false);
+    expect(toDescription({ title: "A", porn: "yes" }, "").porn).toBe(false);
+    expect(toDescription({ title: "A", porn: true }, "").porn).toBe(true);
+  });
   it("takes the title from OCR text or description when it is missing", () => {
     expect(toDescription({ ocr_text: "Line one\nline two" }, "").title).toBe("Line one");
     expect(toDescription({ description: "A cat. It is sad." }, "").title).toBe("A cat.");
@@ -31,7 +36,7 @@ describe("docText", () => {
   it("joins fields and skips empty ones", () => {
     const d: Description = {
       title: "T", ocr_text: "O", speech_text: "", language: "en", description: "D",
-      meme_context: "C", cultural_meaning: "M", tags: ["a", "b"], search_phrases: ["p1", "p2"],
+      meme_context: "C", cultural_meaning: "M", tags: ["a", "b"], search_phrases: ["p1", "p2"], porn: false,
     };
     expect(docText(d)).toBe("T\nO\nD\nC\nM\na, b\np1\np2");
   });

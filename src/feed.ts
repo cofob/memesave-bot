@@ -1,12 +1,13 @@
 import { ALBUM_FIRST, type Meme } from "./db";
 
-export const FEED_MODES = ["new", "old", "random", "favorites", "forgotten", "day", "unseen"] as const;
+export const FEED_MODES = ["new", "old", "random", "favorites", "forgotten", "time", "unseen"] as const;
 export type FeedMode = (typeof FEED_MODES)[number];
 /**
- * tz: minutes east of UTC (the "day" mode). seed: the order of the "random" mode (1…2147483646); for "unseen", the start
- * of the feed session (unix time): memes first seen after it stay, so the offsets of the session do not shift.
+ * seed: the order of the "random" mode (1…2147483646); for "unseen", the start of the feed session (unix time): memes
+ * first seen after it stay, so the offsets of the session do not shift; for "time", the point in time the feed starts at.
+ * newer: the "time" mode only: the memes after that point, oldest first (the feed above it); else the ones at or before it.
  */
-export interface FeedQuery { mode: FeedMode; seed: number; offset: number; limit: number; tz: number }
+export interface FeedQuery { mode: FeedMode; seed: number; offset: number; limit: number; newer?: boolean }
 export type FeedMeme = Meme & { uses: number; date: number };
 
 /** When the user saved it at the source (e.g. the TikTok like), else when it came here. */
@@ -27,13 +28,10 @@ function mode(q: FeedQuery): { where?: string; params?: unknown[]; order: string
       return { where: `${USES} > 0`, order: `${USES} DESC, ${DATE} DESC` };
     case "forgotten":
       return { where: "NOT EXISTS (SELECT 1 FROM meme_uses u WHERE u.meme_id = memes.id)", order: `${DATE} ASC` };
-    case "day": {
-      // Same day of the month in earlier months and years ("a month ago", "a year ago"), in the user's time zone.
-      const tz = q.tz * 60;
-      const now = Math.floor(Date.now() / 1000) + tz;
-      const day = String(new Date(now * 1000).getUTCDate()).padStart(2, "0");
-      return { where: `strftime('%d', ${DATE} + ?, 'unixepoch') = ? AND ${DATE} < ?`, params: [tz, day, now - (now % 86400) - tz], order: `${DATE} DESC` };
-    }
+    case "time": // a timeline from a point in time: down to older memes, up to newer ones
+      return q.newer
+        ? { where: `${DATE} > ?`, params: [q.seed], order: `${DATE} ASC, memes.rowid ASC` }
+        : { where: `${DATE} <= ?`, params: [q.seed], order: `${DATE} DESC, memes.rowid DESC` };
     case "unseen":
       return {
         where: "NOT EXISTS (SELECT 1 FROM meme_views v WHERE v.user_id = memes.user_id AND v.meme_id = memes.id AND v.seen_at < ?)",
@@ -44,8 +42,12 @@ function mode(q: FeedQuery): { where?: string; params?: unknown[]; order: string
 }
 
 export const feedMode = (s: string | null | undefined): FeedMode | null => (FEED_MODES.includes(s as FeedMode) ? (s as FeedMode) : null);
-/** The seed of a new feed session in a mode. */
-export const startSeed = (mode: FeedMode) => (mode === "random" ? 1 + Math.floor(Math.random() * (PRIME - 1)) : mode === "unseen" ? Math.floor(Date.now() / 1000) : 1);
+export const YEAR = 365 * 86400;
+/** The seed of a new feed session in a mode ("time" starts a year ago). */
+export function startSeed(mode: FeedMode) {
+  const now = Math.floor(Date.now() / 1000);
+  return mode === "random" ? 1 + Math.floor(Math.random() * (PRIME - 1)) : mode === "unseen" ? now : mode === "time" ? now - YEAR : 1;
+}
 
 /** One page of the user's feed; an album shows as its first meme. */
 export async function feedPage(db: D1Database, userId: number, q: FeedQuery) {

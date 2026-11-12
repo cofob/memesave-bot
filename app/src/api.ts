@@ -46,7 +46,7 @@ export interface Page {
 }
 
 export type Sort = "new" | "old" | "title";
-export type FeedMode = "new" | "old" | "random" | "favorites" | "forgotten" | "day" | "unseen";
+export type FeedMode = "new" | "old" | "random" | "favorites" | "forgotten" | "time" | "unseen";
 /** A feed meme: the file URL (null for Telegram-only files over 20 MB), use count and date (saved_at, else created_at). */
 export interface FeedItem extends MemeBrief {
   file: string | null;
@@ -378,9 +378,10 @@ export const api = {
   index: () => call<IndexItem[]>("index"),
   tags: () => call<{ tag: string; count: number }[]>("tags"),
   get: (id: string) => call<MemeDetail>(`memes/${id}`),
-  feed: (mode: FeedMode, seed: number, offset: number) =>
+  /** newer: the "time" mode above its point (seed), oldest first. */
+  feed: (mode: FeedMode, seed: number, offset: number, newer = false) =>
     call<{ items: FeedItem[]; next_offset: number | null }>(
-      `feed?${new URLSearchParams({ mode, seed: String(seed), offset: String(offset), tz: String(-new Date().getTimezoneOffset()) })}`,
+      `feed?${new URLSearchParams({ mode, seed: String(seed), offset: String(offset), ...(newer ? { newer: "1" } : {}) })}`,
     ),
   seen: (ids: string[]) => call<{ ok: true }>("feed/seen", { method: "POST", body: JSON.stringify({ ids }), keepalive: true }),
   share: (id: string) => call<{ id: string }>(`memes/${id}/share`, { method: "POST" }),

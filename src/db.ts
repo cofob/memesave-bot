@@ -49,6 +49,7 @@ export interface Meme {
   cultural_meaning: string | null;
   tags: string | null;
   search_phrases: string | null;
+  porn: number; // 1: sexual content in the picture or frames
   import_id: string | null;
   sha256: string | null;
   r2_file: string | null; // permanent copy in MEDIA ("" = cannot be downloaded from Telegram)

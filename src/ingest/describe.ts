@@ -18,6 +18,7 @@ export interface Description {
   cultural_meaning: string;
   tags: string[];
   search_phrases: string[];
+  porn: boolean; // sexual content in the picture or frames; false when not set
 }
 
 const str = { type: "string" };
@@ -25,7 +26,7 @@ const strs = { type: "array", items: str };
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["title", "ocr_text", "speech_text", "language", "description", "meme_context", "cultural_meaning", "tags", "search_phrases"],
+  required: ["title", "ocr_text", "speech_text", "language", "description", "meme_context", "cultural_meaning", "tags", "search_phrases", "porn"],
   properties: {
     title: { type: "string", description: "Short title, max 80 chars" },
     ocr_text: { type: "string", description: "All visible text verbatim, original language, line breaks kept; empty if none" },
@@ -36,6 +37,11 @@ const SCHEMA = {
     cultural_meaning: { ...str, description: "How and when people use it, emotion, community/region (English)" },
     tags: { ...strs, description: "8-25 lowercase tags in English and in the meme language" },
     search_phrases: { ...strs, description: "5-15 phrases people would type to find it, English and meme language" },
+    porn: {
+      type: "boolean",
+      description:
+        "true only if the image or video frames show sexual content: sex acts, exposed genitals, pornographic nudity. Judge the picture only, not audio, speech or text",
+    },
   },
 };
 const ALBUM_SCHEMA = { type: "object", additionalProperties: false, required: ["items"], properties: { items: { type: "array", items: SCHEMA } } };
@@ -86,6 +92,7 @@ export function toDescription(raw: unknown, content: string): Description {
     cultural_meaning: s("cultural_meaning"),
     tags: a("tags").map((x: string) => x.toLowerCase().trim()),
     search_phrases: a("search_phrases"),
+    porn: o.porn === true,
   };
 }
 
@@ -171,7 +178,7 @@ export const saveDescription = (db: D1Database, memeId: string, d: Description, 
   db
     .prepare(
       `UPDATE memes SET title = ?, ocr_text = ?, speech_text = ?, language = ?, description = ?, meme_context = ?,
-        cultural_meaning = ?, tags = ?, search_phrases = ?, updated_at = unixepoch() WHERE id = ? AND status = ?`,
+        cultural_meaning = ?, tags = ?, search_phrases = ?, porn = ?, updated_at = unixepoch() WHERE id = ? AND status = ?`,
     )
     .bind(
       d.title.slice(0, 120),
@@ -183,6 +190,7 @@ export const saveDescription = (db: D1Database, memeId: string, d: Description, 
       d.cultural_meaning,
       d.tags.join("\n"),
       d.search_phrases.join("\n"),
+      d.porn ? 1 : 0,
       memeId,
       status,
     );
@@ -197,6 +205,7 @@ const fromRow = (m: Meme): Description => ({
   cultural_meaning: m.cultural_meaning ?? "",
   tags: m.tags ? m.tags.split("\n") : [],
   search_phrases: m.search_phrases ? m.search_phrases.split("\n") : [],
+  porn: !!m.porn,
 });
 
 /**

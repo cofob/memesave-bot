@@ -60,6 +60,7 @@ interface Restore {
   language?: string;
   tags?: string;
   search_phrases?: string;
+  porn?: boolean;
   created_at?: number;
   image?: number[];
   text: number[];
@@ -75,9 +76,9 @@ async function restoreMeme(env: Env, userId: number, memeId: string, kind: Kind,
   if (isVector(r.image)) vectors.push({ id: `${memeId}:i`, values: r.image, namespace: namespace(userId), metadata: { kind } });
   await upsertVectors(env, vectors);
   await env.DB.prepare(
-    `UPDATE memes SET ${FIELDS.map((k) => `${k} = ?`).join(", ")}, status = 'ready', created_at = COALESCE(?, created_at), updated_at = unixepoch() WHERE id = ?`,
+    `UPDATE memes SET ${FIELDS.map((k) => `${k} = ?`).join(", ")}, porn = ?, status = 'ready', created_at = COALESCE(?, created_at), updated_at = unixepoch() WHERE id = ?`,
   )
-    .bind(...FIELDS.map(text), Number(r.created_at) || null, memeId)
+    .bind(...FIELDS.map(text), r.porn === true ? 1 : 0, Number(r.created_at) || null, memeId)
     .run();
   return true;
 }
