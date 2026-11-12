@@ -3,7 +3,9 @@ import type { Env } from "./env";
 import { allStats } from "./stats";
 
 const DAY = "date(created_at, 'unixepoch')";
-export const MONTH = "strftime('%Y-%m', created_at, 'unixepoch')";
+/** When the user saved a meme: the source like (e.g. TikTok), else when it was added. */
+export const SAVED = "COALESCE(saved_at, created_at)";
+export const MONTH = `strftime('%Y-%m', ${SAVED}, 'unixepoch')`;
 
 const SIZE = `CASE WHEN file_size < 102400 THEN '<100K' WHEN file_size < 512000 THEN '<500K' WHEN file_size < 1048576 THEN '<1M'
   WHEN file_size < 5242880 THEN '<5M' WHEN file_size < 20971520 THEN '<20M' ELSE '20M+' END`;
@@ -12,8 +14,7 @@ export const DURATION = `CASE WHEN duration < 5 THEN '<5s' WHEN duration < 15 TH
 export const ASPECT = `CASE WHEN width * 1.0 / height < 0.8 THEN 'portrait' WHEN width * 1.0 / height < 1.25 THEN 'square'
   WHEN width * 1.0 / height < 2 THEN 'landscape' ELSE 'wide' END`;
 /** Memes per weekday (0 = Sunday) and hour, UTC. */
-export const HEATMAP =
-  "SELECT CAST(strftime('%w', created_at, 'unixepoch') AS INTEGER) AS wd, CAST(strftime('%H', created_at, 'unixepoch') AS INTEGER) AS h, COUNT(*) AS n FROM memes WHERE user_id = ? GROUP BY wd, h";
+export const HEATMAP = `SELECT CAST(strftime('%w', ${SAVED}, 'unixepoch') AS INTEGER) AS wd, CAST(strftime('%H', ${SAVED}, 'unixepoch') AS INTEGER) AS h, COUNT(*) AS n FROM memes WHERE user_id = ? GROUP BY wd, h`;
 
 /** Tag counts, tags per meme, co-occurrence of the top tags and monthly trends of the top tags. */
 export function tagStats(rows: { tags: string; month: string }[]) {
@@ -114,12 +115,12 @@ export async function userAnalytics(env: Env, user: User) {
     q(`SELECT u.meme_id AS id, m.title, COUNT(*) AS n, MAX(u.created_at) AS last FROM meme_uses u JOIN memes m ON m.id = u.meme_id
        WHERE u.user_id = ? GROUP BY u.meme_id ORDER BY n DESC, last DESC LIMIT 24`),
     // Forgotten: the oldest ready memes never used since tracking started.
-    q(`SELECT id, title, created_at FROM memes m WHERE user_id = ? AND status = 'ready'
-       AND NOT EXISTS (SELECT 1 FROM meme_uses u WHERE u.meme_id = m.id) ORDER BY created_at LIMIT 24`),
+    q(`SELECT id, title, ${SAVED} AS created_at FROM memes m WHERE user_id = ? AND status = 'ready'
+       AND NOT EXISTS (SELECT 1 FROM meme_uses u WHERE u.meme_id = m.id) ORDER BY 3 LIMIT 24`),
     q(`SELECT COUNT(*) AS ready, COALESCE(SUM(NOT EXISTS (SELECT 1 FROM meme_uses u WHERE u.meme_id = m.id)), 0) AS never,
        (SELECT MIN(created_at) FROM meme_uses WHERE user_id = ?1) AS since FROM memes m WHERE user_id = ?1 AND status = 'ready'`),
     // How memes were saved (bot, web, Mini App, API, MCP, zip); older ones from before the column are "unknown".
-    q(`SELECT ${MONTH} AS month, COALESCE(added_via, 'unknown') AS via, COUNT(*) AS n FROM memes WHERE user_id = ? GROUP BY month, via ORDER BY month`),
+    q(`SELECT strftime('%Y-%m', created_at, 'unixepoch') AS month, COALESCE(added_via, 'unknown') AS via, COUNT(*) AS n FROM memes WHERE user_id = ? GROUP BY month, via ORDER BY month`),
   ]);
   const [
     timeline, saved, heatmap, kinds, statuses, languages, sizes, durations, aspect, tags, spendDays, models, keys, covered, perMeme, albums,

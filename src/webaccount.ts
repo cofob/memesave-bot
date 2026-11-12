@@ -7,6 +7,7 @@ import type { Env } from "./env";
 import { allStats, userStats } from "./stats";
 import { adminAnalytics } from "./analytics";
 import { analysisResult, analysisStatus, startAnalysis } from "./analysis";
+import { createShare, revokeShares } from "./analysisshare";
 import { BACKFILL_WHERE, queueHashBackfill } from "./ingest/embed";
 import { queueRekey, recoverLostKeys, REKEY_WHERE } from "./rekey";
 import { oauthUrl, setUserKey } from "./userkey";
@@ -20,6 +21,7 @@ import { addChannelUrl, listChannels, removeChannel, updateChannel } from "./cha
 import { btcpayOn, createBtcpayInvoice, getInvoice, productUsd, usdtNetworks } from "./crypto";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
+const shared = (link: object | null) => (link ? json(link) : json({ error: "no result" }, 404));
 
 /** App equivalents of the bot commands: /stats, /settings, /key, /batch*, /batch_zip, /export, /delete_all, /grant, /revoke, /users. */
 export async function handleAccount(req: Request, env: Env, user: User, parts: string[]): Promise<Response | null> {
@@ -40,6 +42,8 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
   }
   if (resource === "analysis") {
     if (m === "GET" && id === "result") return analysisResult(env, user.id);
+    if (m === "POST" && id === "share") return shared(await createShare(env, user.id, user.id));
+    if (m === "DELETE" && id === "share") return (await revokeShares(env, "user_id = ? AND pair_id IS NULL", user.id), json({ ok: true }));
     if (m === "GET" && !id) return json(await analysisStatus(env, user.id));
     if (m === "POST" && !id) {
       const { llm = true } = await req.json<{ llm?: boolean }>().catch(() => ({ llm: true }));

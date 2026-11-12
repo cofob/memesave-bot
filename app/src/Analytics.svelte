@@ -1,22 +1,25 @@
 <script lang="ts">
   import { Alert, Button, Checkbox, EmptyState, Heading, IconButton, Inline, Progress, Spinner, Stack, Table, Tabs } from "@cofob2/design-system-svelte";
   import { ArrowLeft, Sparkles } from "@lucide/svelte";
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { api, type AdminAnalytics, type AnalysisResult, type AnalysisRun, type Me } from "./api";
   import Chart from "./Chart.svelte";
   import { autoHeight, bars, columns, hexAlpha, isDark, PALETTE, cumulative, dayRange, esc, heatmap, line, money, stacked, topGroups } from "./charts";
   import Embeddings from "./Embeddings.svelte";
+  import ShareLink from "./ShareLink.svelte";
   import Thumbs from "./Thumbs.svelte";
   import { fileSize, fill, isRu, s, usd } from "./strings";
 
   interface Props {
-    me: Me;
-    onBack: () => void;
-    onTag: (tag: string) => void;
-    onOpen: (id: string) => void;
+    me?: Me;
+    onBack?: () => void;
+    onTag?: (tag: string) => void;
+    onOpen?: (id: string) => void;
     tab?: string;
+    shared?: AnalysisResult; // a public link: read-only, no spend
   }
-  let { me, onBack, onTag, onOpen, tab = $bindable("mine") }: Props = $props();
+  let { me, onBack, onTag = () => {}, onOpen = () => {}, tab = $bindable("mine"), shared: sharedProp }: Props = $props();
+  const shared = untrack(() => sharedProp); // a fixed snapshot
 
   // Tabs only for admins: their own stats and all users.
   const tabs = [
@@ -30,8 +33,8 @@
   // report shows the same one).
   let run = $state<AnalysisRun | null>(null);
   let ready = $state<AnalysisRun | null>(null);
-  let result = $state.raw<AnalysisResult | null>(null);
-  let loading = $state(true);
+  let result = $state.raw<AnalysisResult | null>(shared ?? null);
+  let loading = $state(!shared);
   let starting = $state(false);
   let llm = $state(true);
   let timer: ReturnType<typeof setTimeout>;
@@ -66,11 +69,12 @@
     }
   }
 
-  refresh();
+  if (!shared) refresh();
   onDestroy(() => clearTimeout(timer));
 
   const running = $derived(run?.status === "running");
-  const canStart = $derived(!running && (!ready || Date.now() / 1000 > ready.fresh_until));
+  // A result from before moods can be redone at once (the server agrees when AI is available).
+  const canStart = $derived(!running && (!ready || Date.now() / 1000 > ready.fresh_until || (!!result && !result.moods)));
   const percent = $derived(run && run.total ? Math.round((run.done / run.total) * 100) : undefined);
   const stage = $derived((s as unknown as Record<string, string>)[`anStage_${run?.stage ?? "queued"}`] ?? run?.stage ?? "");
   const date = (t: number) => new Date(t * 1000).toLocaleString();
@@ -256,12 +260,12 @@
 
 <Stack gap="md">
   <div class="head">
-    <IconButton label={s.anBack} variant="ghost" size="sm" onclick={onBack}><ArrowLeft size={18} /></IconButton>
-    <Heading as="h2" size="md" class="title">{s.analytics}</Heading>
+    {#if onBack}<IconButton label={s.anBack} variant="ghost" size="sm" onclick={onBack}><ArrowLeft size={18} /></IconButton>{/if}
+    <Heading as="h2" size="md" class="title">{shared ? s.anSharedTitle : s.analytics}</Heading>
   </div>
   {#if error}<Alert tone="danger" title={s.error} />{/if}
 
-  {#if me.role === "admin"}
+  {#if me?.role === "admin"}
     <Tabs {tabs} bind:value={tab} label={s.analytics}>
       {#snippet children(current)}
         <div class="panel">
@@ -277,7 +281,7 @@
 <!-- The user's stats: one page, sections in order, each with a short explanation. -->
 {#snippet mine()}
   <Stack gap="lg">
-    {@render controls()}
+    {#if !shared}{@render controls()}{/if}
     {#if result && data && overview && tagCharts && spendCharts && sourceCharts}
       {@const u = data.uses}
       {@render section(s.anOverview, s.anIntro_overview)}
@@ -285,9 +289,11 @@
         <div class="tiles">
           {@render tile(s.statMemes, stats.total.toLocaleString())}
           {@render tile(s.statStorage, fileSize(stats.bytes))}
-          {@render tile(s.statSpend, usd(stats.spend))}
-          {@render tile(s.statSpend30, usd(stats.spend30))}
-          {@render tile(s.statAvg, usd(stats.avg))}
+          {#if !shared}
+            {@render tile(s.statSpend, usd(stats.spend))}
+            {@render tile(s.statSpend30, usd(stats.spend30))}
+            {@render tile(s.statAvg, usd(stats.avg))}
+          {/if}
         </div>
       {/if}
       {#if data.timeline.length}
@@ -355,8 +361,8 @@
         <p class="hint">{s.noTags}</p>
       {/if}
 
-      {@render section(s.anSpend, s.anIntro_spend)}
-      {#if data.spend.days.length}
+      {#if !shared}{@render section(s.anSpend, s.anIntro_spend)}{/if}
+      {#if !shared && data.spend.days.length}
         <div class="tiles">
           {@render tile(s.anSpendTotal, usd(data.spend.covered.total))}
           {#if data.spend.covered.allowance}{@render tile(s.anAllowance, usd(data.spend.covered.allowance))}{/if}
@@ -370,12 +376,12 @@
           {@render card(s.anKeys, spendCharts.keys, undefined, undefined, s.anHint_keys)}
           {@render card(s.anPerMeme, spendCharts.perMeme, undefined, undefined, s.anHint_perMeme)}
         </div>
-      {:else}
+      {:else if !shared}
         <p class="hint">{s.anEmpty}</p>
       {/if}
 
       {@render section(s.anEmbeddings, s.anIntro_embeddings)}
-      <Embeddings {result} {onOpen} {onTag} />
+      <Embeddings {result} {onOpen} {onTag} readonly={!!shared} />
     {/if}
   </Stack>
 {/snippet}
@@ -400,6 +406,7 @@
       <EmptyState title={s.anRun} description={s.anRunHint} />
     {/if}
     {#if result && ready}
+      <ShareLink bind:link={ready.share} />
       <span class="hint">{fill(s.anComputed, { date: date(ready.created_at), n: result.count, next: date(ready.fresh_until) })}</span>
     {/if}
     {#if canStart}

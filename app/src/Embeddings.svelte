@@ -14,8 +14,9 @@
     result: AnalysisResult;
     onOpen: (id: string) => void;
     onTag: (tag: string) => void;
+    readonly?: boolean; // a public link: no meme previews
   }
-  let { result, onOpen, onTag }: Props = $props();
+  let { result, onOpen, onTag, readonly = false }: Props = $props();
 
   let space = $state<"text" | "image">("text");
   let color = $state<"cluster" | "kind" | "lang" | "date">("cluster");
@@ -299,7 +300,14 @@
         </section>
       {/if}
 
-      {#if moods}
+      {#if !moods}
+        <section class="card">
+          <Stack gap="sm">
+            <Heading as="h3" size="sm">{s.pairMoods}</Heading>
+            <span class="hint">{s.anMoodsMissing}</span>
+          </Stack>
+        </section>
+      {:else}
         <section class="card">
           <Stack gap="sm">
             <Heading as="h3" size="sm">{s.pairMoods}</Heading>
@@ -324,7 +332,7 @@
                       <button class="tag" onclick={() => onTag(t)}><Tag>#{t}</Tag></button>
                     {/each}
                   </Inline>
-                  <Thumbs ids={c.sample.slice(0, 6).filter((id) => !removed.includes(id))} {onOpen} />
+                  {#if !readonly}<Thumbs ids={c.sample.slice(0, 6).filter((id) => !removed.includes(id))} {onOpen} />{/if}
                 </Stack>
               </article>
             {/each}
@@ -353,6 +361,7 @@
         </section>
       </div>
 
+      {#if !readonly}
       <section class="card">
         <Heading as="h3" size="sm" class="card-title">{s.anDuplicates}</Heading>
         {#if !duplicates.length}
@@ -384,6 +393,7 @@
         <Heading as="h3" size="sm">{s.anOutliers}</Heading>
         <Thumbs ids={result.outliers.slice(0, 30).filter((id) => !removed.includes(id))} {onOpen} />
       </section>
+      {/if}
 </Stack>
 
 <style>

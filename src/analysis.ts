@@ -16,6 +16,7 @@ import { analysisMoods } from "./moods";
 import { pairFacts, type PairResult } from "./pairfacts";
 import type { Pair } from "./pairs";
 import { pairStats } from "./pairstats";
+import { shareUrl } from "./analysisshare";
 
 const PAIR_STAGES = ["vectors", "project", "cluster", "extras", "write"]; // analyze/pair.go
 const DAY = 86400;
@@ -136,7 +137,7 @@ export class Analyzer extends JobContainer {
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 /** The latest analysis of a user (a number) or of a pair (its id). */
-const latest = (db: D1Database, of: number | string, where = "1") =>
+export const latest = (db: D1Database, of: number | string, where = "1") =>
   db
     .prepare(`SELECT * FROM analyses WHERE ${typeof of === "number" ? "user_id = ? AND pair_id IS NULL" : "pair_id = ?"} AND ${where} ORDER BY created_at DESC LIMIT 1`)
     .bind(of)
@@ -156,11 +157,13 @@ const view = (a: Analysis | null) =>
   };
 
 // A finished analysis whose charts are being redrawn (AI names added) still has its result.
-const READY = "(status = 'done' OR (status = 'running' AND stage = 'render'))";
+export const READY = "(status = 'done' OR (status = 'running' AND stage = 'render'))";
 
 /** The latest analysis of the user (or pair), and the latest finished one (its result is shown while a new one runs). */
 export async function analysisStatus(env: Env, of: number | string) {
-  return { current: view(await latest(env.DB, of)), ready: view(await latest(env.DB, of, READY)) };
+  const ready = view(await latest(env.DB, of, READY));
+  const sid = ready && (await env.DB.prepare("SELECT id FROM analysis_shares WHERE analysis_id = ?").bind(ready.id).first<string>("id"));
+  return { current: view(await latest(env.DB, of)), ready: ready && { ...ready, share: sid ? shareUrl(env, sid) : null } };
 }
 
 /**
@@ -178,6 +181,13 @@ export async function startPairAnalysis(env: Env, pairId: string, userId: number
   return start(env, pairId, userId, opts);
 }
 
+/** A fresh single result from before moods (no moods chart) is redone, when the user can pay for the mood anchors. */
+async function withoutMoods(env: Env, a: Analysis, pairId: string | null) {
+  if (pairId || (await env.MEDIA.head(imageKey(a.id, "moods")))) return false;
+  const user = await getUser(env.DB, a.user_id);
+  return !!user && (await canUseAi(env.DB, user)).ok;
+}
+
 async function start(env: Env, of: number | string, userId: number, opts: StartOptions) {
   const pairId = typeof of === "string" ? of : null;
   const recent = await latest(env.DB, of, `(status = 'running' OR (status = 'done' AND created_at > unixepoch() - ${DAY}))`);
@@ -187,7 +197,7 @@ async function start(env: Env, of: number | string, userId: number, opts: StartO
       .run();
     return view(await latest(env.DB, of));
   }
-  if (recent) {
+  if (recent && !(await withoutMoods(env, recent, pairId))) {
     if (opts.llm && !recent.labeled) {
       // LLM names asked for later: label the stored result, then the container redraws the charts with them.
       const obj = await env.MEDIA.get(resultKey(recent.id));

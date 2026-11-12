@@ -4,28 +4,32 @@
   import { Alert, Button, Checkbox, EmptyState, Heading, IconButton, Progress, Spinner, Stack } from "@cofob2/design-system-svelte";
   import { ArrowLeft, ArrowRight, Clapperboard, Eye, Sparkles } from "@lucide/svelte";
   import type { EChartsCoreOption } from "echarts/core";
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { api, ApiError, type AnalysisRun, type MemeBrief, type PairFeedMode, type PairResult, type PairStats, type PairView } from "./api";
   import Chart from "./Chart.svelte";
   import { autoHeight, bars, heatmap, line, stacked } from "./charts";
   import PairMap, { clusterName } from "./PairMap.svelte";
   import { indexed } from "./search.svelte";
+  import ShareLink from "./ShareLink.svelte";
   import Thumbs from "./Thumbs.svelte";
   import { fill, isRu, s } from "./strings";
 
   interface Props {
     id: string;
-    onBack: () => void;
+    onBack?: () => void;
     onOpen: (id: string, owner?: number) => void; // owner: the partner's user id for their memes
     onView: (who: { id: number; name: string }) => void;
     onFeed: (pair: PairView, mode?: PairFeedMode) => void; // mode: none resumes the last one
+    shared?: { result: PairResult; stats: PairStats; names: (string | null)[] }; // a public link: read-only, the sharer is "me"
   }
-  let { id, onBack, onOpen, onView, onFeed }: Props = $props();
+  let { id, onBack, onOpen, onView, onFeed, shared: sharedProp }: Props = $props();
+  const shared = untrack(() => sharedProp); // a fixed snapshot
 
-  let st = $state.raw<PairStats | null>(null);
+  let st = $state.raw<PairStats | null>(shared?.stats ?? null);
   let pair = $state<PairView | null>(null);
   let error = $state(false);
   $effect(() => {
+    if (shared) return;
     const want = id;
     Promise.all([api.pairStats(want), api.pairs()]).then(
       ([v, list]) => {
@@ -38,7 +42,7 @@
 
   type Side = PairStats["me"];
   type Count = { k: string | null; n: number };
-  const me = s.pairYou;
+  const me = shared ? (shared.names[0] ?? s.pairSomeone) : s.pairYou;
   const partner = $derived(st?.partner.name ?? pair?.partner.name ?? s.pairSomeone);
 
   const weekdays = Array.from({ length: 7 }, (_, i) => new Date(Date.UTC(2024, 0, 1 + i)).toLocaleDateString(isRu ? "ru" : "en", { weekday: "short" })); // Mon..Sun
@@ -133,8 +137,8 @@
   // The embedding analysis: run state as in Analytics, the result and the partner's meme previews.
   let run = $state<AnalysisRun | null>(null);
   let ready = $state<AnalysisRun | null>(null);
-  let result = $state.raw<PairResult | null>(null);
-  let loading = $state(true);
+  let result = $state.raw<PairResult | null>(shared?.result ?? null);
+  let loading = $state(!shared);
   let starting = $state(false);
   let tooSmall = $state(false);
   let llm = $state(true);
@@ -169,7 +173,7 @@
     }
   }
 
-  refresh();
+  if (!shared) refresh();
   onDestroy(() => clearTimeout(timer));
 
   const running = $derived(run?.status === "running");
@@ -247,7 +251,7 @@
 
 <Stack gap="md">
   <div class="head">
-    <IconButton label={s.pairBackList} variant="ghost" size="sm" onclick={onBack}><ArrowLeft size={18} /></IconButton>
+    {#if onBack}<IconButton label={s.pairBackList} variant="ghost" size="sm" onclick={onBack}><ArrowLeft size={18} /></IconButton>{/if}
     <Heading as="h2" size="md" class="title">{s.pairStats}</Heading>
   </div>
   {#if error}<Alert tone="danger" title={s.error} />{/if}
@@ -291,7 +295,7 @@
       {#each badges as [label, value] (label)}{@render tile(label, value)}{/each}
     </div>
 
-    {@render controls()}
+    {#if !shared}{@render controls()}{/if}
     {#if result && pick}
       {@const sc = result.scores}
       <div class="tiles">
@@ -343,12 +347,14 @@
       {@render pairs(s.pairNear, s.pairNearIntro, pick.twins)}
       {@render pairs(s.pairRhymes, s.pairRhymesIntro, pick.rhymes)}
 
-      {@render section(s.pairPicks, s.pairPicksIntro)}
-      <div class="grid">
-        {@render gallery(fill(s.pairForYou, { name: partner }), pick.forMe)}
-        {@render gallery(fill(s.pairForThem, { name: partner }), pick.forThem)}
-        {@render gallery(fill(s.pairSurprise, { name: partner }), pick.surprise)}
-      </div>
+      {#if !shared}
+        {@render section(s.pairPicks, s.pairPicksIntro)}
+        <div class="grid">
+          {@render gallery(fill(s.pairForYou, { name: partner }), pick.forMe)}
+          {@render gallery(fill(s.pairForThem, { name: partner }), pick.forThem)}
+          {@render gallery(fill(s.pairSurprise, { name: partner }), pick.surprise)}
+        </div>
+      {/if}
       {#if result.bridge.length}
         <section class="card">
           <Heading as="h4" size="sm">{s.pairBridge}</Heading>
@@ -410,10 +416,12 @@
         {@render tile(fill(s.pairFirstOf, { name: me }), sh.twins.first.me.toLocaleString())}
         {@render tile(fill(s.pairFirstOf, { name: partner }), sh.twins.first.partner.toLocaleString())}
       </div>
-      <section class="card">
-        <Heading as="h4" size="sm">{s.pairFirst}</Heading>
-        <Thumbs ids={sh.twins.items.map((t) => t[0])} {onOpen} note={firstOf} />
-      </section>
+      {#if sh.twins.items.length}
+        <section class="card">
+          <Heading as="h4" size="sm">{s.pairFirst}</Heading>
+          <Thumbs ids={sh.twins.items.map((t) => t[0])} {onOpen} note={firstOf} />
+        </section>
+      {/if}
     {/if}
 
     {@render section(s.pairMore, s.pairMoreIntro)}
@@ -460,6 +468,7 @@
     {#if tooSmall}<Alert tone="info" title={s.pairTooSmall} />{/if}
     {#if !result && !running}<EmptyState title={s.pairRun} description={s.pairRunHint} />{/if}
     {#if result && ready}
+      <ShareLink pair={id} bind:link={ready.share} />
       <span class="hint">{fill(s.anComputed, { date: date(ready.created_at), n: result.count[0] + result.count[1], next: date(ready.fresh_until) })}</span>
     {/if}
     {#if canStart}

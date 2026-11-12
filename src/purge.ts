@@ -1,3 +1,4 @@
+import { revokeShares } from "./analysisshare";
 import { botApi } from "./botapi";
 import type { User } from "./db";
 import type { Env } from "./env";
@@ -49,6 +50,7 @@ export async function deleteAccount(env: Env, user: User) {
   ];
   for (const r of analyses.results) archives.push(...(await env.MEDIA.list({ prefix: tmpKey(`analysis/${r.id}/`) })).objects.map((o) => o.key)); // chart PNGs
   for (let i = 0; i < archives.length; i += 1000) await env.MEDIA.delete(archives.slice(i, i + 1000));
+  await revokeShares(env, "user_id = ?1 OR pair_id IN (SELECT id FROM pairs WHERE a = ?1 OR b = ?1)", user.id);
   const { results: channels } = await db.prepare("SELECT chat_id FROM channels WHERE user_id = ?").bind(user.id).all<{ chat_id: number }>();
   for (const ch of channels) await botApi(env.BOT_TOKEN).leaveChat(ch.chat_id).catch(() => {});
   await revokeConnections(env, user.id).catch(console.error);

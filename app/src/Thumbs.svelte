@@ -11,7 +11,9 @@
   }
   let { ids, onOpen, note, items }: Props = $props();
 
-  if (!textIndex.version) loadIndex().catch(() => {});
+  $effect(() => {
+    if (!textIndex.version && ids.length) loadIndex().catch(() => {});
+  });
 </script>
 
 <div class="thumbs">

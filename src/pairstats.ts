@@ -1,4 +1,4 @@
-import { ASPECT, DURATION, HEATMAP, MONTH, originStats, tagStats } from "./analytics";
+import { ASPECT, DURATION, HEATMAP, MONTH, originStats, SAVED, tagStats } from "./analytics";
 import type { Env } from "./env";
 
 /** Queries of one side, in the order `side` reads them. */
@@ -9,7 +9,7 @@ function queries(db: D1Database, id: number) {
     q("SELECT COUNT(*) AS n FROM memes WHERE user_id = ? AND status = 'ready'"),
     group("kind"),
     q(HEATMAP),
-    q(`SELECT ${MONTH} AS month, COUNT(*) AS n FROM memes WHERE user_id = ? AND created_at >= unixepoch('now', 'start of month', '-23 months') GROUP BY month ORDER BY month`),
+    q(`SELECT ${MONTH} AS month, COUNT(*) AS n FROM memes WHERE user_id = ? AND ${SAVED} >= unixepoch('now', 'start of month', '-23 months') GROUP BY month ORDER BY month`),
     group("language", "AND language IS NOT NULL"),
     group(DURATION, "AND duration IS NOT NULL AND kind != 'photo'"),
     group(ASPECT, "AND width > 0 AND height > 0"),

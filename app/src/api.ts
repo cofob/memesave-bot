@@ -287,7 +287,11 @@ export interface AnalysisRun {
   labeled: boolean; // clusters have LLM names
   created_at: number;
   fresh_until: number;
+  share?: string | null; // public link of this result (the finished one only)
 }
+
+/** A public analysis link: a copy without AI spend, sources and meme previews; the sharer is owner 0 (pair: stats.me). */
+export type SharedAnalysis = { kind: "solo"; result: AnalysisResult } | { kind: "pair"; result: PairResult; stats: PairStats; names: [string | null, string | null] };
 
 interface Histogram {
   edges: number[];
@@ -444,6 +448,13 @@ export const api = {
   analysis: () => call<{ current: AnalysisRun | null; ready: AnalysisRun | null }>("analysis"),
   analysisStart: (llm: boolean) => post<AnalysisRun>("analysis", { llm }),
   analysisResult: () => call<AnalysisResult>("analysis/result"),
+  analysisShare: (pair?: string) => post<{ id: string; url: string }>(pair ? `pairs/${pair}/analysis/share` : "analysis/share"),
+  analysisUnshare: (pair?: string) => call(pair ? `pairs/${pair}/analysis/share` : "analysis/share", { method: "DELETE" }),
+  sharedAnalysis: async (sid: string) => {
+    const res = await fetch(`/app/shared/analysis/${encodeURIComponent(sid)}`);
+    if (!res.ok) throw new ApiError(res.status, await res.text());
+    return (await res.json()) as SharedAnalysis;
+  },
   setSettings: (settings: Partial<Pick<Me, "search_mode" | "describe_tier" | "hide_porn">>) => call("settings", { method: "PUT", body: JSON.stringify(settings) }),
   channels: () => call<{ channels: Channel[]; addUrl: string }>("channels"),
   setChannel: (id: number, body: { enabled?: boolean; caption?: string; storage?: boolean }) => call(`channels/${id}`, { method: "PUT", body: JSON.stringify(body) }),

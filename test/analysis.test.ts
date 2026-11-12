@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { analysisStatus, failAnalysis, handleAnalysis, resultKey, startAnalysis } from "../src/analysis";
+import { analysisStatus, failAnalysis, handleAnalysis, imageKey, resultKey, startAnalysis } from "../src/analysis";
 import { md, reportMarkdown, sendReport } from "../src/analysisreport";
 import { originStats, tagStats, userAnalytics } from "../src/analytics";
 import { recordUse } from "../src/db";
@@ -171,6 +171,18 @@ describe("embedding analysis", () => {
     expect(md2).toContain("#### Необычные мемы"); // the user speaks Russian
   });
 
+  it("redoes a fresh analysis that has no moods", async () => {
+    const { e, started } = setup();
+    await e.DB.prepare("INSERT INTO users (id, role) VALUES (73, 'user')").run();
+    const { id } = (await startAnalysis(e, 73, { llm: false }))!;
+    await call(e, id, "result", { method: "PUT", body: JSON.stringify(result()) });
+    await call(e, id, "done", { method: "POST", body: "{}" });
+    const again = await startAnalysis(e, 73, { llm: false });
+    expect(again).toMatchObject({ status: "running" });
+    expect(again?.id).not.toBe(id);
+    expect(started).toHaveLength(2);
+  });
+
   it("adds AI names to a fresh analysis later and redraws its charts", async () => {
     const { e, started } = setup();
     await e.DB.prepare("INSERT INTO users (id, role) VALUES (72, 'user')").run();
@@ -179,6 +191,7 @@ describe("embedding analysis", () => {
     await call(e, id, "done", { method: "POST", body: "{}" });
     expect((await analysisStatus(e, 72)).ready?.labeled).toBe(false);
 
+    await e.MEDIA.put(imageKey(id, "moods"), "png"); // a result with moods
     expect((await startAnalysis(e, 72, { llm: false }))?.status).toBe("done"); // cached, nothing new
     expect(started).toHaveLength(1);
 

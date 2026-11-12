@@ -2,6 +2,7 @@ import type { Composer } from "grammy";
 import type { InlineKeyboardButton } from "grammy/types";
 import type { Ctx } from "./bot";
 import { startPairAnalysis } from "./analysis";
+import { revokeShares } from "./analysisshare";
 import { allowAi } from "./billingbot";
 import { botApi } from "./botapi";
 import { canUseAi } from "./billing";
@@ -70,6 +71,7 @@ export async function pairAnswered(env: Env, p: Pair, ok: boolean, name: string)
 
 /** A pair was ended (bot or app): the card says so and the other side is told. */
 export async function pairEnded(env: Env, p: Pair, by: number) {
+  await revokeShares(env, "pair_id = ?", p.id);
   await updateCard(env, p, true);
   const other = by === p.a ? p.b : p.a;
   if (p.status !== "active" || !other) return;

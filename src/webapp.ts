@@ -27,6 +27,7 @@ import { botName, inviteLink, pairAnswered, pairEnded, pickButton } from "./pair
 import { updateCard } from "./pairwidget";
 import { pairStats } from "./pairstats";
 import { analysisResult, analysisStatus, startPairAnalysis } from "./analysis";
+import { createShare, handleSharedAnalysis, revokeShares } from "./analysisshare";
 import { editMeme, parseEdit } from "./ingest/edit";
 import { attachAudio, audioError, audioPosts, ensureClip, postOf, sendClip, sendPostAudio } from "./audio";
 import { checkGuess, copyMeme, ownerOf, pairFeed, pairMode, pairPage } from "./pairfeed";
@@ -401,6 +402,11 @@ async function pairsApi(req: Request, env: Env, user: User, name: string | null,
     if ((await getPair(env.DB, user.id, id))?.status !== "active") return json({ error: "no access" }, 403);
     const sub = new URL(req.url).pathname.split("/")[6] ?? "";
     if (m === "GET" && sub === "result") return analysisResult(env, id);
+    if (m === "POST" && sub === "share") {
+      const link = await createShare(env, id, user.id);
+      return link ? json(link) : json({ error: "no result" }, 404);
+    }
+    if (m === "DELETE" && sub === "share") return (await revokeShares(env, "pair_id = ?", id), json({ ok: true }));
     if (m === "GET" && !sub) return json(await analysisStatus(env, id));
     if (m === "POST" && !sub) {
       const { llm = true } = await req.json<{ llm?: boolean }>().catch(() => ({ llm: true }));
@@ -642,6 +648,7 @@ export async function handleApp(req: Request, env: Env, ctx: ExecutionContext): 
   if (url.pathname === "/app" || url.pathname === "/app/") return Response.redirect(`${base(env)}/`, 301); // old Mini App URL
   if (req.method === "GET" && url.pathname === "/app/api/openapi.json") return serveOpenapi(env);
   if (url.pathname.startsWith("/app/api/")) return handleApi(req, env, url);
+  if (req.method === "GET" && url.pathname.startsWith("/app/shared/analysis/")) return handleSharedAnalysis(env, url.pathname.split("/")[4] ?? "");
   if (req.method === "GET" && url.pathname.startsWith("/app/thumb/")) return handleMedia(req, env, ctx, url, "thumb");
   if (req.method === "GET" && url.pathname.startsWith("/app/file/")) return handleMedia(req, env, ctx, url, "file");
   if (req.method === "GET" && url.pathname.startsWith("/app/audio/")) return handlePostMedia(req, env, ctx, url, "audio");
