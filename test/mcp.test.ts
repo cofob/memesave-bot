@@ -178,6 +178,8 @@ describe("MCP OAuth", () => {
 
     expect((await tool(token, "get_meme", { id: "m3" })).isError).toBe(true);
     expect((await tool(token, "get_meme", { id: "m1" })).structuredContent.title).toBe("dancing cat");
+    expect((await tool(token, "edit_meme", { id: "m1", caption: "new caption" })).structuredContent).toMatchObject({ title: "dancing cat", caption: "new caption" });
+    expect((await tool(token, "edit_meme", { id: "m3", caption: "x" })).isError).toBe(true);
 
     const deleted = await tool(token, "delete_memes", { ids: ["m2", "m3"] });
     expect(deleted.structuredContent.deleted).toEqual(["m2"]);

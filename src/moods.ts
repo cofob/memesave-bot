@@ -1,5 +1,5 @@
-// Mood anchors of a pair analysis (GET /analysis/<id>/moods): LLM-written phrases of emotional tones that fit both
-// collections, embedded as search queries; the container scores each meme's text vector against them.
+// Mood anchors of an analysis (GET /analysis/<id>/moods): LLM-written phrases of emotional tones that fit the collection
+// (both of a pair), embedded as search queries; the container scores each meme's text vector against them.
 import type { Analysis } from "./analysis";
 import { canUseAi } from "./billing";
 import { DEFAULT_MOODS, MODELS } from "./config";
@@ -32,7 +32,7 @@ const SCHEMA = {
   },
 };
 
-/** The prompt input: top tags, meme languages and UI languages of both; target languages are the meme ones of ≥10% and the UI ones. */
+/** The prompt input: top tags, meme languages and UI languages of each person; target languages are the meme ones of ≥10% and the UI ones. */
 async function profile(db: D1Database, users: number[]) {
   const sides = await Promise.all(
     users.map(async (id) => {
@@ -50,7 +50,7 @@ async function profile(db: D1Database, users: number[]) {
 }
 
 /** 10–14 moods with 3–6 phrases per target language from one LLM call; null when it fails. */
-async function llmMoods(env: Env, payer: number, users: number[]): Promise<Mood[] | null> {
+async function llmMoods(env: Env, payer: number, users: number[], kind: string): Promise<Mood[] | null> {
   const { sides, targets } = await profile(env.DB, users);
   const input = sides
     .map((s, i) => `Person ${"AB"[i]}\ntop tags: ${s.tags.join(", ")}\nmeme languages: ${s.langs.map((l) => `${l.k} ${Math.round(100 * l.share)}%`).join(", ") || "-"}\napp language: ${s.ui}`)
@@ -64,13 +64,13 @@ async function llmMoods(env: Env, payer: number, users: number[]): Promise<Mood[
       messages: [
         {
           role: "system",
-          content: `Two friends compare their meme collections. Pick 10-14 moods (emotional tones) that best tell their memes apart and fit these collections, e.g. absurd, sarcasm, dark humor, cute, cringe, nostalgia. A mood is a tone, never a topic. For each: key — a short lowercase English id; emoji — one emoji; name_en and name_ru — 1-2 word names; phrases — 3-6 short phrases in EACH of ${targets.map((k) => LANGS[k]).join(", ")} that describe how a meme of this tone feels (not what it is about), like a search query. Reply with JSON: {"moods": [{"key", "emoji", "name_en", "name_ru", "phrases"}]}`,
+          content: `${users.length > 1 ? "Two friends compare their meme collections. Pick 10-14 moods (emotional tones) that best tell their memes apart and fit these collections" : "This is one person's meme collection. Pick 10-14 moods (emotional tones) that best describe the range of its memes"}, e.g. absurd, sarcasm, dark humor, cute, cringe, nostalgia. A mood is a tone, never a topic. For each: key — a short lowercase English id; emoji — one emoji; name_en and name_ru — 1-2 word names; phrases — 3-6 short phrases in EACH of ${targets.map((k) => LANGS[k]).join(", ")} that describe how a meme of this tone feels (not what it is about), like a search query. Reply with JSON: {"moods": [{"key", "emoji", "name_en", "name_ru", "phrases"}]}`,
         },
         { role: "user", content: input },
       ],
       response_format: { type: "json_schema", json_schema: { name: "moods", strict: true, schema: SCHEMA } },
     },
-    { userId: payer, kind: "pair_moods" },
+    { userId: payer, kind },
   );
   const moods = (parseJson<{ moods?: Mood[] }>(msg.content ?? "").moods ?? [])
     .filter((m) => m.key && m.phrases?.length)
@@ -80,8 +80,8 @@ async function llmMoods(env: Env, payer: number, users: number[]): Promise<Mood[
 }
 
 /** Anchor = the normalized mean of its phrase vectors; all phrases in one embedding call. */
-async function anchors(env: Env, payer: number, moods: Mood[]): Promise<Anchor[]> {
-  const vectors = await embed(env, moods.flatMap((m) => m.phrases), "search_query", { userId: payer, kind: "pair_moods" });
+async function anchors(env: Env, payer: number, moods: Mood[], kind: string): Promise<Anchor[]> {
+  const vectors = await embed(env, moods.flatMap((m) => m.phrases), "search_query", { userId: payer, kind });
   let i = 0;
   return moods.map(({ phrases, ...m }) => {
     const sum = vectors.slice(i, (i += phrases.length)).reduce((s, v) => s.map((x, j) => x + v[j]));
@@ -91,17 +91,18 @@ async function anchors(env: Env, payer: number, moods: Mood[]): Promise<Anchor[]
 }
 
 /**
- * The mood anchors of a pair analysis, cached in R2 so a container restart does not pay again.
+ * The mood anchors of an analysis of `users` (one, or the pair), cached in R2 so a container restart does not pay again.
  * The LLM writes them when the analysis has llm; DEFAULT_MOODS otherwise or when it fails. Null without AI.
  */
-export async function pairMoods(env: Env, a: Analysis, users: number[]): Promise<Anchor[] | null> {
+export async function analysisMoods(env: Env, a: Analysis, users: number[]): Promise<Anchor[] | null> {
   const key = tmpKey(`analysis/${a.id}/moods.json`);
   const cached = await env.MEDIA.get(key);
   if (cached) return cached.json<Anchor[]>();
   const payer = await getUser(env.DB, a.user_id);
   if (!payer || !(await canUseAi(env.DB, payer)).ok) return null;
-  const moods = (a.llm && (await llmMoods(env, payer.id, users).catch((e) => (console.warn("pair moods failed", e), null)))) || DEFAULT_MOODS;
-  const result = await anchors(env, payer.id, moods);
+  const kind = users.length > 1 ? "pair_moods" : "analysis_moods";
+  const moods = (a.llm && (await llmMoods(env, payer.id, users, kind).catch((e) => (console.warn("moods failed", e), null)))) || DEFAULT_MOODS;
+  const result = await anchors(env, payer.id, moods, kind);
   await env.MEDIA.put(key, JSON.stringify(result), { httpMetadata: { contentType: "application/json" } });
   return result;
 }

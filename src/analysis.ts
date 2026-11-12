@@ -12,7 +12,7 @@ import { updateCard } from "./pairwidget";
 import { showAnalysis } from "./analysiswidget";
 import { sign, tmpKey, verify } from "./media";
 import { chat } from "./openrouter";
-import { pairMoods } from "./moods";
+import { analysisMoods } from "./moods";
 import { pairFacts, type PairResult } from "./pairfacts";
 import type { Pair } from "./pairs";
 import { pairStats } from "./pairstats";
@@ -280,8 +280,8 @@ export async function handleAnalysis(req: Request, env: Env): Promise<Response> 
     const [analytics, stats] = await Promise.all([userAnalytics(env, user), userStats(env, user)]);
     return json({ ...analytics, stats, lang: user.lang === "ru" ? "ru" : "en" });
   }
-  if (action === "moods" && m === "GET" && p) {
-    const moods = await pairMoods(env, a, owners).catch((e) => (console.warn("moods failed", e), null));
+  if (action === "moods" && m === "GET") {
+    const moods = await analysisMoods(env, a, owners).catch((e) => (console.warn("moods failed", e), null));
     return moods ? json({ moods }) : json({ error: "no moods" }, 404);
   }
   if (action === "result" && m === "GET") {

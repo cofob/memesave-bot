@@ -56,7 +56,7 @@ func synthetic(n, k, d int) ([]meme, map[string][]float32, []int) {
 
 func TestAnalyze(t *testing.T) {
 	memes, vectors, truth := synthetic(1500, 5, 256)
-	r := analyze(memes, vectors, &progress{})
+	r := analyze(memes, vectors, nil, &progress{})
 
 	groups := r.Clusters
 	if len(groups) < 4 || len(groups) > 8 {
@@ -96,7 +96,7 @@ func TestAnalyze(t *testing.T) {
 func TestSmall(t *testing.T) {
 	for _, n := range []int{0, 1, 2, 10, 40} {
 		memes, vectors, _ := synthetic(n, 2, 16)
-		analyze(memes, vectors, &progress{})
+		analyze(memes, vectors, nil, &progress{})
 	}
 }
 
@@ -122,7 +122,14 @@ const sampleAnalytics = `{
 
 func TestCharts(t *testing.T) {
 	memes, vectors, _ := synthetic(600, 4, 64)
-	r := analyze(memes, vectors, &progress{})
+	var moods []mood // anchors at three memes' texts
+	for i, k := range []string{"fun", "sad", "odd"} {
+		moods = append(moods, mood{Key: k, NameEn: k, NameRu: k, Vector: vectors[memes[i*100+1].ID+":t"]})
+	}
+	r := analyze(memes, vectors, moods, &progress{})
+	if r.Moods == nil || len(r.Moods.Months) > 12 || r.Moods.Overall[1] != nil || r.Moods.Top[0] < 0 {
+		t.Fatalf("moods: %+v", r.Moods)
+	}
 	r.Analytics = []byte(sampleAnalytics)
 	for i := range r.TagMap { // realistic counts for the bubble sizes
 		r.TagMap[i].N = 300 / (i + 1)
@@ -139,7 +146,7 @@ func TestCharts(t *testing.T) {
 		t.Fatal(err)
 	}
 	images := charts(&a, back)
-	for _, name := range []string{"per_day", "total", "saved", "heatmap", "kinds", "languages", "top_tags", "cooc", "trend", "spend_day", "spend_models", "tokens", "albums", "map_text", "map_image", "tag_map", "similarity", "alignment", "origin_kinds", "top_sources", "origins_month", "uses_day", "interest_trend", "added_via", "added_month", "spend_keys", "pca", "kinds", "statuses", "sizes", "durations", "aspect", "tags_per_meme", "spend_total", "cost_per_meme"} {
+	for _, name := range []string{"per_day", "total", "saved", "heatmap", "kinds", "languages", "top_tags", "cooc", "trend", "spend_day", "spend_models", "tokens", "albums", "map_text", "map_image", "tag_map", "similarity", "alignment", "origin_kinds", "top_sources", "origins_month", "uses_day", "interest_trend", "added_via", "added_month", "spend_keys", "pca", "kinds", "statuses", "sizes", "durations", "aspect", "tags_per_meme", "spend_total", "cost_per_meme", "moods", "mood_months"} {
 		img, err := png.Decode(bytes.NewReader(images[name]))
 		if err != nil || img.Bounds().Dx() != width*scale {
 			t.Errorf("%s: %v", name, err)

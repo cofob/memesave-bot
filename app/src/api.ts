@@ -30,9 +30,10 @@ export interface MemeDetail extends Omit<MemeBrief, "album"> {
   speech_text: string | null;
   meme_context: string | null;
   cultural_meaning: string | null;
+  search_phrases: string[];
   file: string | null;
   audio: string | null; // sound of the photo, shared by its album
-  album: MemeBrief[]; // the media group in order, empty for a single meme
+  album: FeedMedia[]; // the media group in order, empty for a single meme
 }
 
 export interface IndexItem extends MemeBrief {
@@ -318,6 +319,7 @@ export interface AnalysisResult {
   similarity: { image: Histogram; text: Histogram };
   tagmap: { tag: string; x: number; y: number; n: number }[];
   trends: { months: string[]; clusters: number[][]; other: number[]; total: number[]; rising: number[]; fading: number[] };
+  moods?: PairResult["moods"]; // one owner: a, overall[0], top[0]
   analytics: Analytics; // SQL stats snapshot taken with this analysis
 }
 
@@ -511,6 +513,8 @@ export const api = {
     return call<{ audio: string | null }>(`memes/${id}/audio`, file ? { method: "POST", body } : { method: "DELETE" });
   },
   remove: (id: string) => call<{ ok: true }>(`memes/${id}`, { method: "DELETE" }),
+  /** Changes the given fields of a ready meme. */
+  edit: (id: string, patch: Record<string, string | string[] | boolean>) => call<MemeDetail>(`memes/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   removeMany: (ids: string[]) => post<{ deleted: string[] }>("delete", { ids }),
   pairs: () => call<{ pairs: PairView[]; bot: string }>("pairs"),
   pairInvite: () => post<{ id: string; link: string; prepared: string | null }>("pairs"),

@@ -22,7 +22,7 @@
   import { api, ApiError, type FeedMode, type Me, type MemeBrief, type PairFeedMode, type PairView, type Sort } from "./api";
   import Account from "./Account.svelte";
   import FilterDrawer from "./FilterDrawer.svelte";
-  import { activeCount, emptyFilters, groups, matches, toQuery, type Filters } from "./filters";
+  import { activeCount, emptyFilters, fromQuery, groups, matches, toQuery, type Filters } from "./filters";
   import Login from "./Login.svelte";
   import MemeDetail from "./MemeDetail.svelte";
   import { fill, s } from "./strings";
@@ -32,31 +32,31 @@
   import { addFiles, onUploadReady } from "./uploads.svelte";
   import { forget, loadIndex, localSearch, textIndex } from "./search.svelte";
   import { viewing } from "./viewing.svelte";
+  import { onRoute, show } from "./route";
 
   // "login": web without a session; "denied": the account has no access.
   let auth = $state<"checking" | "ok" | "login" | "denied">("checking");
   let me = $state<Me | null>(null);
   let accountOpen = $state(false);
   let view = $state<"grid" | "analytics" | "feed" | "pairs" | "pair">("grid"); // analytics: the charts mode (loaded on demand with ECharts)
-  // ?feed=<mode>: the bot's feed button opens the feed.
-  const feedLink = new URLSearchParams(location.search).get("feed") as FeedMode | null;
-  if (feedLink) view = "feed";
-  // ?pair=<id>: the bot's stats button opens the pair page.
-  const pairLink = new URLSearchParams(location.search).get("pair");
-  if (pairLink) view = "pair";
-  let pairId = $state(pairLink);
+  let feedMode = $state<FeedMode | PairFeedMode | null>(null); // the feed's mode, reported by it
+  let feedMeme = $state<string | null>(null); // the meme open over the feed
+  let analyticsTab = $state("mine");
+  let pairId = $state<string | null>(null);
   let pairs = $state<PairView[]>([]);
   // The pair feed (from the pair page or ?pair=<id>&feed=<mode>); it closes back to the pair page.
-  let pairFeed = $state<{ id: string; name: string; partner: number; mode?: PairFeedMode | null }>();
+  let pairFeed = $state<{ id: string; name: string; partner: number }>();
   function openPairFeed(p: PairView, mode?: PairFeedMode | null) {
     pairId = p.id;
-    pairFeed = { id: p.id, name: p.partner.name ?? s.pairSomeone, partner: p.partner.id!, mode };
+    pairFeed = { id: p.id, name: p.partner.name ?? s.pairSomeone, partner: p.partner.id!};
+    feedMode = mode ?? null;
     view = "feed";
   }
   // Partners who show their memes: the toolbar switches the library to theirs.
   const sharing = $derived(pairs.filter((p) => p.status === "active" && p.they_share && p.partner.id));
   let accountTab = $state("stats");
-  // Result of the OpenRouter connect redirect (?key=connected|failed), shown once.
+  // Result of the OpenRouter connect redirect (?key=connected|failed), shown once (the URL sync drops it).
+  const keyLink = new URLSearchParams(location.search).get("key");
   let notice = $state<{ tone: "success" | "danger"; text: string } | null>(null);
   let fileInput = $state<HTMLInputElement>();
   let dragging = $state(false);
@@ -240,6 +240,7 @@
     if (auth === "ok" && view === "grid") api.pairs().then(
         (r) => {
           pairs = r.pairs;
+          if (viewing.who && !viewing.who.name) viewing.who.name = sharing.find((p) => p.partner.id === viewing.who!.id)?.partner.name ?? s.pairSomeone; // from a link
           if (viewing.who && !sharing.some((p) => p.partner.id === viewing.who!.id)) watch(null); // the pair ended or stopped sharing
         },
         () => {},
@@ -274,6 +275,74 @@
     };
   });
 
+  // The screen in the URL (see route.ts). The bot's buttons link ?feed=<mode>, ?pair=<id> and ?pair=<id>&feed=<mode>.
+  const search = $derived.by(() => {
+    const q = new URLSearchParams();
+    if (view === "analytics" || view === "pairs") q.set("view", view);
+    if (view === "analytics" && analyticsTab !== "mine") q.set("tab", analyticsTab);
+    if (view === "pair" || (view === "feed" && pairFeed)) q.set("pair", pairFeed?.id ?? pairId ?? "");
+    if (view === "feed") q.set("feed", feedMode ?? "");
+    const meme = view === "feed" ? feedMeme : selected;
+    if (meme) q.set("meme", meme);
+    if (meme && view !== "feed" && partnerMeme?.id === meme) q.set("owner", String(partnerMeme.owner));
+    if (accountOpen) q.set("account", accountTab);
+    if (viewing.who) q.set("who", String(viewing.who.id));
+    if (tag) q.set("tag", tag);
+    if (query) q.set("q", query);
+    if (sort !== "new") q.set("sort", sort);
+    for (const [k, v] of Object.entries(toQuery(filters))) q.set(k, v);
+    const str = q.toString();
+    return str && `?${str}`;
+  });
+  // A change of these opens a new screen (a history entry); the rest (typing, filters, feed mode) replaces it.
+  const screen = (search: string) => {
+    const q = new URLSearchParams(search);
+    return ["view", "pair", "meme", "account", "who", "tag"].map((k) => q.get(k)).join("|") + q.has("feed");
+  };
+  let synced = false;
+  $effect(() => {
+    const next = search;
+    untrack(() => {
+      show(next, synced && screen(next) !== screen(location.search));
+      synced = true;
+    });
+  });
+
+  /** Opens the screen of a URL query: on load, and on back and forward. */
+  function apply(q: URLSearchParams) {
+    const feed = q.get("feed");
+    const pair = q.get("pair");
+    const v = q.get("view");
+    feedMode = (feed || null) as FeedMode | null;
+    if (pair) pairId = pair;
+    if (feed === null || !pair) pairFeed = undefined;
+    // A pair feed needs the pair (its partner): the pair page shows until it comes.
+    if (feed !== null && pair && pairFeed?.id !== pair) {
+      view = "pair";
+      if (auth === "ok")
+        api.pairs().then((r) => {
+          const p = r.pairs.find((x) => x.id === pair && x.partner.id);
+          if (p) openPairFeed(p, feed as PairFeedMode);
+        }, () => {});
+    } else view = feed !== null ? "feed" : pair ? "pair" : v === "analytics" || v === "pairs" ? v : "grid";
+    analyticsTab = q.get("tab") ?? "mine";
+    const meme = q.get("meme");
+    feedMeme = view === "feed" ? meme : null;
+    selected = view === "feed" ? null : meme;
+    const owner = Number(q.get("owner"));
+    if (meme && owner) partnerMeme = { id: meme, owner };
+    accountOpen = q.has("account");
+    if (accountOpen) accountTab = q.get("account")!;
+    const who = Number(q.get("who")) || null;
+    if ((viewing.who?.id ?? null) !== who) viewing.who = who ? { id: who, name: sharing.find((p) => p.partner.id === who)?.partner.name ?? "" } : null;
+    tag = q.get("tag");
+    query = q.get("q") ?? "";
+    sort = (q.get("sort") as Sort) ?? "new";
+    const f = fromQuery(q);
+    if (JSON.stringify(f) !== JSON.stringify(filters)) filters = f;
+  }
+  apply(new URLSearchParams(location.search));
+
   async function openTags() {
     tagsOpen = true;
     tagList ??= await api.tags().catch(() => []);
@@ -301,19 +370,13 @@
     tg?.ready();
     tg?.expand();
     syncTheme();
-    const key = new URLSearchParams(location.search).get("key");
-    if (key) {
-      notice = key === "connected" ? { tone: "success", text: s.keyConnected } : { tone: "danger", text: s.keyFailed };
-      history.replaceState(null, "", location.pathname);
-    }
+    if (keyLink) notice = keyLink === "connected" ? { tone: "success", text: s.keyConnected } : { tone: "danger", text: s.keyFailed };
+    const offRoute = onRoute(apply);
     api.me().then(
       (value) => {
         me = value;
         auth = "ok";
-        if (pairLink && feedLink) api.pairs().then((r) => {
-          const p = r.pairs.find((x) => x.id === pairLink && x.partner.id);
-          if (p) openPairFeed(p, feedLink as PairFeedMode);
-        }, () => {});
+        if (view === "pair") apply(new URLSearchParams(location.search)); // a pair feed link: now the pairs can load
         const b = value.billing;
         if (value.role === "paid" && !b.active) paywall.reason = "subscribe";
         else if (value.role === "paid" && !b.ownKey && b.balance <= 0 && b.allowanceLeft <= 0) paywall.reason = "credit";
@@ -321,10 +384,11 @@
       (e) => (auth = e instanceof ApiError && e.status === 403 ? (tg ? "denied" : "login") : "denied"),
     );
     // New uploads: add to the search index and show at the top of the default view.
-    return onUploadReady(() => {
+    const offUpload = onUploadReady(() => {
       loadIndex().catch(() => {});
       if (sort === "new" && !tag) load(true);
     });
+    return () => (offRoute(), offUpload());
   });
 
   // Infinite scroll: the sentinel exists only after login.
@@ -361,6 +425,7 @@
     {#await import("./Analytics.svelte") then { default: Analytics }}
       <Analytics
         {me}
+        bind:tab={analyticsTab}
         onBack={() => (view = "grid")}
         onTag={(t) => {
           view = "grid";
@@ -405,9 +470,12 @@
 <!-- Hidden, not unmounted: the grid keeps its list, scroll observer and search while the charts are open. -->
 {#if view === "feed"}
   {#await import("./Feed.svelte") then { default: Feed }}
+   {#key pairFeed?.id}
     <Feed
-      initial={pairFeed ? pairFeed.mode : feedLink}
+      initial={feedMode}
       pair={pairFeed}
+      onMode={(m) => (feedMode = m)}
+      bind:selected={feedMeme}
       onClose={() => {
         view = pairFeed ? "pair" : "grid";
         pairFeed = undefined;
@@ -419,6 +487,7 @@
       }}
       onDeleted={(id) => drop([id])}
     />
+   {/key}
   {/await}
 {/if}
 

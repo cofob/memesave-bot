@@ -60,7 +60,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		r = analyze(memes, vectors, p)
+		r = analyze(memes, vectors, fetchMoods(), p)
 		if err := call("GET", "/analytics", nil, &r.Analytics); err != nil {
 			return err
 		}

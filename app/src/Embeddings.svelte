@@ -3,11 +3,11 @@
   import { Trash2 } from "@lucide/svelte";
   import { api, type AnalysisResult, type Kind } from "./api";
   import Chart from "./Chart.svelte";
-  import { esc, hexAlpha, histogram, isDark, OTHER, PALETTE, sequential } from "./charts";
+  import { bars, esc, hexAlpha, histogram, isDark, OTHER, PALETTE, sequential, stacked } from "./charts";
   import Scatter3D from "./Scatter3D.svelte";
   import Thumbs from "./Thumbs.svelte";
   import { indexed, textIndex } from "./search.svelte";
-  import { fill, s } from "./strings";
+  import { fill, isRu, s } from "./strings";
   import { confirm } from "./telegram";
 
   interface Props {
@@ -178,6 +178,23 @@
     };
   });
 
+  /** Moods of the memes (by their text vectors' similarity to mood descriptions): all time and per month. */
+  const moods = $derived.by(() => {
+    const md = result.moods;
+    const all = md?.overall[0];
+    if (!md || !all) return null;
+    const names = md.names[isRu ? "ru" : "en"] ?? md.names.en ?? md.keys;
+    const label = md.keys.map((_, k) => `${md.emoji[k]} ${names[k]}`);
+    const pct = (v: number) => `${Math.round(v)}%`;
+    const order = label.map((l, k) => [l, all[k]] as const).sort((a, b) => b[1] - a[1]).map(([l]) => l);
+    const rows = md.months.flatMap((month, m) => (md.a[m] ?? []).map((v, k) => ({ month, k: label[k], v: v * 100 })));
+    return {
+      all: bars(all.map((v, k) => ({ name: label[k], value: v * 100 })), s.pairMoods, pct),
+      months: stacked(rows, (r) => r.month, (r) => r.k, (r) => r.v, { xs: md.months, order, fmt: pct }),
+      top: label[md.top[0]],
+    };
+  });
+
   /** Share of each large cluster in the memes saved per month (stacked to 100%). */
   const trend = $derived.by(() => {
     const t = result.trends;
@@ -278,6 +295,17 @@
                 </Inline>
               {/if}
             {/each}
+          </Stack>
+        </section>
+      {/if}
+
+      {#if moods}
+        <section class="card">
+          <Stack gap="sm">
+            <Heading as="h3" size="sm">{s.pairMoods}</Heading>
+            <span class="hint">{s.pairMoodsIntro}{moods.top ? ` ${fill(s.anMoodYear, { mood: moods.top })}` : ""}</span>
+            <Chart option={moods.all} height="320px" label={s.pairMoods} />
+            <Chart option={moods.months} height="280px" label={s.anMoodMonths} />
           </Stack>
         </section>
       {/if}

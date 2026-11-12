@@ -158,6 +158,15 @@ describe("pair analysis", () => {
     expect((await call(id, "memes")).status).toBe(403);
   });
 
+  it("gives a single analysis moods of its own collection", async () => {
+    await db.prepare("INSERT INTO users (id, role) VALUES (411, 'user')").run();
+    const { id } = (await startAnalysis(e, 411, { llm: true }))!;
+    expect((await (await call(id, "moods")).json<any>()).moods.length).toBeGreaterThan(0);
+    expect(calls.find((c) => c.body.response_format?.json_schema.name === "moods")!.body.messages[0].content).toContain("one person's");
+    const kinds = await db.prepare("SELECT DISTINCT kind FROM transactions WHERE user_id = 411").all<{ kind: string }>();
+    expect(kinds.results.map((r) => r.kind)).toEqual(["analysis_moods"]);
+  });
+
   it("uses the default moods without the LLM and refuses the container once the pair ends", async () => {
     const p = await pair(401, 402);
     await memes(401, 30);

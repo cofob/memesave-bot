@@ -495,6 +495,40 @@ func charts(a *analytics, r *result) map[string][]byte {
 	if al := r.Alignment.Hist; len(al.Counts) > 0 {
 		add("alignment", func() []byte { xs, ss := hist2(al); return stackedBars(xs, ss, number) })
 	}
+	if m := r.Moods; m != nil && m.Overall[0] != nil {
+		names := m.Names[lang]
+		order := make([]int, len(m.Keys)) // largest first
+		for i := range order {
+			order[i] = i
+		}
+		sort.SliceStable(order, func(x, y int) bool { return m.Overall[0][order[x]] > m.Overall[0][order[y]] })
+		add("moods", func() []byte {
+			items := make([]kv, len(order))
+			for i, j := range order {
+				items[i] = kv{names[j], m.Overall[0][j]}
+			}
+			return hbars(items, percent)
+		})
+		add("mood_months", func() []byte { // the 7 largest moods and the rest, per month
+			var ss []series
+			rest := make([]float64, len(m.Months))
+			for i := range rest {
+				if m.A[i] != nil {
+					rest[i] = 1
+				}
+			}
+			for k, j := range order[:min(7, len(order))] {
+				s := series{names[j], make([]float64, len(m.Months)), palette[k]}
+				for i, row := range m.A {
+					if row != nil {
+						s.values[i], rest[i] = row[j], rest[i]-row[j]
+					}
+				}
+				ss = append(ss, s)
+			}
+			return stackedBars(m.Months, append(ss, series{tr("other"), rest, other}), percent)
+		})
+	}
 	return out
 }
 

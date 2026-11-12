@@ -27,6 +27,7 @@ import { botName, inviteLink, pairAnswered, pairEnded, pickButton } from "./pair
 import { updateCard } from "./pairwidget";
 import { pairStats } from "./pairstats";
 import { analysisResult, analysisStatus, startPairAnalysis } from "./analysis";
+import { editMeme, parseEdit } from "./ingest/edit";
 import { attachAudio, audioError, audioPosts, ensureClip, postOf, sendClip, sendPostAudio } from "./audio";
 import { checkGuess, copyMeme, ownerOf, pairFeed, pairMode, pairPage } from "./pairfeed";
 
@@ -119,9 +120,10 @@ export async function detail(env: Env, m: Meme) {
     speech_text: m.speech_text,
     meme_context: m.meme_context,
     cultural_meaning: m.cultural_meaning,
+    search_phrases: m.search_phrases ? m.search_phrases.split("\n") : [],
     file: await fileUrl(env, m),
     audio: await audioUrl(env, await postOf(env.DB, m.id)),
-    album: album.length > 1 ? await Promise.all(album.map((a) => brief(env, a))) : [],
+    album: album.length > 1 ? await Promise.all(album.map((a) => media(env, a))) : [],
   };
 }
 
@@ -543,6 +545,12 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   }
   if (!meme || (meme.user_id !== owner.id && !partner)) return json({ error: "not found" }, 404);
   if (!action && req.method === "GET") return json(await detail(env, meme));
+  if (!action && req.method === "PATCH") {
+    const patch = parseEdit(await req.json().catch(() => null));
+    if (typeof patch === "string") return json({ error: patch }, 400);
+    const res = await editMeme(env, meme, patch);
+    return typeof res === "string" ? json({ error: res }, 409) : json(await detail(env, res));
+  }
   if (!action && req.method === "DELETE") {
     await deleteMeme(env, meme.id);
     return json({ ok: true });

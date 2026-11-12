@@ -18,6 +18,7 @@ interface Result {
   count: number;
   clusters: Cluster[];
   trends?: { rising: number[]; fading: number[] };
+  moods?: { emoji: string[]; names: Record<string, string[]>; keys: string[]; top: number[] };
   duplicates: [string, string, number][];
   outliers: string[];
   alignment?: { worst: [string, number][] };
@@ -136,6 +137,11 @@ export function reportMarkdown(lang: Lang, r: Result, image: (name: string, capt
       ),
       !r.clusters.some((c) => c.name) && `_${tr("rep_no_names")}_`,
     );
+  }
+  if (r.moods) {
+    const k = r.moods.top[0];
+    const name = k >= 0 ? `${r.moods.emoji[k]} ${(r.moods.names[lang] ?? r.moods.keys)[k]}` : null;
+    parts.push(`### ${tr("rep_moods")}`, tr("rep_moods_text"), !!name && `**${tr("rep_mood_year")}:** ${md(name)}`, image("moods", "rep_moods_chart"), image("mood_months", "rep_mood_months"));
   }
   parts.push(
     image("tag_map", "rep_tag_map"),

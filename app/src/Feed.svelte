@@ -1,10 +1,11 @@
 <script lang="ts">
   import { Badge, Button, EmptyState, IconButton, Select, Spinner, TextField } from "@cofob2/design-system-svelte";
-  import { BookmarkPlus, Check, ChevronLeft, ChevronRight, Info, Layers, RotateCcw, Send, Share2, Volume2, VolumeX, X } from "@lucide/svelte";
+  import { BookmarkPlus, Check, ChevronLeft, ChevronRight, Info, Layers, RotateCcw, Send, Share, Share2, Volume2, VolumeX, X } from "@lucide/svelte";
   import { onMount, tick, untrack } from "svelte";
   import { api, ApiError, type FeedMode, type Owner, type PairFeedItem, type PairFeedMode } from "./api";
   import MemeDetail from "./MemeDetail.svelte";
   import { fill, locale, s } from "./strings";
+  import { shareFiles } from "./share";
   import { tg } from "./telegram";
 
   interface Props {
@@ -13,8 +14,10 @@
     onClose: () => void;
     onTag: (tag: string) => void;
     onDeleted: (id: string) => void;
+    onMode?: (mode: FeedMode | PairFeedMode) => void; // each mode it opens (for the URL)
+    selected?: string | null; // the meme open in the detail
   }
-  let { initial, pair, onClose, onTag, onDeleted }: Props = $props();
+  let { initial, pair, onClose, onTag, onDeleted, onMode, selected = $bindable(null) }: Props = $props();
   type Mode = FeedMode | PairFeedMode;
 
   const modes: { value: FeedMode; label: string }[] = [
@@ -77,7 +80,6 @@
   let active = $state(0);
   let muted = $state(true);
   let paused = $state(false);
-  let selected = $state<string | null>(null);
   let busy = $state<string | null>(null);
   let scroller = $state<HTMLElement>();
   let seed = $state(1);
@@ -99,6 +101,7 @@
     flush();
     const saved = fresh ? null : load<{ seed: number; offset: number }>(`${prefix}${m}`);
     mode = m;
+    onMode?.(m);
     store(`${prefix}mode`, m);
     seed = at ?? saved?.seed ?? newSeed(m);
     start = next = m === "time" ? 0 : (saved?.offset ?? 0);
@@ -234,6 +237,13 @@
     }
   }
   const send = (id: string) => run(`send:${id}`, () => api.send(id));
+  // The system share sheet: an album with sound as its clip (when it can be made), else its files.
+  const shareFile = (it: PairFeedItem) =>
+    run(`file:${it.id}`, async () => {
+      const files = () => parts(it).flatMap((m) => (m.file ? [m.file] : []));
+      const urls = async () => (it.audio ? await api.clipLink(it.id).then((c) => [c.url], files) : files());
+      if (!(await shareFiles(it.id, it.title ?? it.id, urls))) tg ? tg.showAlert(s.shareAgain) : alert(s.shareAgain);
+    });
   const share = (id: string) => run(`share:${id}`, async () => tg?.shareMessage((await api.share(id)).id));
   const take = (id: string) =>
     run(`take:${id}`, async () => {
@@ -276,6 +286,12 @@
     const full = new Date(t * 1000).toLocaleDateString(locale, { day: "numeric", month: "long", year: "numeric" });
     return `${full} · ${rtf.format(-Math.round(n), unit as Intl.RelativeTimeFormatUnit)}`;
   };
+
+  // Back and forward to another mode.
+  $effect(() => {
+    const m = known(initial);
+    if (m && m !== untrack(() => mode)) untrack(() => open(m));
+  });
 
   onMount(() => {
     open(mode);
@@ -338,6 +354,7 @@
       {@const answer = guessed[it.id]}
       {@const all = parts(it)}
       {@const cur = part[it.id] ?? 0}
+      {@const shown = all[cur] ?? it}
       <section class="slide" data-i={i} use:watch style:--ar={Math.max(9 / 16, (it.width ?? 0) / (it.height || 1))}>
         <div class="carousel" onscroll={onSwipe(it.id)}>
           {#each all as m, j (m.id)}
@@ -370,7 +387,7 @@
         {/if}
 
         <div class="info">
-          {#if it.title}<strong>{it.title}</strong>{/if}
+          {#if shown.title}<strong>{shown.title}</strong>{/if}
           <span class="meta">
             {date(it.date)}{#if it.uses} · {fill(s.feedUses, { n: it.uses })}{/if}
             {#if it.album}<Badge size="sm" variant="solid"><Layers size={12} aria-hidden="true" /> {(part[it.id] ?? 0) + 1}/{it.album}</Badge>{/if}
@@ -381,9 +398,9 @@
             {/if}
           </span>
           {#if parts(it).some((m) => !m.file && m.kind !== "photo")}<span class="meta">{s.feedTooBig}</span>{/if}
-          {#if it.tags.length}
+          {#if shown.tags.length}
             <span class="tags">
-              {#each it.tags.slice(0, 5) as t (t)}<button onclick={() => onTag(t)}>#{t}</button>{/each}
+              {#each shown.tags.slice(0, 5) as t (t)}<button onclick={() => onTag(t)}>#{t}</button>{/each}
             </span>
           {/if}
           {#if p && !who}
@@ -404,6 +421,7 @@
           {#if !p || who}
             <IconButton label={s.feedDetails} variant="secondary" onclick={() => (selected = it.id)}><Info size={20} /></IconButton>
             <IconButton label={s.send} variant="secondary" loading={busy === `send:${it.id}`} onclick={() => send(it.id)}><Send size={20} /></IconButton>
+            <IconButton label={s.shareFile} variant="secondary" loading={busy === `file:${it.id}`} onclick={() => shareFile(it)}><Share size={20} /></IconButton>
           {/if}
           {#if who === "partner"}
             <IconButton label={s.feedTake} variant="secondary" loading={busy === `take:${it.id}`} disabled={taken[it.id]} onclick={() => take(it.id)}>

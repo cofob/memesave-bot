@@ -25,12 +25,7 @@ func runPair(p *progress) error {
 	if err != nil {
 		return err
 	}
-	var m struct {
-		Moods []mood `json:"moods"`
-	}
-	if err := call("GET", "/moods", nil, &m); err != nil {
-		log.Print("moods: ", err) // 404: no anchors, the result has no moods
-	}
+	moods := fetchMoods()
 	var raw json.RawMessage
 	if err := call("GET", "/analytics", nil, &raw); err != nil {
 		return err
@@ -39,10 +34,21 @@ func runPair(p *progress) error {
 	if err := json.Unmarshal(raw, &a); err != nil {
 		log.Print("analytics: ", err)
 	}
-	r := analyzePair(memes, vectors, m.Moods, a.Shared.HourSim, p)
+	r := analyzePair(memes, vectors, moods, a.Shared.HourSim, p)
 	r.Analytics = raw
 	r.Images = upload(p, "write", pairCharts(&a, r))
 	return finish(r)
+}
+
+// fetchMoods gets the mood anchors; none on an error (404: no AI), and the result has no moods.
+func fetchMoods() []mood {
+	var m struct {
+		Moods []mood `json:"moods"`
+	}
+	if err := call("GET", "/moods", nil, &m); err != nil {
+		log.Print("moods: ", err)
+	}
+	return m.Moods
 }
 
 type mood struct {

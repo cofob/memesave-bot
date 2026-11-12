@@ -16,6 +16,7 @@ import { keywordSearch } from "./search/hybrid";
 import { cachedFastSearch } from "./search/inline";
 import { userStats } from "./stats";
 import { toDescription } from "./ingest/describe";
+import { editMeme, parseEdit } from "./ingest/edit";
 import { brief, detail, downloadLinks, kindOf, LIMITS, listMemes, ownMemes, retryMeme, saveUpload, tagCounts } from "./webapp";
 
 // MCP server for outside AI agents: the user's library over OAuth (src/oauth.ts).
@@ -309,6 +310,38 @@ function buildServer(env: Env, user: User, scopes: string[]) {
       if (typeof audio === "string") return fail(audio);
       const error = await attachAudio(env, m, audio);
       return error ? fail(error) : ok({ ok: true });
+    },
+  );
+
+  server.registerTool(
+    "edit_meme",
+    {
+      description: "Change fields of a ready meme (the others stay); search uses the new text at once.",
+      inputSchema: z.object({
+        id: z.string(),
+        title: z.string().min(1).max(120).optional(),
+        ocr_text: z.string().optional(),
+        speech_text: z.string().optional(),
+        language: z.string().max(20).optional().describe("ISO 639-1 code or 'none'"),
+        description: z.string().optional(),
+        meme_context: z.string().optional(),
+        cultural_meaning: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+        search_phrases: z.array(z.string()).optional(),
+        porn: z.boolean().optional(),
+        caption: z.string().max(4096).optional(),
+        source: z.string().max(500).optional(),
+        saved_at: z.number().int().nullable().optional().describe("unix time when it was saved at the source"),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ id, ...fields }) => {
+      const m = await own(id);
+      if (!m) return fail("meme not found");
+      const patch = parseEdit(Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)));
+      if (typeof patch === "string") return fail(patch);
+      const res = await editMeme(env, m, patch);
+      return typeof res === "string" ? fail(res) : ok(await detail(env, res));
     },
   );
 

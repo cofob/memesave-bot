@@ -270,13 +270,18 @@ async function describeGroup(env: Env, m: Meme, group: Meme[], from: number) {
   }
 }
 
+/** Embeds the saved description of the meme (its text vector). */
+export async function embedText(env: Env, m: Meme) {
+  const [values] = await embed(env, [docText(fromRow(m))], "search_document", { userId: m.user_id, memeId: m.id, kind: "embed_text" });
+  await upsertVectors(env, [{ id: `${m.id}:t`, values, namespace: namespace(m.user_id), metadata: { kind: m.kind } }]);
+}
+
 /** Stage 3: embeds the saved description, marks the meme ready and updates the status message. */
 export async function finishStage(env: Env, memeId: string) {
   const m = await getMeme(env.DB, memeId);
   if (!m || m.status !== "describing" || m.title === null) return;
   const d = fromRow(m);
-  const [values] = await embed(env, [docText(d)], "search_document", { userId: m.user_id, memeId, kind: "embed_text" });
-  await upsertVectors(env, [{ id: `${memeId}:t`, values, namespace: namespace(m.user_id), metadata: { kind: m.kind } }]);
+  await embedText(env, m);
   await setStatus(env.DB, memeId, "ready");
 
   const tags = d.tags.slice(0, 8).map((x) => "#" + esc(x.replace(/[^\p{L}\p{N}_]+/gu, "_"))).join(" ");

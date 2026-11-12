@@ -397,6 +397,7 @@ type result struct {
 	} `json:"similarity"`
 	TagMap    []tagPoint      `json:"tagmap"`
 	Trends    trends          `json:"trends"`
+	Moods     *pairMoods      `json:"moods,omitempty"`     // one owner (a, overall[0], top[0]); none without anchors
 	Analytics json.RawMessage `json:"analytics,omitempty"` // the SQL stats snapshot (GET /analytics)
 	Images    []string        `json:"images"`
 }
@@ -486,7 +487,7 @@ func interestTrends(memes []meme, ids []string, labels []int, groups int) trends
 }
 
 // analyze builds the result from the memes and their vectors.
-func analyze(memes []meme, vectors map[string][]float32, p *progress) *result {
+func analyze(memes []meme, vectors map[string][]float32, moods []mood, p *progress) *result {
 	tagsOf := map[string][]string{}
 	r := &result{CreatedAt: time.Now().Unix(), Count: len(memes), Memes: make([][4]any, len(memes)), Images: []string{}}
 	for i, m := range memes {
@@ -536,6 +537,19 @@ func analyze(memes []meme, vectors map[string][]float32, p *progress) *result {
 	r.Text = mapOut{IDs: txt.ids, XY: coords(txt.xy), XYZ: txt.xyz, Labels: labels}
 	r.Clusters = groups
 	r.Trends = interestTrends(memes, txt.ids, labels, len(groups))
+	created := map[string]int64{}
+	for _, m := range memes {
+		created[m.ID] = m.Created
+	}
+	monthOf, seen, months := make([]string, len(txt.ids)), map[string]bool{}, []string{}
+	for i, id := range txt.ids {
+		monthOf[i] = time.Unix(created[id], 0).UTC().Format("2006-01")
+		if !seen[monthOf[i]] {
+			seen[monthOf[i]], months = true, append(months, monthOf[i])
+		}
+	}
+	sort.Strings(months)
+	r.Moods, _ = moodsOf(txt.x, make([]int, len(txt.ids)), monthOf, months[max(0, len(months)-12):], moods)
 	r.PCA.Image, r.PCA.Text = ratios(img.pca), ratios(txt.pca)
 	r.Duplicates = duplicates(img, txt, nil)
 	r.Outliers = outliers(txt)

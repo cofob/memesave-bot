@@ -14,15 +14,15 @@
     onBack: () => void;
     onTag: (tag: string) => void;
     onOpen: (id: string) => void;
+    tab?: string;
   }
-  let { me, onBack, onTag, onOpen }: Props = $props();
+  let { me, onBack, onTag, onOpen, tab = $bindable("mine") }: Props = $props();
 
   // Tabs only for admins: their own stats and all users.
   const tabs = [
     { id: "mine", label: s.anMine },
     { id: "admin", label: s.anAdmin },
   ];
-  let tab = $state("mine");
   let admin = $state<AdminAnalytics | null>(null);
   let error = $state(false);
 

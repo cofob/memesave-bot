@@ -26,6 +26,13 @@ export function toQuery(f: Filters): Record<string, string> {
   return q;
 }
 
+export function fromQuery(q: URLSearchParams): Filters {
+  const f = emptyFilters();
+  for (const g of groups) f[g] = q.get(g)?.split(",").filter(Boolean) ?? [];
+  f.added = q.get("added") ?? "";
+  return f;
+}
+
 const orientOf = (m: MemeBrief) =>
   !m.width || !m.height ? null : m.width > m.height * 1.1 ? "landscape" : m.height > m.width * 1.1 ? "portrait" : "square";
 const durOf = (m: MemeBrief) =>

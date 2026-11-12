@@ -70,12 +70,34 @@ const schemas = {
     },
     required: ["id", "kind", "status", "tags", "thumb", "has_text", "created_at"],
   },
+  MemeEdit: {
+    type: "object",
+    description: "Fields to change; the others stay. Tags are lowercased; empty items are dropped.",
+    additionalProperties: false,
+    minProperties: 1,
+    properties: {
+      title: { type: "string", minLength: 1, maxLength: 120 },
+      ocr_text: { type: "string" },
+      speech_text: { type: "string" },
+      language: { type: "string", maxLength: 20, description: "ISO 639-1 code or 'none'." },
+      description: { type: "string" },
+      meme_context: { type: "string" },
+      cultural_meaning: { type: "string" },
+      tags: { type: "array", items: { type: "string" } },
+      search_phrases: { type: "array", items: { type: "string" } },
+      porn: { type: "boolean" },
+      caption: { type: "string", maxLength: 4096 },
+      source: { type: "string", maxLength: 500 },
+      saved_at: nullable("integer", "Unix time when it was saved at the source."),
+    },
+  },
   MemeDetail: {
     allOf: [
       ref("MemeBrief"),
       {
         type: "object",
         properties: {
+          search_phrases: { type: "array", items: { type: "string" } },
           caption: nullable("string", "The user's Telegram caption."),
           source: nullable("string", "Where it came from: the imported link or the forward origin."),
           saved_at: nullable("integer", "Unix time when the user saved it at the source (e.g. the TikTok like), when the uploader sent it."),
@@ -85,7 +107,7 @@ const schemas = {
           meme_context: nullable("string"),
           cultural_meaning: nullable("string"),
           file: nullable("string", "Signed URL of the original file (null when Telegram cannot give it: videos over 20 MB without an R2 copy)."),
-          album: { type: "array", items: ref("MemeBrief"), description: "All memes of its album in order; empty for a single meme." },
+          album: { type: "array", items: ref("MemeBrief"), description: "All memes of its album in order, each with its file URL; empty for a single meme." },
         },
       },
     ],
@@ -228,6 +250,10 @@ Plain \`GET /memes\` lists an album as its first meme with \`album\` = its size;
         get: memeOps("Get a meme", "All metadata of a meme with signed file URLs and its album.", {
           parameters: [idParam],
           responses: { "200": ok("The meme.", ref("MemeDetail")), ...COMMON, ...NOT_FOUND },
+        }),
+        patch: memeOps("Edit a meme", "Changes the given fields of a ready meme; search uses the new text at once. Needs a write token.", {
+          requestBody: body(ref("MemeEdit")),
+          responses: { "200": ok("The edited meme.", ref("MemeDetail")), "400": err("Bad fields."), "409": err("The meme is not ready."), ...COMMON, ...NOT_FOUND },
         }),
         delete: memeOps("Delete a meme", "Deletes the meme with its files and search index. Cannot be undone. Needs a write token."),
       },

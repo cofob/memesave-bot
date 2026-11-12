@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { Button, Dialog, Drawer, Heading, IconButton, Inline, Spinner, Stack, Tag, Text, VideoPlayer } from "@cofob2/design-system-svelte";
-  import { Check, ChevronLeft, ChevronRight, Clapperboard, FileDown, Layers, Link, Music, RefreshCw, Send, Share2, Trash2, VolumeX } from "@lucide/svelte";
+  import { Button, Checkbox, Dialog, Drawer, Heading, IconButton, Inline, Spinner, Stack, Tag, Text, Textarea, TextField, VideoPlayer } from "@cofob2/design-system-svelte";
+  import { Check, ChevronLeft, Pencil, ChevronRight, Clapperboard, FileDown, Layers, Link, Music, RefreshCw, Send, Share, Share2, Trash2, VolumeX } from "@lucide/svelte";
   import { onMount, untrack } from "svelte";
   import { api, type MemeBrief, type MemeDetail } from "./api";
   import { s } from "./strings";
+  import { shareFiles } from "./share";
   import { confirm, saveFile, tg } from "./telegram";
   import { viewing } from "./viewing.svelte";
 
@@ -34,7 +35,7 @@
   });
   const kindLabel = $derived(meme ? (meme.kind === "photo" ? s.f_kind_photo : meme.kind === "video" ? s.video : s.gif) : "");
   const title = $derived(meme?.title ?? kindLabel);
-  let busy = $state<"share" | "link" | "fileLink" | "send" | "album" | "clip" | "clipFile" | "sound" | "delete" | "retry" | null>(null);
+  let busy = $state<"share" | "file" | "link" | "fileLink" | "send" | "album" | "clip" | "clipFile" | "sound" | "edit" | "delete" | "retry" | null>(null);
   let soundInput = $state<HTMLInputElement>();
   let copied = $state<"link" | "fileLink" | null>(null);
   let failed = $state(false);
@@ -54,6 +55,41 @@
       : [],
   );
 
+  // Editing: text fields (rows 0: one line; lists one item per line) and the porn flag.
+  const FIELDS = [
+    ["title", s.fieldTitle, 0],
+    ["tags", s.tags, 3],
+    ["ocr_text", s.text, 4],
+    ["speech_text", s.speech, 4],
+    ["description", s.description, 5],
+    ["meme_context", s.context, 4],
+    ["cultural_meaning", s.meaning, 4],
+    ["search_phrases", s.fieldPhrases, 4],
+    ["caption", s.fieldCaption, 3],
+    ["source", s.source, 0],
+    ["language", s.f_lang, 0],
+  ] as const;
+  type Key = (typeof FIELDS)[number][0];
+  const LISTS: Key[] = ["tags", "search_phrases"];
+  const fieldsOf = (m: MemeDetail) =>
+    Object.fromEntries(FIELDS.map(([k]) => [k, LISTS.includes(k) ? (m[k] as string[]).join("\n") : ((m[k] as string | null) ?? "")])) as Record<Key, string>;
+  let draft = $state<(Record<Key, string> & { porn: boolean }) | null>(null);
+  // Another album meme: leave editing.
+  $effect(() => {
+    id;
+    draft = null;
+  });
+
+  const saveEdit = () =>
+    run("edit", async () => {
+      const old = fieldsOf(meme!);
+      const patch: Record<string, string | string[] | boolean> = {};
+      for (const [k] of FIELDS) if (draft![k] !== old[k]) patch[k] = LISTS.includes(k) ? draft![k].split("\n") : draft![k];
+      if (draft!.porn !== meme!.porn) patch.porn = draft!.porn;
+      if (Object.keys(patch).length) meme = await api.edit(id, patch);
+      draft = null;
+    });
+
   async function run(action: NonNullable<typeof busy>, fn: () => Promise<void>) {
     busy = action;
     try {
@@ -67,6 +103,14 @@
     }
   }
 
+  // The system share sheet: an album with sound as its clip (when it can be made), else its files.
+  const shareFile = () =>
+    run("file", async () => {
+      const m = meme!;
+      const files = () => (m.album.length ? m.album : [m]).flatMap((a) => (a.file ? [a.file] : []));
+      const urls = async () => (m.audio ? await api.clipLink(m.id).then((c) => [c.url], files) : files());
+      if (!(await shareFiles(m.album[0]?.id ?? m.id, m.title ?? m.id, urls))) tg ? tg.showAlert(s.shareAgain) : alert(s.shareAgain);
+    });
   const share = () =>
     run("share", async () => {
       if (!tg?.isVersionAtLeast("8.0")) return send();
@@ -197,6 +241,18 @@
 {/snippet}
 
 {#snippet info(m: MemeDetail)}
+  {#if draft}
+    <Stack gap="sm">
+      {#each FIELDS as [k, label, rows] (k)}
+        {#if rows}
+          <Textarea {label} {rows} description={LISTS.includes(k) ? s.onePerLine : undefined} bind:value={draft[k]} />
+        {:else}
+          <TextField {label} bind:value={draft[k]} />
+        {/if}
+      {/each}
+      <Checkbox label={s.f_porn} bind:checked={draft.porn} />
+    </Stack>
+  {:else}
   <Stack gap="md">
     {#if m.album.length}
       <div class="album">
@@ -222,6 +278,7 @@
       </Stack>
     {/each}
   </Stack>
+  {/if}
 {/snippet}
 
 {#snippet body()}
@@ -244,6 +301,19 @@
 
 {#snippet actions()}
   <Inline gap="sm" wrap>
+    {#if draft}
+      <Button onclick={saveEdit} loading={busy === "edit"}>
+        {#snippet leading()}<Check size={16} aria-hidden="true" />{/snippet}
+        {s.save}
+      </Button>
+      <Button variant="secondary" onclick={() => (draft = null)} disabled={busy === "edit"}>{s.cancel}</Button>
+    {:else}
+    {#if meme?.status === "ready" && own}
+      <Button variant="secondary" onclick={() => (draft = { ...fieldsOf(meme!), porn: meme!.porn })}>
+        {#snippet leading()}<Pencil size={16} aria-hidden="true" />{/snippet}
+        {s.edit}
+      </Button>
+    {/if}
     {#if meme?.status === "failed" && own}
       <Button onclick={retry} loading={busy === "retry"}>
         {#snippet leading()}<RefreshCw size={16} aria-hidden="true" />{/snippet}
@@ -256,6 +326,10 @@
         {s.share}
       </Button>
     {/if}
+    <Button variant="secondary" onclick={shareFile} loading={busy === "file"} disabled={!meme}>
+      {#snippet leading()}<Share size={16} aria-hidden="true" />{/snippet}
+      {s.shareFile}
+    </Button>
     {#if own}
       <Button variant="secondary" onclick={() => copyLink("link")} loading={busy === "link"} disabled={!meme}>
         {#snippet leading()}{#if copied === "link"}<Check size={16} aria-hidden="true" />{:else}<Link size={16} aria-hidden="true" />{/if}{/snippet}
@@ -306,6 +380,7 @@
         {#snippet leading()}<Trash2 size={16} aria-hidden="true" />{/snippet}
         {s.delete}
       </Button>
+    {/if}
     {/if}
   </Inline>
 {/snippet}
