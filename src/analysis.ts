@@ -291,7 +291,7 @@ export async function handleAnalysis(req: Request, env: Env): Promise<Response> 
     return json({ ...analytics, stats, lang: user.lang === "ru" ? "ru" : "en" });
   }
   if (action === "moods" && m === "GET") {
-    const moods = await analysisMoods(env, a, owners).catch((e) => (console.warn("moods failed", e), null));
+    const moods = await analysisMoods(env, a, owners).catch((e) => (console.error("moods failed", e), null));
     return moods ? json({ moods }) : json({ error: "no moods" }, 404);
   }
   if (action === "result" && m === "GET") {

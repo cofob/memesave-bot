@@ -29,12 +29,13 @@ beforeEach(() => {
     const url = String(input);
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
     calls.push({ url, body });
+    if (url.endsWith("/embeddings") && body.input.length > 50) return Response.json({ error: { message: "too many inputs" } }, { status: 400 }); // as the real API
     if (url.endsWith("/embeddings")) return Response.json({ data: body.input.map((_: string, index: number) => ({ index, embedding: [index % 2, 1] })), usage: { cost: 0.0001 } });
     if (url.includes("openrouter.ai")) {
       const name = body.response_format.json_schema.name;
       const reply =
         name === "moods"
-          ? { moods: Array.from({ length: 10 }, (_, i) => ({ key: `m${i}`, emoji: "🙂", name_en: `M${i}`, name_ru: `Н${i}`, phrases: ["a", "b", "c"] })) }
+          ? { moods: Array.from({ length: 10 }, (_, i) => ({ key: `m${i}`, emoji: "🙂", name_en: `M${i}`, name_ru: `Н${i}`, phrases: ["a", "b", "c", "d", "e", "f"] })) }
           : name === "clusters"
             ? { clusters: [{ id: 0, name: "Cats", summary: "Cats." }] }
             : facts(body.messages[0].content.includes("Russian") ? "Ру" : "En");
@@ -127,7 +128,7 @@ describe("pair analysis", () => {
     expect(moods.moods).toHaveLength(10);
     expect(moods.moods[0]).toMatchObject({ key: "m0", name_ru: "Н0", vector: [expect.any(Number), expect.any(Number)] });
     expect(Math.hypot(...moods.moods[0].vector)).toBeCloseTo(1);
-    expect(calls.filter((c) => c.url.includes("openrouter.ai"))).toHaveLength(2); // one LLM call, one embedding call
+    expect(calls.filter((c) => c.url.includes("openrouter.ai"))).toHaveLength(3); // one LLM call, 60 phrases in two embedding calls
     const llm = calls.find((c) => c.body.response_format?.json_schema.name === "moods")!;
     expect(llm.body.messages[0].content).toMatch(/Russian, English|English, Russian/); // meme language ru, UI en
     calls = [];
@@ -174,7 +175,7 @@ describe("pair analysis", () => {
     const { id } = (await startPairAnalysis(e, p.id, 401, { llm: false })) as any;
     const { moods } = await (await call(id, "moods")).json<any>();
     expect(moods.map((m: any) => m.key)).toEqual(DEFAULT_MOODS.map((m) => m.key));
-    expect(calls.map((c) => c.url.split("/").pop())).toEqual(["embeddings"]);
+    expect(calls.map((c) => c.url.split("/").pop())).toEqual(["embeddings", "embeddings"]); // 72 phrases in chunks of 50
     await db.prepare("DELETE FROM pairs WHERE id = ?").bind(p.id).run(); // e.g. an account deleted
     expect((await call(id, "analytics")).status).toBe(403);
   });

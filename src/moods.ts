@@ -79,9 +79,13 @@ async function llmMoods(env: Env, payer: number, users: number[], kind: string):
   return moods.length >= 6 ? moods : null;
 }
 
-/** Anchor = the normalized mean of its phrase vectors; all phrases in one embedding call. */
+const EMBED_CHUNK = 50; // the embedding API refuses long batches (an LLM set is 100+ phrases)
+
+/** Anchor = the normalized mean of its phrase vectors. */
 async function anchors(env: Env, payer: number, moods: Mood[], kind: string): Promise<Anchor[]> {
-  const vectors = await embed(env, moods.flatMap((m) => m.phrases), "search_query", { userId: payer, kind });
+  const phrases = moods.flatMap((m) => m.phrases);
+  const chunks = Array.from({ length: Math.ceil(phrases.length / EMBED_CHUNK) }, (_, i) => phrases.slice(i * EMBED_CHUNK, (i + 1) * EMBED_CHUNK));
+  const vectors = (await Promise.all(chunks.map((c) => embed(env, c, "search_query", { userId: payer, kind })))).flat();
   let i = 0;
   return moods.map(({ phrases, ...m }) => {
     const sum = vectors.slice(i, (i += phrases.length)).reduce((s, v) => s.map((x, j) => x + v[j]));
@@ -101,8 +105,12 @@ export async function analysisMoods(env: Env, a: Analysis, users: number[]): Pro
   const payer = await getUser(env.DB, a.user_id);
   if (!payer || !(await canUseAi(env.DB, payer)).ok) return null;
   const kind = users.length > 1 ? "pair_moods" : "analysis_moods";
-  const moods = (a.llm && (await llmMoods(env, payer.id, users, kind).catch((e) => (console.warn("moods failed", e), null)))) || DEFAULT_MOODS;
-  const result = await anchors(env, payer.id, moods, kind);
+  const moods = (a.llm && (await llmMoods(env, payer.id, users, kind).catch((e) => (console.error("llm moods", e), null)))) || DEFAULT_MOODS;
+  const result = await anchors(env, payer.id, moods, kind).catch(async (e) => {
+    if (moods === DEFAULT_MOODS) throw e;
+    console.error("mood anchors", e); // e.g. odd LLM phrases: the default moods instead
+    return anchors(env, payer.id, DEFAULT_MOODS, kind);
+  });
   await env.MEDIA.put(key, JSON.stringify(result), { httpMetadata: { contentType: "application/json" } });
   return result;
 }
