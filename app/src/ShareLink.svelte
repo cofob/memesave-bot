@@ -1,11 +1,14 @@
 <script lang="ts">
   // Copy / revoke the public link of the finished analysis (of the user, or of `pair`).
-  import { Button, Inline } from "@cofob2/design-system-svelte";
+  import { Button, Checkbox, Inline } from "@cofob2/design-system-svelte";
   import { Check, Link, Unlink } from "@lucide/svelte";
   import { api } from "./api";
   import { s } from "./strings";
 
-  let { pair, link = $bindable() }: { pair?: string; link?: string | null } = $props();
+  // porn: there is porn stats to share (a different choice makes a new link).
+  let { pair, porn = false, link = $bindable() }: { pair?: string; porn?: boolean; link?: string | null } = $props();
+  let normal = $state(true);
+  let withPorn = $state(false);
   let busy = $state(false);
   let copied = $state(false);
 
@@ -19,7 +22,7 @@
   }
   const copy = () =>
     act(async () => {
-      link = (await api.analysisShare(pair)).url;
+      link = (await api.analysisShare(pair, { normal, porn: porn && withPorn })).url;
       await navigator.clipboard.writeText(link);
       copied = true;
       setTimeout(() => (copied = false), 2000);
@@ -33,7 +36,9 @@
 
 <section class="card">
   <Inline gap="sm" align="center" wrap>
-    <Button size="sm" variant="secondary" onclick={copy} loading={busy}>
+    <Checkbox bind:checked={normal} label={s.anShareNormal} />
+    {#if porn}<Checkbox bind:checked={withPorn} label={s.anSharePorn} />{/if}
+    <Button size="sm" variant="secondary" onclick={copy} loading={busy} disabled={!normal && !(porn && withPorn)}>
       {#snippet leading()}{#if copied}<Check size={16} aria-hidden="true" />{:else}<Link size={16} aria-hidden="true" />{/if}{/snippet}
       {copied ? s.copied : s.anShare}
     </Button>

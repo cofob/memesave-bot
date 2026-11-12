@@ -2,7 +2,7 @@
   import { Alert, Button, Checkbox, EmptyState, Heading, IconButton, Inline, Progress, Spinner, Stack, Table, Tabs } from "@cofob2/design-system-svelte";
   import { ArrowLeft, Sparkles } from "@lucide/svelte";
   import { onDestroy, untrack } from "svelte";
-  import { api, type AdminAnalytics, type AnalysisResult, type AnalysisRun, type Me } from "./api";
+  import { api, type AdminAnalytics, type AnalysisResult, type AnalysisRun, type Me, type PornSide, type SharedParts } from "./api";
   import Chart from "./Chart.svelte";
   import { autoHeight, bars, columns, hexAlpha, isDark, PALETTE, cumulative, dayRange, esc, heatmap, line, money, stacked, topGroups } from "./charts";
   import Embeddings from "./Embeddings.svelte";
@@ -17,9 +17,11 @@
     onOpen?: (id: string) => void;
     tab?: string;
     shared?: AnalysisResult; // a public link: read-only, no spend
+    parts?: SharedParts; // what the link shares (an old one: regular stats only)
   }
-  let { me, onBack, onTag = () => {}, onOpen = () => {}, tab = $bindable("mine"), shared: sharedProp }: Props = $props();
+  let { me, onBack, onTag = () => {}, onOpen = () => {}, tab = $bindable("mine"), shared: sharedProp, parts: sharedParts }: Props = $props();
   const shared = untrack(() => sharedProp); // a fixed snapshot
+  const parts = shared ? (untrack(() => sharedParts) ?? { normal: true, porn: false }) : { normal: true, porn: true };
 
   // Tabs only for admins: their own stats and all users.
   const tabs = [
@@ -38,7 +40,8 @@
   let starting = $state(false);
   let llm = $state(true);
   let timer: ReturnType<typeof setTimeout>;
-  const data = $derived(result?.analytics ?? null);
+  const data = $derived(parts.normal ? (result?.analytics ?? null) : null);
+  const porn = $derived(parts.porn && !me?.hide_porn ? (result?.analytics?.porn ?? null) : null);
   const stats = $derived(data?.stats ?? null);
 
   async function refresh() {
@@ -205,6 +208,25 @@
     };
   });
 
+  const pornCharts = $derived.by(() => {
+    if (!porn) return null;
+    const months = porn.months.map((m) => m.month);
+    const top = porn.sources;
+    return {
+      share: line(months, porn.months.map((m) => Math.round((1000 * m.porn) / (m.n || 1)) / 10), s.anPornShareMonth, (v) => `${v}%`),
+      perMonth: columns(months, porn.months.map((m) => m.porn), s.anPornMonth),
+      heat: heatmap(hours, weekdays, porn.heatmap.map((c) => [c.h, (c.wd + 6) % 7, c.n] as [number, number, number]), s.anPornHeat),
+      tags: porn.tags.length ? bars(porn.tags.slice(0, 30).map((x) => ({ name: x.tag, value: x.count })), s.anPornTags) : null,
+      sources:
+        !shared && top.length
+          ? {
+              ...bars(top.map((t) => ({ name: t.name, value: t.n })), s.anPornSources),
+              tooltip: { trigger: "item", formatter: (p: any) => `${esc(p.name)}<br>${fill(s.anSourceUses, { n: p.value, uses: top.find((t) => t.name === p.name)?.uses ?? 0 })}` },
+            }
+          : null,
+    };
+  });
+
   const spendCharts = $derived.by(() => {
     if (!data) return null;
     const sp = data.spend;
@@ -282,6 +304,7 @@
 {#snippet mine()}
   <Stack gap="lg">
     {#if !shared}{@render controls()}{/if}
+    {#if result && !data && porn}{@render pornSection(porn)}{/if}
     {#if result && data && overview && tagCharts && spendCharts && sourceCharts}
       {@const u = data.uses}
       {@render section(s.anOverview, s.anIntro_overview)}
@@ -361,6 +384,8 @@
         <p class="hint">{s.noTags}</p>
       {/if}
 
+      {#if porn}{@render pornSection(porn)}{/if}
+
       {#if !shared}{@render section(s.anSpend, s.anIntro_spend)}{/if}
       {#if !shared && data.spend.days.length}
         <div class="tiles">
@@ -386,6 +411,25 @@
   </Stack>
 {/snippet}
 
+<!-- Porn stats: hidden with "hide porn" and when there is no porn. -->
+{#snippet pornSection(p: PornSide)}
+  {#if pornCharts}
+    {@render section(s.anPorn, s.anIntro_porn)}
+    <div class="tiles">
+      {@render tile(s.anPornCount, p.porn.toLocaleString())}
+      {@render tile(s.anPornShare, `${Math.round((1000 * p.porn) / (p.ready || 1)) / 10}%`)}
+      {#if p.comics}{@render tile(s.anPornComics, p.comics.toLocaleString())}{/if}
+    </div>
+    <div class="grid">
+      {@render card(s.anPornShareMonth, pornCharts.share)}
+      {@render card(s.anPornMonth, pornCharts.perMonth)}
+      {@render card(s.anPornHeat, pornCharts.heat, "300px", undefined, s.anHint_heatmap)}
+      {#if pornCharts.tags}{@render card(s.anPornTags, pornCharts.tags, undefined, (c) => onTag(c.name), s.anTagHint)}{/if}
+      {#if pornCharts.sources}{@render card(s.anPornSources, pornCharts.sources)}{/if}
+    </div>
+  {/if}
+{/snippet}
+
 <!-- Run state: progress, the start form with the AI choice, adding AI names later. -->
 {#snippet controls()}
   {#if loading}
@@ -406,7 +450,7 @@
       <EmptyState title={s.anRun} description={s.anRunHint} />
     {/if}
     {#if result && ready}
-      <ShareLink bind:link={ready.share} />
+      <ShareLink porn={!!result.analytics?.porn && !me?.hide_porn} bind:link={ready.share} />
       <span class="hint">{fill(s.anComputed, { date: date(ready.created_at), n: result.count, next: date(ready.fresh_until) })}</span>
     {/if}
     {#if canStart}

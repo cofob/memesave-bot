@@ -1,0 +1,23 @@
+/* Porn media under the nsfw action: blurred with an "18+" label until a tap. */
+.nsfw {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+.nsfw img,
+.nsfw video {
+  filter: blur(24px);
+}
+.nsfw::after {
+  content: "18+";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  font-size: var(--cf-font-size-sm);
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 4px #000;
+  pointer-events: none;
+}

@@ -1,11 +1,12 @@
-import { GrammyError, type Api, type Composer } from "grammy";
+import { Api, GrammyError, type Composer } from "grammy";
 import type { ChatMemberUpdated, InlineKeyboardButton } from "grammy/types";
 import { botApi } from "./botapi";
 import type { Ctx } from "./bot";
-import { loadMemes, userLang, type Meme } from "./db";
+import { userLang, type Meme } from "./db";
 import type { Env } from "./env";
 import { esc, t, type Lang } from "./i18n";
-import { sendAlbum } from "./search/deliver";
+import { sendAlbum, sendMeme } from "./search/deliver";
+import { shareLinks } from "./share";
 import { sendPostAudio } from "./audio";
 
 // Auto-posting: each message with memes (a single meme or a media group) is saved as a post; once all its memes
@@ -19,6 +20,11 @@ export interface Channel {
   enabled: number;
   caption: string;
   storage: number; // 1: silent uploads for inline go here (src/search/tgupload.ts)
+  porn: "all" | "only" | "none";
+  kinds: string; // comma list of kinds; '' = all
+  tags_in: string; // newline list: only memes with one of them; '' = all
+  tags_out: string; // newline list: never memes with one of them
+  comics: "off" | "media" | "link"; // link: the cover with a button to the public page
 }
 
 interface Post {
@@ -54,14 +60,14 @@ export async function addToPost(db: D1Database, userId: number, p: { memeId: str
 export async function albumMemes(db: D1Database, memeId: string) {
   const { results } = await db
     .prepare(
-      `SELECT m.*, p.updated_at AS album_updated, p.layout AS album_layout FROM post_items i JOIN posts p ON p.id = i.post_id
+      `SELECT m.*, p.updated_at AS album_updated, p.layout AS album_layout, p.id AS album_post FROM post_items i JOIN posts p ON p.id = i.post_id
        JOIN post_items a ON a.post_id = p.id JOIN memes m ON m.id = a.meme_id
        WHERE i.meme_id = ? AND p.media_group_id IS NOT NULL
          AND p.id = (SELECT q.id FROM post_items j JOIN posts q ON q.id = j.post_id WHERE j.meme_id = i.meme_id AND q.media_group_id IS NOT NULL ORDER BY q.created_at DESC, q.rowid DESC LIMIT 1)
        ORDER BY a.position`,
     )
     .bind(memeId)
-    .all<Meme & { album_updated: number; album_layout: string }>();
+    .all<Meme & { album_updated: number; album_layout: string; album_post: string }>();
   return results;
 }
 
@@ -95,6 +101,23 @@ export function renderCaption(template: string, post: Pick<Post, "caption">, mem
     .slice(0, 1024);
 }
 
+const tagList = (s: string | null) => (s ?? "").split("\n").map((x) => x.trim().toLowerCase()).filter(Boolean);
+const hasTag = (m: Meme, tags: string) => tagList(m.tags).some((x) => tagList(tags).includes(x));
+
+/** The meme passes the channel's porn, kind and include-tag filters. */
+const passes = (ch: Channel, m: Meme) =>
+  (ch.porn === "all" || (ch.porn === "only") === !!m.porn) && (!ch.kinds || ch.kinds.split(",").includes(m.kind)) && (!ch.tags_in || hasTag(m, ch.tags_in));
+
+/** The channel takes this meme of a post. */
+export const matches = (ch: Channel, m: Meme) => passes(ch, m) && !hasTag(m, ch.tags_out);
+
+/** A comic goes whole: one page passes, no page has an exclude tag, and with porn "none" no page is porn. */
+export const comicMatches = (ch: Channel, pages: Meme[]) =>
+  ch.comics !== "off" && pages.some((m) => passes(ch, m)) && !pages.some((m) => hasTag(m, ch.tags_out) || (ch.porn === "none" && m.porn));
+
+const postMemes = async (db: D1Database, postId: string) =>
+  (await db.prepare("SELECT m.* FROM post_items i JOIN memes m ON m.id = i.meme_id WHERE i.post_id = ? ORDER BY i.position").bind(postId).all<Meme>()).results;
+
 /** The bot cannot post there any more: kicked, no rights, or the channel is gone. */
 export const lostChannel = (e: unknown) =>
   e instanceof GrammyError && (e.error_code === 403 || /chat not found|not enough rights|CHAT_WRITE_FORBIDDEN|have no rights/i.test(e.description));
@@ -111,43 +134,70 @@ export async function postJob(env: Env, postId: string) {
   const db = env.DB;
   const post = await db.prepare("SELECT * FROM posts WHERE id = ?").bind(postId).first<Post>();
   if (post?.status !== "pending") return;
-  const { results: items } = await db
-    .prepare("SELECT m.id, m.status FROM post_items i JOIN memes m ON m.id = i.meme_id WHERE i.post_id = ? ORDER BY i.position")
-    .bind(postId)
-    .all<{ id: string; status: string }>();
-  if (items.some((i) => i.status !== "ready" && i.status !== "failed")) return; // the last one queues this again
+  const memes = await postMemes(db, postId);
+  if (memes.some((m) => m.status !== "ready" && m.status !== "failed")) return; // the last one queues this again
   if (Math.floor(Date.now() / 1000) - post.updated_at < ALBUM_WAIT) {
     await env.JOBS.send({ type: "post", postId }, { delaySeconds: ALBUM_WAIT });
     return;
   }
   const { results: channels } = await db.prepare("SELECT * FROM channels WHERE user_id = ? AND enabled = 1").bind(post.user_id).all<Channel>();
-  if (!items.length || !channels.length || post.layout === "comic") { // a comic has too many pages for a channel
+  if (!memes.length || !channels.length) {
     await db.prepare("UPDATE posts SET status = 'skipped', updated_at = unixepoch() WHERE id = ? AND status = 'pending'").bind(postId).run();
     return;
   }
   const claimed = await db.prepare("UPDATE posts SET status = 'posting' WHERE id = ? AND status = 'pending' RETURNING id").bind(postId).first();
   if (!claimed) return;
 
-  const order = items.map((i) => i.id);
-  const memes = (await loadMemes(db, order)).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
   const api = botApi(env.BOT_TOKEN);
+  const comic = post.layout === "comic";
+  const lang = comic ? await userLang(db, post.user_id) : "en";
   const errors: string[] = [];
+  let sent = 0;
   for (const ch of channels) {
+    const picked = comic ? (comicMatches(ch, memes) ? memes : []) : memes.filter((m) => matches(ch, m));
+    if (!picked.length) continue;
+    const caption = renderCaption(ch.caption, post, picked) || undefined;
+    sent++;
     try {
-      await sendAlbum(env, api, ch.chat_id, memes, {}, renderCaption(ch.caption, post, memes) || undefined);
-      await sendPostAudio(env, api, ch.chat_id, memes[0].id);
+      if (comic && ch.comics === "link") {
+        const button = { text: t(lang, "channel_comic_read", { n: memes.length }), url: (await shareLinks(env, memes[0])).page };
+        await sendMeme(env, api, ch.chat_id, memes[0], { ...(caption && { caption }), reply_markup: { inline_keyboard: [[button]] } });
+        continue;
+      }
+      // A comic goes 10 pages per job (Telegram allows about 20 messages a minute per chat).
+      await sendAlbum(env, api, ch.chat_id, comic ? picked.slice(0, 10) : picked, {}, caption);
+      if (comic && picked.length > 10) await env.JOBS.send({ type: "post_comic", postId, chatId: ch.chat_id, from: 10 }, { delaySeconds: 30 });
+      if (picked[0] === memes[0]) await sendPostAudio(env, api, ch.chat_id, memes[0].id);
     } catch (e) {
       // No retry: a partly sent album must not be posted twice.
       errors.push(`${ch.chat_id}: ${String(e).slice(0, 200)}`);
-      if (lostChannel(e)) {
-        await db.prepare("UPDATE channels SET enabled = 0 WHERE chat_id = ?").bind(ch.chat_id).run();
-        await notifyOwner(env, ch.user_id, (lang) => t(lang, "channel_lost", { title: esc(ch.title ?? String(ch.chat_id)) }));
-      }
+      await channelFailed(env, ch, e);
     }
   }
-  await db.prepare("UPDATE posts SET status = 'posted', error = ?, updated_at = unixepoch() WHERE id = ?")
-    .bind(errors.length ? errors.join("\n").slice(0, 1000) : null, postId)
+  await db.prepare("UPDATE posts SET status = ?, error = ?, updated_at = unixepoch() WHERE id = ?")
+    .bind(sent ? "posted" : "skipped", errors.length ? errors.join("\n").slice(0, 1000) : null, postId)
     .run();
+}
+
+async function channelFailed(env: Env, ch: Channel, e: unknown) {
+  if (!lostChannel(e)) return;
+  await env.DB.prepare("UPDATE channels SET enabled = 0 WHERE chat_id = ?").bind(ch.chat_id).run();
+  await notifyOwner(env, ch.user_id, (lang) => t(lang, "channel_lost", { title: esc(ch.title ?? String(ch.chat_id)) }));
+}
+
+/** Queue job: the next 10 pages of a comic to a channel. No auto-retry on this Api: on 429 the same part waits for retry_after. */
+export async function postComicJob(env: Env, postId: string, chatId: number, from: number) {
+  const ch = await env.DB.prepare("SELECT * FROM channels WHERE chat_id = ? AND enabled = 1").bind(chatId).first<Channel>();
+  if (!ch) return;
+  const pages = await postMemes(env.DB, postId);
+  const next = (from: number, delaySeconds: number) => env.JOBS.send({ type: "post_comic", postId, chatId, from }, { delaySeconds });
+  try {
+    await sendAlbum(env, new Api(env.BOT_TOKEN), chatId, pages.slice(from, from + 10));
+  } catch (e) {
+    if (e instanceof GrammyError && e.parameters.retry_after) return next(from, e.parameters.retry_after + 1);
+    return channelFailed(env, ch, e);
+  }
+  if (from + 10 < pages.length) await next(from + 10, 30);
 }
 
 /** my_chat_member in a channel: admin with the right to post links it to the user who gave the rights; otherwise unlinks it. */
@@ -183,16 +233,44 @@ export const listChannels = async (db: D1Database, userId: number) =>
 /** Telegram link that opens the channel picker and asks for the right to post. */
 export const addChannelUrl = (botUsername: string) => `https://t.me/${botUsername}?startchannel&admin=post_messages`;
 
+export interface ChannelPatch {
+  enabled?: boolean;
+  caption?: string;
+  storage?: boolean;
+  porn?: string;
+  kinds?: string[];
+  tags_in?: string[];
+  tags_out?: string[];
+  comics?: string;
+}
+
+const oneOf = <T extends string>(v: string | undefined, all: readonly T[], old: T) => (all.includes(v as T) ? (v as T) : old);
+const tagsField = (v: string[] | undefined, old: string) =>
+  Array.isArray(v) ? [...new Set(v.map((x) => String(x).trim().toLowerCase().slice(0, 64)).filter(Boolean))].slice(0, 50).join("\n") : old;
+
+/** A channel for the API: the lists as arrays. */
+export const channelView = (ch: Channel) => ({ ...ch, kinds: ch.kinds.split(",").filter(Boolean), tags_in: tagList(ch.tags_in), tags_out: tagList(ch.tags_out) });
+
 /** Changes a channel of the user; false when it is not theirs. */
-export async function updateChannel(db: D1Database, userId: number, chatId: number, p: { enabled?: boolean; caption?: string; storage?: boolean }) {
+export async function updateChannel(db: D1Database, userId: number, chatId: number, p: ChannelPatch) {
   const ch = await getChannel(db, userId, chatId);
   if (!ch) return false;
   if (p.storage !== undefined) {
     if (p.storage) await db.prepare("UPDATE channels SET storage = 0 WHERE user_id = ?").bind(userId).run();
     await db.prepare("UPDATE channels SET storage = ? WHERE chat_id = ?").bind(p.storage ? 1 : 0, chatId).run();
   }
-  await db.prepare("UPDATE channels SET enabled = ?, caption = ? WHERE chat_id = ?")
-    .bind(p.enabled === undefined ? ch.enabled : p.enabled ? 1 : 0, (p.caption ?? ch.caption).slice(0, 1024), chatId)
+  const kinds = Array.isArray(p.kinds) ? (["photo", "video", "animation"] as const).filter((k) => p.kinds!.includes(k)).join(",") : ch.kinds;
+  await db.prepare("UPDATE channels SET enabled = ?, caption = ?, porn = ?, kinds = ?, tags_in = ?, tags_out = ?, comics = ? WHERE chat_id = ?")
+    .bind(
+      p.enabled === undefined ? ch.enabled : p.enabled ? 1 : 0,
+      (p.caption ?? ch.caption).slice(0, 1024),
+      oneOf(p.porn, ["all", "only", "none"], ch.porn),
+      kinds,
+      tagsField(p.tags_in, ch.tags_in),
+      tagsField(p.tags_out, ch.tags_out),
+      oneOf(p.comics, ["off", "media", "link"], ch.comics),
+      chatId,
+    )
     .run();
   return true;
 }
@@ -217,6 +295,7 @@ async function channelsCard(env: Env, api: Api, userId: number, lang: Lang) {
     { text: t(lang, "channel_btn_caption"), callback_data: `ch:c:${ch.chat_id}` },
     { text: t(lang, "channel_btn_unlink"), callback_data: `ch:d:${ch.chat_id}` },
   ]);
+  if (channels.length) rows.push([{ text: t(lang, "channel_btn_filters"), web_app: { url: `${env.PUBLIC_URL.replace(/\/$/, "")}/?account=settings` } }]);
   rows.push([{ text: t(lang, "channel_btn_add"), url: addChannelUrl(me.username) }]);
   return { text: t(lang, channels.length ? "channels" : "channels_none"), reply_markup: { inline_keyboard: rows } };
 }

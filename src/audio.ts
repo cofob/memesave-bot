@@ -1,7 +1,7 @@
 import { InputFile, type Api } from "grammy";
 import type { Message } from "grammy/types";
 import { addToPost, albumMemes } from "./channels";
-import { getMeme, type Meme } from "./db";
+import { blursPorn, getMeme, type Meme } from "./db";
 import type { Env } from "./env";
 import { extOf, memeMedia } from "./media";
 
@@ -119,7 +119,9 @@ async function renderClip(env: Env, p: AudioPost, memeId: string) {
 export async function sendClip(env: Env, api: Api, chatId: number, memeId: string) {
   const clip = await ensureClip(env, memeId);
   if (!clip) return false;
-  await sendCached(env, clip.post, "clip", (f) => api.sendVideo(chatId, f, { ...clip.meta, supports_streaming: true }));
+  const album = await albumMemes(env.DB, memeId);
+  const spoiler = await blursPorn(env.DB, chatId, album.length ? album : [(await getMeme(env.DB, memeId)) ?? { porn: 0 }]);
+  await sendCached(env, clip.post, "clip", (f) => api.sendVideo(chatId, f, { ...clip.meta, supports_streaming: true, ...(spoiler && { has_spoiler: true }) }));
   return true;
 }
 

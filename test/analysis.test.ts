@@ -116,6 +116,37 @@ describe("analytics", () => {
   });
 });
 
+describe("porn analytics", () => {
+  it("counts porn memes, share, tags, heatmap and comics; null without porn", async () => {
+    const ins = "INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, status, tags, porn, source, created_at) VALUES";
+    await env.DB.batch([
+      env.DB.prepare(`${ins} ('pn1', 64, 'photo', 'f', 'pu1', 'ready', 'cat\nfur', 1, 'https://e621.net/posts/1', 1790000000), ('pn2', 64, 'photo', 'f', 'pu2', 'ready', 'cat', 1, NULL, 1790000000), ('pn3', 64, 'photo', 'f', 'pu3', 'ready', 'dog', 0, NULL, 1790000000), ('pn4', 65, 'photo', 'f', 'pu4', 'ready', 'dog', 0, NULL, 1790000000)`),
+      env.DB.prepare("INSERT INTO posts (id, user_id, layout) VALUES ('pp1', 64, 'comic'), ('pp2', 64, 'carousel')"),
+      env.DB.prepare("INSERT INTO post_items (post_id, meme_id, position) VALUES ('pp1', 'pn1', 1), ('pp1', 'pn2', 2), ('pp2', 'pn2', 1)"),
+    ]);
+    const a = await userAnalytics(env as unknown as Env, { id: 64 } as any);
+    expect(a.porn).toMatchObject({ ready: 3, porn: 2, comics: 1 });
+    expect(a.porn!.months).toEqual([{ month: "2026-09", n: 3, porn: 2 }]);
+    expect(a.porn!.tags).toEqual([{ tag: "cat", count: 2 }, { tag: "fur", count: 1 }]);
+    expect(a.porn!.heatmap.reduce((s, c) => s + c.n, 0)).toBe(2);
+    expect(a.porn!.sources).toEqual([{ name: "e621.net", kind: "link", n: 1, uses: 0 }]);
+    expect((await userAnalytics(env as unknown as Env, { id: 65 } as any)).porn).toBeNull();
+  });
+
+  it("shows the porn section in the bot report only when asked", () => {
+    const porn = { ready: 10, porn: 4, comics: 2, months: [], heatmap: [], sources: [], tags: [{ tag: "cat", count: 3 }] };
+    const r = { ...result(), analytics: { ...result().analytics, porn } } as any;
+    const img = (name: string) => `![](tg://photo?id=${name})`;
+    const on = reportMarkdown("en", r, img, true);
+    expect(on).toContain("## Porn");
+    expect(on).toContain("| Share of the collection | 40% |");
+    expect(on).toContain("porn_heatmap");
+    expect(on.indexOf("## Tags")).toBeLessThan(on.indexOf("## Porn"));
+    expect(reportMarkdown("en", r, img)).not.toContain("## Porn");
+    expect(reportMarkdown("en", result() as any, img, true)).not.toContain("## Porn");
+  });
+});
+
 describe("embedding analysis", () => {
   it("runs once a day, keeps a running one and its options", async () => {
     const { e, started } = setup();

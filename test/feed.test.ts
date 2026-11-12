@@ -154,6 +154,23 @@ describe("bot feed", () => {
     expect(await showFeed(e, api, 98, { id: 98, hide_porn: 0 }, "en", "time", now - 2, -2, 7)).toBe(false);
     expect(await e.DB.prepare("SELECT COUNT(*) AS n FROM meme_views WHERE user_id = 98").first("n")).toBe(2);
   });
+
+  it("sends and edits porn under a spoiler when the user blurs porn", async () => {
+    await e.DB.prepare("INSERT INTO users (id, role) VALUES (297, 'user')").run();
+    await add(297, "bp1", 2);
+    await add(297, "bp2", 1);
+    await e.DB.prepare("UPDATE memes SET porn = 1 WHERE user_id = 297").run();
+    const bodies: any[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Response.json({ ok: true, result: { message_id: 7, date: 0, chat: { id: 297, type: "private" }, photo: [{ file_id: "f", file_unique_id: "u", width: 1, height: 1 }] } });
+    });
+    const api = new Api("1:test");
+    await showFeed(e, api, 297, { id: 297, hide_porn: 0 }, "en", "new", 1, 0);
+    await showFeed(e, api, 297, { id: 297, hide_porn: 0 }, "en", "new", 1, 1, 7);
+    expect(bodies[0]).toMatchObject({ has_spoiler: true });
+    expect(bodies[1].media).toMatchObject({ has_spoiler: true });
+  });
 });
 
 describe("hide porn setting", () => {

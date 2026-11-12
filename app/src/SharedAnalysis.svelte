@@ -19,11 +19,11 @@
       <Spinner label="Loading" />
     {:else if data.kind === "pair"}
       {#await import("./PairStats.svelte") then { default: PairStats }}
-        <PairStats id="" shared={data} onOpen={none} onView={none} onFeed={none} />
+        <PairStats id="" shared={data} parts={data.parts} onOpen={none} onView={none} onFeed={none} />
       {/await}
     {:else}
       {#await import("./Analytics.svelte") then { default: Analytics }}
-        <Analytics shared={data.result} />
+        <Analytics shared={data.result} parts={data.parts} />
       {/await}
     {/if}
     <p class="hint"><a href="/bot">{s.anSharedFooter}</a></p>

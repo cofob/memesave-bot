@@ -88,8 +88,10 @@ export async function memeMedia(env: Env, m: MediaMeme, variant: Variant): Promi
 
 export const toDataUrl = ({ bytes, mime }: Media) => `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`;
 
+// The key is imported once per isolate: a big album signs thousands of URLs.
+let key: [string, Promise<CryptoKey>] | undefined;
 const hmacKey = (secret: string) =>
-  crypto.subtle.importKey("raw", new TextEncoder().encode(`media|${secret}`), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  (key?.[0] === secret ? key : (key = [secret, crypto.subtle.importKey("raw", new TextEncoder().encode(`media|${secret}`), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"])]))[1];
 
 /** HMAC-SHA256 of `msg` with a key derived from ENCRYPTION_KEY, base64url. */
 export const sign = async (env: Env, msg: string) =>

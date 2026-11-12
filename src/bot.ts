@@ -1,6 +1,7 @@
 import { Bot, type Context } from "grammy";
 import { retryOn429 } from "./botapi";
 import { registerAdmin } from "./admin";
+import { registerE621 } from "./e621bot";
 import { registerFeed } from "./feedbot";
 import { registerPairs } from "./pairbot";
 import { resolveUser } from "./auth";
@@ -70,6 +71,7 @@ export function createBot(env: Env) {
   registerAdmin(pm, env);
   registerBilling(pm, env);
   registerChannels(pm, env);
+  registerE621(pm, env);
   registerPairs(pm, env);
   pm.on(["message:photo", "message:video", "message:animation"], async (ctx) => (await allowAi(env, ctx)) && receiveMedia(ctx, env));
   pm.on("message:text", async (ctx) => {

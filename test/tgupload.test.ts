@@ -3,7 +3,7 @@ import { Api } from "grammy";
 import { describe, expect, it } from "vitest";
 import { updateChannel } from "../src/channels";
 import type { Env } from "../src/env";
-import { uploadJob } from "../src/search/tgupload";
+import { queueUploads, uploadJob } from "../src/search/tgupload";
 
 const e = { ...env, STORAGE_CHAT_ID: "-1001" } as Env;
 const meme = (id: string, user: number, fileId = "") =>
@@ -60,5 +60,31 @@ describe("silent uploads for inline", () => {
     const { api } = mockApi(() => ({ ok: false, error_code: 429, description: "Too Many Requests: retry after 7", parameters: { retry_after: 7 } }));
 
     await expect(uploadJob(e, api, { userId: 64, memeIds: ["t5"] }, 0)).rejects.toMatchObject({ parameters: { retry_after: 7 } });
+  });
+
+  it("cron queues every meme that is not in Telegram, not again for 1 h, and skips photos over 10 MB", async () => {
+    await meme("q1", 91);
+    await meme("q2", 91);
+    await meme("q3", 92);
+    await meme("q4", 92, "tg");
+    await meme("q5", 92);
+    await e.DB.prepare("UPDATE memes SET file_size = ? WHERE id = 'q5'").bind(11 * 2 ** 20).run();
+    const sent: { userId: number; memeIds: string[] }[] = [];
+    const c = { ...e, UPLOADS: { send: async (j: { userId: number; memeIds: string[] }) => void sent.push(j) } } as unknown as Env;
+    await queueUploads(c);
+    const mine = sent.filter((j) => j.userId === 91 || j.userId === 92).map((j) => ({ ...j, memeIds: j.memeIds.sort() }));
+    expect(mine.sort((a, b) => a.userId - b.userId)).toEqual([{ userId: 91, memeIds: ["q1", "q2"] }, { userId: 92, memeIds: ["q3"] }]);
+    sent.length = 0;
+    await queueUploads(c);
+    expect(sent.filter((j) => j.userId === 91 || j.userId === 92)).toEqual([]); // queued less than 1 h ago
+  });
+
+  it("keeps the file id when the Telegram file is already another meme of the user", async () => {
+    await meme("d1", 93, "fx");
+    await e.DB.prepare("UPDATE memes SET file_unique_id = 'u1' WHERE id = 'd1'").run();
+    await meme("d2", 93);
+    const { api } = mockApi(sent); // answers with file_unique_id u1 (taken by d1)
+    await uploadJob(e, api, { userId: 93, memeIds: ["d2"] }, 0);
+    expect(await e.DB.prepare("SELECT file_id FROM memes WHERE id = 'd2'").first("file_id")).toBe("f1");
   });
 });

@@ -6,25 +6,29 @@ import { describeStage, failIngest, finishStage } from "./ingest/describe";
 import { embedStage, hashStage } from "./ingest/embed";
 import { purgeStage } from "./purge";
 import { rekeyStage } from "./rekey";
-import { postJob } from "./channels";
+import { postComicJob, postJob } from "./channels";
 import { e621Sync, type E621Job } from "./e621";
 import { galleryJob } from "./ingest/gallery";
 import { linkJob } from "./ingest/link";
 import type { AddedVia } from "./ingest/receive";
 import { failSearch, searchJob } from "./search/chat";
+import { sendAlbumJob } from "./search/deliver";
 import { thumbStage } from "./thumb";
+import { sourceMetaStage } from "./zip";
 import { reportFailed, sendReport } from "./analysisreport";
 import { sendPairReport } from "./pairreport";
 
 export type SearchJob = { type: "search"; userId: number; messageId: number; placeholderId: number; query: string; lang: Lang };
 export type Job =
-  | { type: "embed" | "finish" | "hash" | "rekey" | "thumb"; memeId: string; gen?: number } // gen: the meme's processing run (0 when not set)
+  | { type: "embed" | "finish" | "hash" | "rekey" | "thumb" | "source_meta"; memeId: string; gen?: number } // gen: the meme's processing run (0 when not set)
   | { type: "describe"; memeId: string; gen?: number; from?: number; single?: boolean } // from: index in describeModels (1 after a blocked batch request); single: not with its album
   | { type: "batch_submit"; importId: string }
   | { type: "batch_poll" }
   | { type: "post"; postId: string }
+  | { type: "post_comic"; postId: string; chatId: number; from: number } // next 10 pages of a comic to a channel (src/channels.ts)
   | { type: "purge"; userId: number; before: number }
   | { type: "link"; userId: number; url: string; via?: AddedVia } // API import (src/ingest/link.ts)
+  | { type: "send_album"; userId: number; memeId: string; from: number } // big album to a chat, 10 per job (src/search/deliver.ts)
   | { type: "gallery"; importId: string; from: number } // gallery import: from = first item of the download chunk (src/ingest/gallery.ts)
   | ({ type: "e621_sync" } & E621Job) // e621 favorites and upvotes (src/e621.ts)
   | { type: "analysis_report"; analysisId: string; msgId?: number } // bot report of an embedding analysis
@@ -45,6 +49,8 @@ async function run(env: Env, job: Job) {
       return pollImports(env);
     case "post":
       return postJob(env, job.postId);
+    case "post_comic":
+      return postComicJob(env, job.postId, job.chatId, job.from);
     case "embed":
       return embedStage(env, job.memeId, job.gen);
     case "describe":
@@ -59,12 +65,16 @@ async function run(env: Env, job: Job) {
       return purgeStage(env, job.userId, job.before);
     case "link":
       return linkJob(env, job.userId, job.url, job.via);
+    case "send_album":
+      return sendAlbumJob(env, job.userId, job.memeId, job.from);
     case "gallery":
       return galleryJob(env, job.importId, job.from);
     case "e621_sync":
       return e621Sync(env, job);
     case "thumb":
       return thumbStage(env, job.memeId);
+    case "source_meta":
+      return sourceMetaStage(env, job.memeId);
   }
 }
 
@@ -79,9 +89,9 @@ async function fail(env: Env, job: Job, error: unknown) {
   if (job.type === "search") return failSearch(env, job, error);
   if (job.type === "batch_submit") return failImport(env, job.importId, error);
   if (job.type === "batch_poll" || job.type === "hash" || job.type === "rekey") return; // cron runs them again
-  if (job.type === "thumb") return env.JOBS.send({ type: "embed", memeId: job.memeId }); // goes on without a preview
+  if (job.type === "thumb" || job.type === "source_meta") return env.JOBS.send({ type: "embed", memeId: job.memeId }); // goes on without a preview
   if (job.type === "analysis_report" || job.type === "pair_report") return reportFailed(env, job.analysisId, error);
-  if (job.type === "purge" || job.type === "post" || job.type === "link" || job.type === "gallery" || job.type === "e621_sync") return; // idempotent: the dead letter queue keeps it for a manual re-run
+  if (job.type === "purge" || job.type === "post" || job.type === "post_comic" || job.type === "link" || job.type === "gallery" || job.type === "send_album" || job.type === "e621_sync") return; // idempotent: the dead letter queue keeps it for a manual re-run
   return failIngest(env, job.memeId, error, job.gen);
 }
 

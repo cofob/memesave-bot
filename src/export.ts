@@ -33,12 +33,12 @@ const TABLES: Record<string, { from: string; where: string; cols: string; key?: 
   profile: {
     from: "users",
     where: "id = ?",
-    cols: "id, username, role, lang, search_mode, describe_tier, total_cost, plan, plan_byok, paid_until, allowance_until, plan_started, balance, sub_state, hide_porn, created_at",
+    cols: "id, username, role, lang, search_mode, describe_tier, total_cost, plan, plan_byok, paid_until, allowance_until, plan_started, balance, sub_state, hide_porn, blur_porn, created_at",
   },
   memes: {
     from: "memes",
     where: "user_id = ?",
-    cols: "id, kind, mime, file_size, width, height, duration, caption, source, tg_meta, status, title, description, ocr_text, speech_text, meme_context, cultural_meaning, language, tags, search_phrases, porn, source_meta, import_id, sha256, share_id, added_via, error, created_at, updated_at, saved_at, COALESCE(r2_file, '') != '' AS has_file, r2_preview IS NOT NULL AS has_preview",
+    cols: "id, kind, mime, file_size, width, height, duration, caption, source, tg_meta, status, title, description, ocr_text, speech_text, meme_context, cultural_meaning, language, tags, search_phrases, porn, source_meta, edits, import_id, sha256, share_id, added_via, error, created_at, updated_at, saved_at, COALESCE(r2_file, '') != '' AS has_file, r2_preview IS NOT NULL AS has_preview",
   },
   transactions: {
     from: "transactions",
@@ -54,11 +54,11 @@ const TABLES: Record<string, { from: string; where: string; cols: string; key?: 
     cols: "id, provider, kind, byok, usd, crypto, crypto_amount, status, credited_usd, created_at, paid_at",
   },
   exports: { from: "exports", where: "user_id = ?", cols: "id, status, size, files, failed, error, created_at" },
-  channels: { from: "channels", where: "user_id = ?", cols: "chat_id, title, username, enabled, caption, storage, created_at" },
+  channels: { from: "channels", where: "user_id = ?", cols: "chat_id, title, username, enabled, caption, storage, porn, kinds, tags_in, tags_out, comics, created_at" },
   posts: {
     from: "posts",
     where: "user_id = ?",
-    cols: "id, caption, status, error, created_at, updated_at, audio_r2 IS NOT NULL AS has_audio, clip_r2 IS NOT NULL AS has_clip",
+    cols: "id, caption, layout, status, error, created_at, updated_at, audio_r2 IS NOT NULL AS has_audio, clip_r2 IS NOT NULL AS has_clip",
   },
   post_items: { from: "post_items", where: "post_id IN (SELECT id FROM posts WHERE user_id = ?)", cols: "post_id, meme_id, position" },
   meme_uses: { from: "meme_uses", where: "user_id = ?", cols: "id, meme_id, via, created_at" },
@@ -72,6 +72,14 @@ const TABLES: Record<string, { from: string; where: string; cols: string; key?: 
   },
   pair_quiz: { from: "pair_quiz", where: "user_id = ?", cols: "pair_id, meme_id, score, total", key: "pair_id" },
   notices: { from: "notices", where: "user_id = ?", cols: "key, sent_at" },
+  analysis_shares: { from: "analysis_shares", where: "user_id = ?", cols: "id, analysis_id, pair_id, parts, created_at" },
+  e621_accounts: {
+    from: "e621_accounts",
+    where: "user_id = ?",
+    cols: "username, lists, pools, fav_page, vote_before, backfill_done, scanned_at, error, created_at", // without the API key
+  },
+  e621_posts: { from: "e621_posts", where: "user_id = ?", cols: "post_id, pool_id" },
+  e621_pools: { from: "e621_pools", where: "user_id = ?", cols: "pool_id" },
 };
 
 /** Job container (same image as the importer, MODE=export): builds one export. */

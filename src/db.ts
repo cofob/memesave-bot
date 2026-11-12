@@ -22,6 +22,7 @@ export interface User {
   sub_charge_id: string | null;
   sub_state: string | null;
   hide_porn: number; // 1: memes with the porn flag are hidden from search, the library and the feed
+  blur_porn: number; // 1: porn memes are sent with a spoiler and blurred in the app
 }
 
 export interface Meme {
@@ -112,6 +113,10 @@ export function visible<M extends Pick<Meme, "porn">>(user: Pick<User, "hide_por
   return memes.filter((m) => allow.includes(m.porn ? "yes" : "no"));
 }
 
+/** True when some of the memes are porn and the chat is a user who blurs porn (channels have no user row). */
+export const blursPorn = async (db: D1Database, chatId: number, memes: Pick<Meme, "porn">[]) =>
+  memes.some((m) => m.porn) && !!(await db.prepare("SELECT blur_porn FROM users WHERE id = ?").bind(chatId).first<number>("blur_porn"));
+
 /** Counts a use of the user's own meme (favorite and forgotten memes in analytics). */
 export const recordUse = (db: D1Database, userId: number, memeId: string, via: "inline" | "share" | "send") =>
   db.prepare("INSERT INTO meme_uses (user_id, meme_id, via) SELECT ?, id, ? FROM memes WHERE id = ? AND user_id = ?").bind(userId, via, memeId, userId).run();
@@ -151,7 +156,7 @@ export async function deleteMemes(env: MemeStores, ids: string[]) {
   ).bind(...ids).all<{ post_id: string }>();
   const postIds = [...new Set(posts.map((p) => p.post_id))];
   const { results: media } = postIds.length
-    ? await env.DB.prepare(`SELECT id, audio_r2, clip_r2, NOT EXISTS (SELECT 1 FROM post_items WHERE post_id = posts.id) AS empty FROM posts WHERE id IN (${postIds.map(() => "?").join(",")}) AND (audio_r2 IS NOT NULL OR clip_r2 IS NOT NULL)`)
+    ? await env.DB.prepare(`SELECT id, audio_r2, clip_r2, NOT EXISTS (SELECT 1 FROM post_items WHERE post_id = posts.id) AS empty FROM posts WHERE id IN (${postIds.map(() => "?").join(",")})`)
         .bind(...postIds)
         .all<{ id: string; audio_r2: string | null; clip_r2: string | null; empty: number }>()
     : { results: [] };

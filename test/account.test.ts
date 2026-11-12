@@ -49,6 +49,10 @@ describe("account API (web parity with bot commands)", () => {
     expect((await call("PUT", "settings", { search_mode: "fast" })).status).toBe(200);
     expect((await call("GET", "me")).body).toMatchObject({ id: 81, search_mode: "fast", key: false, role: "user" });
     expect((await call("PUT", "settings", { search_mode: "bad" })).status).toBe(400);
+    expect((await call("GET", "me")).body).toMatchObject({ blur_porn: true }); // on by default
+    expect((await call("PUT", "settings", { blur_porn: false })).status).toBe(200);
+    expect((await call("GET", "me")).body).toMatchObject({ blur_porn: false, search_mode: "fast" });
+    expect((await call("PUT", "settings", { blur_porn: "no" })).status).toBe(400);
   });
 
   it("batch start, finish (status message in Telegram) and cancel", async () => {

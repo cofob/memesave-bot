@@ -3,6 +3,7 @@
   import { X } from "@lucide/svelte";
   import { onMount } from "svelte";
   import type { FeedMedia } from "./api";
+  import { blurId, nsfw } from "./nsfw.svelte";
   import { s } from "./strings";
   import { tg } from "./telegram";
 
@@ -15,20 +16,28 @@
 
   let page = $state(1);
   let loaded = $state<Record<string, boolean>>({});
+  let gif = $state<Record<string, boolean>>({}); // an animation the video element cannot play (a GIF file): shown as an image
 
   // A modal dialog stays above other dialogs (the meme detail); Escape closes it.
   const modal = (node: HTMLDialogElement) => node.showModal();
   const cancel = (e: Event) => (e.preventDefault(), onClose());
 
-  // The page at the middle of the screen is the current one.
+  // The page at the middle of the screen is the current one; one observer for all pages.
+  let io: IntersectionObserver | undefined;
   const watch = (node: HTMLElement) => {
-    const io = new IntersectionObserver((entries) => entries.forEach((e) => e.isIntersecting && (page = Number((e.target as HTMLElement).dataset.n))), {
+    io ??= new IntersectionObserver((entries) => entries.forEach((e) => e.isIntersecting && (page = Number((e.target as HTMLElement).dataset.n))), {
       root: node.closest("dialog"),
       rootMargin: "-50% 0px -50% 0px",
     });
     io.observe(node);
-    return { destroy: () => io.disconnect() };
+    return { destroy: () => io?.unobserve(node) };
   };
+
+  // Only pages near the current one have media (videos only next to it); others keep their size.
+  const NEAR = 5;
+  let ratio = $state<Record<string, number>>({}); // width / height measured on load, when the meme has no size
+  const ar = (m: FeedMedia) => (m.width && m.height ? m.width / m.height : ratio[m.id]);
+  const measure = (id: string, w: number, h: number) => w && h && !ratio[id] && (ratio[id] = w / h);
 
   onMount(() => {
     tg?.BackButton.show();
@@ -47,8 +56,16 @@
   </div>
   <div class="pages">
     {#each pages as m, i (m.id)}
-      <div class="page" data-n={i + 1} use:watch>
-        <img src={m.file ?? m.thumb} alt={m.title ?? ""} loading="lazy" class:loaded={loaded[m.id]} onload={() => (loaded[m.id] = true)} />
+      {@const d = Math.abs(i + 1 - page)}
+      <div class="page" data-n={i + 1} use:watch use:nsfw={blurId(m)} style:aspect-ratio={d <= NEAR ? ar(m) : (ar(m) ?? 3 / 4)}>
+        {#if d > NEAR}
+          <!-- a placeholder -->
+        {:else if m.kind !== "photo" && m.file && !m.gif && !gif[m.id] && d <= 1}
+          <!-- svelte-ignore a11y_media_has_caption -->
+          <video src={m.file} poster={m.thumb} playsinline loop={m.kind === "animation"} muted={m.kind === "animation"} autoplay={m.kind === "animation"} controls={m.kind === "video"} preload="metadata" onerror={() => (gif[m.id] = true)} onloadedmetadata={(e) => measure(m.id, e.currentTarget.videoWidth, e.currentTarget.videoHeight)}></video>
+        {:else}
+          <img src={m.kind === "photo" || m.gif || gif[m.id] ? (m.file ?? m.thumb) : m.thumb} alt={m.title ?? ""} loading="lazy" decoding="async" class:loaded={loaded[m.id] || !!ar(m)} onload={(e) => ((loaded[m.id] = true), measure(m.id, (e.currentTarget as HTMLImageElement).naturalWidth, (e.currentTarget as HTMLImageElement).naturalHeight))} />
+        {/if}
       </div>
     {/each}
   </div>
@@ -95,7 +112,8 @@
     inline-size: 100%;
     max-inline-size: 800px;
   }
-  img {
+  img,
+  video {
     display: block;
     inline-size: 100%;
     block-size: auto;

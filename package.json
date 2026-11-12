@@ -19,6 +19,7 @@
     "@grammyjs/auto-retry": "^2.0.2",
     "@modelcontextprotocol/server": "^2.4.0",
     "aws4fetch": "^1.0.20",
+    "fflate": "0.8.2",
     "grammy": "^1.46.0",
     "workers-og": "^0.0.27",
     "zod": "^4.6.7"

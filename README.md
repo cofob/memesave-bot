@@ -30,4 +30,6 @@ Enable inline mode in @BotFather (`/setinline`). Bot commands are set automatica
 
 MCP server for AI apps: `<PUBLIC_URL>/mcp` (OAuth with Telegram login; connections are managed in Account → Settings).
 
+Gallery import (Telegraph, e621, Hentoid sites) runs in `scraper/`, a separate Go service deployed like cobalt: `docker compose up -d` in `scraper/` with `.env` (`API_KEYS` comma list, `PROXIES` like `http://u:p@h:3128,socks5://u:p@h:1080`, `NOCAPTCHA_KEY` for Cloudflare Turnstile, `DIRECT=0` for proxies only), TLS on the host's reverse proxy; then `bunx wrangler secret put SCRAPER_API_KEY` and `SCRAPER_URL` in `wrangler.jsonc`.
+
 HTTP API for scripts: `<PUBLIC_URL>/app/api/*` with `Authorization: Bearer <token>` (Account → Settings → API tokens), described in `<PUBLIC_URL>/openapi.json`. `tiktok-sync/` imports liked TikToks through it.

@@ -5,7 +5,7 @@ import { botApi } from "../botapi";
 import { sha256hex } from "../cache";
 import { isAudio, sendPostAudio, setAudio } from "../audio";
 import { addToPost } from "../channels";
-import { storageFull, type Kind } from "../db";
+import { storageFull, userLang, type Kind } from "../db";
 import type { Env } from "../env";
 import { t } from "../i18n";
 import { extOf, fileKey, previewKey } from "../media";
@@ -181,10 +181,22 @@ export async function importLink(ctx: Ctx, env: Env, url: string) {
   }
 }
 
-/** Queue job of the API import: like importLink, but silent and without status messages. */
+/** The app and the Mini App get errors in the bot chat; API tokens and MCP stay silent. */
+export const chatVia = (via?: AddedVia) => via === "web" || via === "miniapp";
+
+/** Queue job of the API import: like importLink, but silent (a failed download of the app is reported in the bot chat). */
 export async function linkJob(env: Env, userId: number, url: string, via: AddedVia = "api") {
   if (await linkSaved(env.DB, userId, url)) return;
-  const { source, items: all, audio } = await cobalt(env, url);
+  let fetched: Fetched;
+  try {
+    fetched = await cobalt(env, url);
+  } catch (e) {
+    if (!chatVia(via)) throw e; // the queue repeats the job
+    console.error("link import failed", url, e);
+    await botApi(env.BOT_TOKEN).sendMessage(userId, t(await userLang(env.DB, userId), "link_failed"), { parse_mode: "HTML" }).catch(console.error);
+    return;
+  }
+  const { source, items: all, audio } = fetched;
   const items = await fresh(env.DB, userId, all);
   if (!items.length || (await storageFull(env.DB, userId))) return;
   await withThumbs(env, userId, items);

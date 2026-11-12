@@ -4,7 +4,8 @@
   import { onMount, untrack } from "svelte";
   import { api, type Layout, type MemeBrief, type MemeDetail } from "./api";
   import ComicReader from "./ComicReader.svelte";
-  import { s } from "./strings";
+  import { blurId, nsfw } from "./nsfw.svelte";
+  import { fill, fmt, s } from "./strings";
   import { shareFiles } from "./share";
   import { confirm, saveFile, tg } from "./telegram";
   import { viewing } from "./viewing.svelte";
@@ -14,7 +15,7 @@
     owner?: number; // a partner's meme opened outside the partner view (pair stats)
     onClose: () => void;
     onTag: (tag: string) => void;
-    onDeleted: (id: string) => void;
+    onDeleted: (ids: string[]) => void;
     onRetried: (id: string) => void;
   }
   let { id: initial, owner, onClose, onTag, onDeleted, onRetried }: Props = $props();
@@ -36,7 +37,7 @@
   });
   const kindLabel = $derived(meme ? (meme.kind === "photo" ? s.f_kind_photo : meme.kind === "video" ? s.video : s.gif) : "");
   const title = $derived(meme?.title ?? kindLabel);
-  let busy = $state<"share" | "file" | "link" | "fileLink" | "send" | "album" | "clip" | "clipFile" | "sound" | "layout" | "edit" | "delete" | "retry" | null>(null);
+  let busy = $state<"share" | "file" | "link" | "fileLink" | "send" | "album" | "clip" | "clipFile" | "sound" | "layout" | "edit" | "delete" | "deleteAlbum" | "retry" | null>(null);
   let soundInput = $state<HTMLInputElement>();
   let copied = $state<"link" | "fileLink" | null>(null);
   let failed = $state(false);
@@ -184,8 +185,14 @@
     if (!(await confirm(s.deleteConfirm))) return;
     await run("delete", async () => {
       await api.remove(id);
-      onDeleted(id);
+      onDeleted([id]);
     });
+  };
+
+  const removeAlbum = async () => {
+    const comic = meme?.layout === "comic";
+    if (!(await confirm(fill(comic ? s.deleteComicConfirm : s.deleteAlbumConfirm, { n: meme!.album.length })))) return;
+    await run("deleteAlbum", async () => onDeleted((await api.removeAlbum(id)).deleted));
   };
 
   // Album carousel: a swipe (or arrow) shows that meme; a thumbnail scrolls to it.
@@ -202,6 +209,14 @@
     }, 120);
   };
   const at = $derived(meme?.album.findIndex((a) => a.id === id) ?? -1);
+  // A big album: thumbnails around the shown meme, all after "show all".
+  const STRIP = 60;
+  let allThumbs = $state(false);
+  const strip = $derived.by(() => {
+    const all = meme?.album ?? [];
+    const from = Math.max(0, Math.min(at - STRIP / 2, all.length - STRIP));
+    return allThumbs || all.length <= STRIP * 2 ? all : all.slice(from, from + STRIP);
+  });
   $effect(() => {
     const j = at;
     if (carousel && j >= 0 && untrack(index) !== j) carousel.scrollTo({ left: j * carousel.clientWidth * untrack(rtl), behavior: "smooth" });
@@ -227,7 +242,7 @@
 
 <!-- full: the loaded detail of this meme, else (an album meme not shown yet) its thumbnail. -->
 {#snippet one(full: MemeDetail | null, a: Pick<MemeBrief, "thumb" | "title">)}
-  {#if full && full.kind !== "photo" && full.file}
+  {#if full && full.kind !== "photo" && !full.gif && full.file}
     <VideoPlayer
       src={full.file}
       label={title}
@@ -239,11 +254,12 @@
 {/snippet}
 
 {#snippet media(m: MemeDetail)}
-  <div class="stage">
+  <div class="stage" use:nsfw={m.album.length && m.layout !== "comic" ? false : blurId(m)}>
     {#if m.album.length && m.layout !== "comic"}
       <div class="carousel" bind:this={carousel} onscroll={onSwipe}>
-        {#each m.album as a (a.id)}
-          <div class="part">{@render one(a.id === m.id ? m : null, a)}</div>
+        {#each m.album as a, j (a.id)}
+          <!-- only the shown meme and its neighbours have media -->
+          <div class="part" use:nsfw={blurId(a)}>{#if Math.abs(j - at) <= 1}{@render one(a.id === m.id ? m : null, a)}{/if}</div>
         {/each}
       </div>
       <span class="nav prev"><IconButton label={s.feedPrev} variant="secondary" size="sm" disabled={at <= 0} onclick={() => step(-1)}><ChevronLeft size={18} /></IconButton></span>
@@ -271,11 +287,12 @@
   <Stack gap="md">
     {#if m.album.length}
       <div class="album">
-        {#each m.album as a (a.id)}
-          <button class="album-item" class:current={a.id === id} onclick={() => (id = a.id)} aria-label={a.title ?? a.id} aria-current={a.id === id}>
-            <img src={a.thumb} alt="" loading="lazy" />
+        {#each strip as a (a.id)}
+          <button class="album-item" class:current={a.id === id} onclick={() => (id = a.id)} aria-label={a.title ?? a.id} aria-current={a.id === id} use:nsfw={blurId(a)}>
+            <img src={a.thumb} alt="" loading="lazy" decoding="async" />
           </button>
         {/each}
+        {#if strip.length < m.album.length}<Button variant="secondary" size="sm" onclick={() => (allThumbs = true)}>{fmt(s.showAll, m.album.length)}</Button>{/if}
       </div>
       {#if own}
         <Select
@@ -393,6 +410,12 @@
         {#snippet leading()}<Layers size={16} aria-hidden="true" />{/snippet}
         {s.sendAlbum}
       </Button>
+      {#if meme.zip}
+        <Button variant="secondary" onclick={() => run("file", () => saveFile(meme!.zip!, `${meme!.title ?? meme!.id}.zip`))} loading={busy === "file"}>
+          {#snippet leading()}<FileDown size={16} aria-hidden="true" />{/snippet}
+          {s.downloadAll}
+        </Button>
+      {/if}
     {/if}
     {#if meme?.audio && own}
       <Button variant="secondary" onclick={sendClip} loading={busy === "clip"}>
@@ -422,6 +445,12 @@
         {#snippet leading()}<Trash2 size={16} aria-hidden="true" />{/snippet}
         {s.delete}
       </Button>
+      {#if meme && meme.album.length > 1}
+        <Button variant="danger" onclick={removeAlbum} loading={busy === "deleteAlbum"}>
+          {#snippet leading()}<Trash2 size={16} aria-hidden="true" />{/snippet}
+          {meme.layout === "comic" ? s.deleteComic : s.deleteAlbum}
+        </Button>
+      {/if}
     {/if}
     {/if}
   </Inline>
@@ -582,6 +611,9 @@
     inline-size: 100%;
     block-size: 100%;
     object-fit: cover;
+  }
+  .album > :global(.cf-button) {
+    flex: none;
   }
   .album-item.current {
     outline: 2px solid var(--cf-color-accent);

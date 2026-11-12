@@ -7,7 +7,7 @@ import type { Env } from "./env";
 import { allStats, userStats } from "./stats";
 import { adminAnalytics } from "./analytics";
 import { analysisResult, analysisStatus, startAnalysis } from "./analysis";
-import { createShare, revokeShares } from "./analysisshare";
+import { handleShare, revokeShares } from "./analysisshare";
 import { BACKFILL_WHERE, queueHashBackfill } from "./ingest/embed";
 import { queueRekey, recoverLostKeys, REKEY_WHERE } from "./rekey";
 import { oauthUrl, setUserKey } from "./userkey";
@@ -15,15 +15,14 @@ import { createZipImport, zipStatus } from "./zip";
 import { exportStatus, setExportStatusMessage, startExport } from "./export";
 import { accountSummary, CONFIRM, deleteAccount } from "./purge";
 import { oauthApi } from "./oauth";
-import { connectE621, disconnectE621, e621Status } from "./e621";
+import { connectE621, disconnectE621, e621Status, LISTS, setE621Lists, setE621Pools, syncE621, type Lists } from "./e621";
 import { E621Error } from "./ingest/sources/e621";
 import { createToken, deleteToken, listTokens } from "./tokens";
 import { billingStatus, ownKey, starsInvoiceLink, type ProductKind } from "./billing";
-import { addChannelUrl, listChannels, removeChannel, updateChannel } from "./channels";
+import { addChannelUrl, channelView, listChannels, removeChannel, updateChannel, type ChannelPatch } from "./channels";
 import { btcpayOn, createBtcpayInvoice, getInvoice, productUsd, usdtNetworks } from "./crypto";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
-const shared = (link: object | null) => (link ? json(link) : json({ error: "no result" }, 404));
 
 /** App equivalents of the bot commands: /stats, /settings, /key, /batch*, /batch_zip, /export, /delete_all, /grant, /revoke, /users. */
 export async function handleAccount(req: Request, env: Env, user: User, parts: string[]): Promise<Response | null> {
@@ -44,7 +43,7 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
   }
   if (resource === "analysis") {
     if (m === "GET" && id === "result") return analysisResult(env, user.id);
-    if (m === "POST" && id === "share") return shared(await createShare(env, user.id, user.id));
+    if (m === "POST" && id === "share") return handleShare(req, env, user.id, user.id);
     if (m === "DELETE" && id === "share") return (await revokeShares(env, "user_id = ? AND pair_id IS NULL", user.id), json({ ok: true }));
     if (m === "GET" && !id) return json(await analysisStatus(env, user.id));
     if (m === "POST" && !id) {
@@ -54,13 +53,14 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
   }
 
   if (resource === "settings" && m === "PUT") {
-    const body = await req.json<{ search_mode?: string; describe_tier?: string; hide_porn?: boolean }>();
-    const { search_mode = user.search_mode, describe_tier = user.describe_tier, hide_porn = !!user.hide_porn } = body;
+    const body = await req.json<{ search_mode?: string; describe_tier?: string; hide_porn?: boolean; blur_porn?: boolean }>();
+    const { search_mode = user.search_mode, describe_tier = user.describe_tier, hide_porn = !!user.hide_porn, blur_porn = !!user.blur_porn } = body;
     if (search_mode !== "advanced" && search_mode !== "fast") return json({ error: "bad search_mode" }, 400);
     if (describe_tier !== "max" && describe_tier !== "medium") return json({ error: "bad describe_tier" }, 400);
     if (typeof hide_porn !== "boolean") return json({ error: "bad hide_porn" }, 400);
-    await env.DB.prepare("UPDATE users SET search_mode = ?, describe_tier = ?, hide_porn = ? WHERE id = ?")
-      .bind(search_mode, describe_tier, hide_porn ? 1 : 0, user.id)
+    if (typeof blur_porn !== "boolean") return json({ error: "bad blur_porn" }, 400);
+    await env.DB.prepare("UPDATE users SET search_mode = ?, describe_tier = ?, hide_porn = ?, blur_porn = ? WHERE id = ?")
+      .bind(search_mode, describe_tier, hide_porn ? 1 : 0, blur_porn ? 1 : 0, user.id)
       .run();
     return json({ ok: true });
   }
@@ -118,10 +118,10 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
   if (resource === "channels") {
     if (m === "GET" && !id) {
       const me = await botApi(env.BOT_TOKEN).getMe();
-      return json({ channels: await listChannels(env.DB, user.id), addUrl: addChannelUrl(me.username) });
+      return json({ channels: (await listChannels(env.DB, user.id)).map(channelView), addUrl: addChannelUrl(me.username) });
     }
     if (m === "PUT" && id) {
-      const body = await req.json<{ enabled?: boolean; caption?: string; storage?: boolean }>();
+      const body = await req.json<ChannelPatch>();
       return (await updateChannel(env.DB, user.id, Number(id), body)) ? json({ ok: true }) : json({ error: "not found" }, 404);
     }
     if (m === "DELETE" && id) return (await removeChannel(env, user.id, Number(id))) ? json({ ok: true }) : json({ error: "not found" }, 404);
@@ -146,15 +146,21 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
   if (resource === "e621") {
     if (m === "GET") return json(await e621Status(env.DB, user.id));
     if (m === "DELETE") return (await disconnectE621(env.DB, user.id), json({ ok: true }));
+    if (m === "POST" && id === "sync") return json({ queued: await syncE621(env, user.id) });
     if (m === "PUT") {
-      const { username = "", api_key = "" } = await req.json<{ username?: string; api_key?: string }>();
-      if (!username.trim() || !api_key.trim()) return json({ error: "username and api_key required" }, 400);
-      try {
-        await connectE621(env, user.id, username.trim(), api_key.trim());
-      } catch (e) {
-        if (e instanceof E621Error && (e.status === 401 || e.status === 403)) return json({ error: "invalid username or API key" }, 400);
-        throw e;
+      const { username = "", api_key = "", lists, pools } = await req.json<{ username?: string; api_key?: string; lists?: Lists; pools?: boolean }>();
+      if (lists && !LISTS.includes(lists)) return json({ error: "lists: fav, up or both" }, 400);
+      if (username.trim() || api_key.trim() || (!lists && pools === undefined)) {
+        if (!username.trim() || !api_key.trim()) return json({ error: "username and api_key required" }, 400);
+        try {
+          await connectE621(env, user.id, username.trim(), api_key.trim());
+        } catch (e) {
+          if (e instanceof E621Error && (e.status === 401 || e.status === 403)) return json({ error: "invalid username or API key" }, 400);
+          throw e;
+        }
       }
+      if (lists) await setE621Lists(env, user.id, lists);
+      if (pools !== undefined) await setE621Pools(env.DB, user.id, !!pools);
       return json({ ok: true });
     }
   }

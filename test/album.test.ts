@@ -73,41 +73,63 @@ describe("comics", () => {
   const ctx = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
   const row = (id: string) => c.DB.prepare("SELECT status, title FROM memes WHERE id = ?").bind(id).first<{ status: string; title: string | null }>();
 
-  it("describes the first 10 pages in one request, the later pages copy page 1", async () => {
-    await c.DB.prepare("INSERT INTO users (id, role, lang) VALUES (83, 'user', 'en')").run();
-    for (let i = 1; i <= 12; i++) {
-      await env.MEDIA.put(`u/83/c${i}.jpg`, "IMG", { httpMetadata: { contentType: "image/jpeg" } });
-      await c.DB.prepare("INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, r2_file, status) VALUES (?, 83, 'photo', 'f', ?, ?, 'describing')")
-        .bind(`c${i}`, `c${i}`, `u/83/c${i}.jpg`)
+  // A comic of n pages (c1..cn, ids `<uid>c<i>`) of user `uid`; its last import was `age` seconds ago.
+  const seed = async (uid: number, n: number, age: number) => {
+    await c.DB.prepare("INSERT INTO users (id, role, lang) VALUES (?, 'user', 'en')").bind(uid).run();
+    for (let i = 1; i <= n; i++) {
+      await env.MEDIA.put(`u/${uid}/c${i}.jpg`, "IMG", { httpMetadata: { contentType: "image/jpeg" } });
+      await c.DB.prepare("INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, r2_file, status) VALUES (?, ?, 'photo', 'f', ?, ?, 'describing')")
+        .bind(`${uid}c${i}`, uid, `${uid}c${i}`, `u/${uid}/c${i}.jpg`)
         .run();
-      await addToPost(c.DB, 83, { memeId: `c${i}`, mediaGroupId: "comic1", position: i, layout: "comic" });
+      await addToPost(c.DB, uid, { memeId: `${uid}c${i}`, mediaGroupId: `comic${uid}`, position: i, layout: "comic" });
     }
-    await c.DB.prepare("UPDATE posts SET updated_at = updated_at - 60 WHERE media_group_id = 'comic1'").run();
-    const sent: number[] = [];
+    await c.DB.prepare("UPDATE posts SET updated_at = updated_at - ? WHERE media_group_id = ?").bind(age, `comic${uid}`).run();
+  };
+  // Model answer: one item per image, titled "P<number in the order of all requests>"; `pornTitle` is porn.
+  const mockModel = (sent: string[][], pornTitle = "") => {
+    let n = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
       if (String(url).endsWith("/embeddings")) return Response.json({ data: [{ index: 0, embedding: [1, 0] }], usage: { cost: 0 } });
       const content = JSON.parse(String(init!.body)).messages[1].content;
-      sent.push(content.filter((p: { type: string }) => p.type === "image_url").length);
-      return Response.json({ choices: [{ message: { content: JSON.stringify({ items: content.filter((p: { type: string }) => p.type === "image_url").map((_: unknown, i: number) => ({ title: `Page ${i + 1}` })) }) } }], usage: { cost: 0 } });
+      const items = content.filter((p: { type: string }) => p.type === "image_url").map(() => ({ title: `P${++n}`, porn: `P${n}` === pornTitle }));
+      sent.push([content.find((p: { text?: string }) => p.text?.startsWith("This is an album"))?.text ?? "", ...items.map((i: { title: string }) => i.title)]);
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ items }) } }], usage: { cost: 0 } });
     });
+  };
 
-    await describeStage(c, "c12"); // page 1 has no description yet: it waits for the finish of page 1
-    expect(await row("c12")).toEqual({ status: "describing", title: null });
-    await describeStage(c, "c1");
-    expect(sent).toEqual([10]);
-    expect(await row("c1")).toEqual({ status: "ready", title: "Page 1" });
-    expect(await row("c5")).toEqual({ status: "describing", title: "Page 5" });
-    expect(await row("c11")).toEqual({ status: "describing", title: "Page 1" });
-    expect(jobs.filter((j) => j.type === "finish").map((j) => j.memeId)).toEqual(["c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11", "c12"]);
-    await finishStage(c, "c11");
-    await finishStage(c, "c12");
-    expect(await row("c12")).toEqual({ status: "ready", title: "Page 1" });
+  it("describes a comic in groups of 10 pages, each page gets its own description", async () => {
+    await seed(83, 25, 60);
+    const sent: string[][] = [];
+    mockModel(sent);
+    await describeStage(c, "83c12"); // not the first pending page of its group
+    expect(sent).toEqual([]);
+    await describeStage(c, "83c1");
+    await describeStage(c, "83c11");
+    await describeStage(c, "83c21");
+    expect(sent.map((s) => s.length - 1)).toEqual([10, 10, 5]);
+    expect(sent[1][0]).toContain("pages 11-20 of a comic of 25 pages");
+    expect(sent[2][0]).toContain("pages 21-25 of a comic of 25 pages");
+    expect(await row("83c1")).toEqual({ status: "ready", title: "P1" });
+    expect(await row("83c12")).toEqual({ status: "describing", title: "P12" });
+    expect(await row("83c25")).toEqual({ status: "describing", title: "P25" });
+  });
 
-    // A later page that comes after page 1 has its description copies it itself.
-    await c.DB.prepare("UPDATE memes SET status = 'describing', title = NULL WHERE id = 'c11'").run();
-    await describeStage(c, "c11");
-    expect(await row("c11")).toEqual({ status: "ready", title: "Page 1" });
-    expect(sent).toEqual([10]);
+  it("waits COMIC_WAIT seconds after the last import before describing a comic", async () => {
+    await seed(85, 3, 30);
+    jobs.length = 0;
+    await describeStage(c, "85c1");
+    expect(jobs).toEqual([{ type: "describe", memeId: "85c1", gen: 0, from: 0 }]);
+    expect(await row("85c1")).toEqual({ status: "describing", title: null });
+  });
+
+  it("one porn page makes all pages of the comic porn", async () => {
+    await seed(86, 25, 60);
+    mockModel([], "P7");
+    for (const i of [1, 11, 21]) await describeStage(c, `86c${i}`);
+    for (let i = 2; i <= 25; i++) await finishStage(c, `86c${i}`);
+    const { results } = await c.DB.prepare("SELECT id, porn FROM memes WHERE user_id = 86").all<{ porn: number }>();
+    expect(results).toHaveLength(25);
+    expect(results.every((r) => r.porn === 1)).toBe(true);
   });
 
   it("switches the layout of an own album through the API", async () => {
@@ -125,5 +147,33 @@ describe("comics", () => {
     expect(await res.json()).toEqual({ layout: "comic" });
     expect((await detail(c, (await getMeme(c.DB, "l1"))!)).layout).toBe("comic");
     expect((await set("grid"))!.status).toBe(400);
+  });
+
+  it("deletes a whole album or comic through the API, 100 memes per call", async () => {
+    const calls: number[] = [];
+    const d = { ...c, VECTORS: { deleteByIds: async (ids: string[]) => void calls.push(ids.length / 2) } } as unknown as Env;
+    await seed(87, 3, 0);
+    await seed(88, 120, 0);
+    await c.DB.prepare("INSERT INTO users (id, role) VALUES (89, 'user')").run();
+    await c.DB.prepare("INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, status) VALUES ('solo', 89, 'photo', 'f', 'solo', 'ready')").run();
+    const del = async (uid: number, id: string) =>
+      handleApp(new Request(`https://m.example/app/api/memes/${id}/delete_album`, { method: "POST", headers: { Authorization: `Bearer ${(await createToken(c.DB, uid, "w", true))!.token}` } }), d, ctx);
+    const count = async (uid: number) => (await c.DB.prepare("SELECT COUNT(*) AS n FROM memes WHERE user_id = ?").bind(uid).first<{ n: number }>())!.n;
+
+    expect((await del(89, "87c2"))!.status).toBe(404); // not the owner
+    expect(await count(87)).toBe(3);
+    const res = (await del(87, "87c2"))!;
+    expect(((await res.json()) as { deleted: string[] }).deleted).toEqual(["87c1", "87c2", "87c3"]);
+    expect(await count(87)).toBe(0);
+    expect(await c.DB.prepare("SELECT 1 FROM posts WHERE user_id = 87").first()).toBeNull();
+
+    const big = ((await (await del(88, "88c60"))!.json()) as { deleted: string[] }).deleted;
+    expect(big).toHaveLength(120);
+    expect(calls).toEqual([3, 100, 20]);
+    expect(await count(88)).toBe(0);
+    expect(await env.MEDIA.get("u/88/c120.jpg")).toBeNull();
+
+    expect(((await (await del(89, "solo"))!.json()) as { deleted: string[] }).deleted).toEqual(["solo"]); // not in an album
+    expect(await count(89)).toBe(0);
   });
 });

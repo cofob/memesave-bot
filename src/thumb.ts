@@ -24,11 +24,6 @@ export async function thumbnail(env: Env, userId: number, video: Uint8Array): Pr
   return { jpeg: await res.arrayBuffer(), width: num("X-Width"), height: num("X-Height"), duration: num("X-Duration") };
 }
 
-/** A request through a proxy (http://, socks5://), made by the container: Workers fetch() cannot use proxies. */
-export function proxyFetch(env: Env, userId: number | undefined, req: { url: string; method?: string; headers?: Record<string, string>; body?: string; proxy: string }): Promise<Response> {
-  return env.THUMB.get(env.THUMB.idFromName(userId ? `u${userId}` : "fetch")).fetch("http://thumb/fetch", { method: "POST", body: JSON.stringify(req) });
-}
-
 /**
  * Queue job of a link import without a preview (all instances were busy): makes it from the R2 copy, then
  * starts stage 1. The queue retries a failure; after the last attempt the meme goes on without a preview.

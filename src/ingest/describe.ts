@@ -1,7 +1,7 @@
 import { botApi } from "../botapi";
 import { DEFAULT_TIER, DESCRIBE_FALLBACKS, DESCRIBE_MODELS, DESCRIBE_UNCENSORED, DESCRIBE_VIDEO_FALLBACKS, MODELS, VIDEO_INLINE_MAX_BYTES } from "../config";
 import { getMeme, getUser, setStatus, userLang, type Meme } from "../db";
-import { ALBUM_WAIT, albumPhotos, queuePosts } from "../channels";
+import { ALBUM_WAIT, albumMemes, albumPhotos, queuePosts } from "../channels";
 import type { Env } from "../env";
 import { esc, t, type Lang } from "../i18n";
 import { memeMedia, toDataUrl, variantOf } from "../media";
@@ -55,7 +55,14 @@ const SCHEMA = {
     },
   },
 };
-const COMIC_PAGES = 10; // a comic is described from its first pages; the later pages copy page 1
+const COMIC_PAGES = 10; // a comic is described in groups of this many consecutive pages
+const COMIC_WAIT = 60; // seconds without new pages before a comic is described: it is imported in many jobs
+
+/** The comic page group (one describe request) of the page `id`. */
+const comicGroup = <T extends { id: string }>(album: T[], id: string) => {
+  const start = Math.floor(album.findIndex((a) => a.id === id) / COMIC_PAGES) * COMIC_PAGES;
+  return album.slice(start, start + COMIC_PAGES);
+};
 const ALBUM_SCHEMA = { type: "object", additionalProperties: false, required: ["items"], properties: { items: { type: "array", items: SCHEMA } } };
 
 const PROMPT = `You index memes for a private meme search engine. Look at the attached image or video carefully.
@@ -274,37 +281,32 @@ export async function describeStage(env: Env, memeId: string, from = 0, single =
   else if (m.title === null) {
     // Photos of a media group are described in one request: wait until the album is complete and embedded.
     const album = m.kind === "photo" && !single ? await albumPhotos(env.DB, memeId) : [];
-    if (album.some((a) => a.status === "embedding") || (album.length && Date.now() / 1000 - album[0].album_updated < ALBUM_WAIT)) {
-      await env.JOBS.send({ type: "describe", memeId, gen, from }, { delaySeconds: ALBUM_WAIT });
+    const comic = album[0]?.album_layout === "comic";
+    const wait = comic ? COMIC_WAIT : ALBUM_WAIT;
+    if (album.some((a) => a.status === "embedding") || (album.length && Date.now() / 1000 - album[0].album_updated < wait)) {
+      await env.JOBS.send({ type: "describe", memeId, gen, from }, { delaySeconds: wait });
       return;
     }
-    const head = album[0]?.album_layout === "comic" ? album.slice(0, COMIC_PAGES) : album;
-    const donor = head.find((a) => a.title !== null);
-    const later = album.length > 0 && !head.some((a) => a.id === memeId);
-    // A later comic page copies the first described page; while the first pages work, their finish copies it.
-    // When all of them failed, it is described alone.
-    if (later && donor) await saveDescription(env.DB, m, fromRow(donor)).run();
-    else if (later && head.some((a) => a.status !== "failed")) return;
-    else {
-      const pending = head.filter((a) => a.status === "describing" && a.title === null);
-      if (pending.length > 1 && pending[0].id !== memeId) return; // the first pending photo describes the album
-      const group = pending.length > 1 ? pending : [m];
-      try {
-        await describeGroup(env, m, group, from);
-      } catch (e) {
-        if (group.length === 1) throw e;
-        // The album request failed: each photo is described alone.
-        console.warn("album describe failed, one by one", memeId, String(e).slice(0, 200));
-        await Promise.all(group.map((g) => env.JOBS.send({ type: "describe", memeId: g.id, gen: g.gen, single: true })));
-        return;
-      }
+    const head = comic ? comicGroup(album, memeId) : album; // a comic is described group by group
+    const pending = head.filter((a) => a.status === "describing" && a.title === null);
+    if (pending.length > 1 && pending[0].id !== memeId) return; // the first pending photo describes the album
+    const group = pending.length > 1 ? pending : [m];
+    const pages = comic ? ` They are pages ${album.indexOf(pending[0]) + 1}-${album.indexOf(pending.at(-1)!) + 1} of a comic of ${album.length} pages${album[0].caption ? ` (${JSON.stringify(album[0].caption)})` : ""}.` : "";
+    try {
+      await describeGroup(env, m, group, from, pages);
+    } catch (e) {
+      if (group.length === 1) throw e;
+      // The album request failed: each photo is described alone.
+      console.warn("album describe failed, one by one", memeId, String(e).slice(0, 200));
+      await Promise.all(group.map((g) => env.JOBS.send({ type: "describe", memeId: g.id, gen: g.gen, single: true })));
+      return;
     }
   }
   await finishStage(env, memeId, gen);
 }
 
 /** Describes the memes in one request (the first one is `m`) and saves the descriptions; the others get finish jobs. */
-async function describeGroup(env: Env, m: Meme, group: Meme[], from: number) {
+async function describeGroup(env: Env, m: Meme, group: Meme[], from: number, note = "") {
   const memeId = m.id;
   const tier = await userTier(env.DB, m.user_id);
   const tags = await topTags(env.DB, m.user_id);
@@ -312,7 +314,7 @@ async function describeGroup(env: Env, m: Meme, group: Meme[], from: number) {
     const media = group.length > 1
       ? (await Promise.all(group.map(async (g, i) => [{ type: "text" as const, text: `Image ${i + 1}. User caption: ${JSON.stringify(g.caption ?? "")}.` }, ...(await mediaPart(env, g))]))).flat()
       : await mediaPart(env, m, frame);
-    const albumText = `This is an album of ${group.length} images sent together; use them as context for each other. Reply {"items": [...]} with one object per image, in order.`;
+    const albumText = `This is an album of ${group.length} images sent together; use them as context for each other. Reply {"items": [...]} with one object per image, in order.${note}`;
     return {
       ...describeRequest(m, tags, group.length > 1 ? [{ type: "text", text: albumText }, ...media] : media, tier),
       tools: WEB_TOOLS,
@@ -359,16 +361,14 @@ export async function finishStage(env: Env, memeId: string, gen = 0) {
   const state = { s: "r", t: d.title.slice(0, 120), g: d.tags.slice(0, 8).map((x) => x.slice(0, 24)) };
   await editStatus(env, m, t(lang, "saved", { title: esc(d.title), tags }) + (await firstMemeTip(env, m, lang)), state);
   await queuePosts(env, memeId);
-  await copyToComicPages(env, m, d);
+  await comicPorn(env, m);
 }
 
-/** The first described page of a comic gives its description to the later pages that wait for it. */
-async function copyToComicPages(env: Env, m: Meme, d: Description) {
-  const album = await albumPhotos(env.DB, m.id);
-  if (album[0]?.album_layout !== "comic" || album.slice(0, COMIC_PAGES).find((a) => a.title !== null)?.id !== m.id) return;
-  const waiting = album.slice(COMIC_PAGES).filter((a) => a.status === "describing" && a.title === null);
-  await env.DB.batch(waiting.map((a) => saveDescription(env.DB, a, d)));
-  await Promise.all(waiting.map((a) => env.JOBS.send({ type: "finish", memeId: a.id, gen: a.gen })));
+/** One porn page makes the whole comic porn. */
+async function comicPorn(env: Env, m: Meme) {
+  const album = await albumMemes(env.DB, m.id);
+  if (album[0]?.album_layout === "comic" && album.some((a) => a.porn))
+    await env.DB.prepare("UPDATE memes SET porn = 1 WHERE porn = 0 AND id IN (SELECT meme_id FROM post_items WHERE post_id = ?)").bind(album[0].album_post).run();
 }
 
 /** A search hint under the first meme a user saves from the chat. */

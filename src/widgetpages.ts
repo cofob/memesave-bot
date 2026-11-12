@@ -5,15 +5,15 @@ import { page } from "./widget";
 /** Labels by key without the "w_" prefix. */
 const labels = (lang: Lang, keys: Key[]) => Object.fromEntries(keys.map((k) => [k.slice(2), t(lang, k)]));
 
-/** Zip import progress. State: {f: found, t: total, k: skipped, d: done, e: 1 when finished}. */
-export const progressPage = (lang: Lang) =>
+/** Import progress (zip; `saving` and `skipped` are the labels of other imports). State: {f: found, t: total, k: skipped, d: done, e: 1 when finished}. */
+export const progressPage = (lang: Lang, saving: Key = "w_saving", skipped: Key = "w_skipped") =>
   page(
     "",
     "<div class='row sp'><span class='title ell' id=h></span><span class='title accent' id=p></span></div><div class=track><div class=fill id=b></div></div><div id=t></div>",
     `function draw(){const s=S()||{},v=s.t?Math.min(100,100*s.d/s.t):s.e?100:0;$('h').textContent=s.e?L.done:L.saving;$('p').textContent=Math.round(v)+'%';$('b').style.width=v+'%';
 R($('t'),K(T(L.saved,(s.d??0)+'/'+(s.t??0)),T(L.found,s.f),T(L.skipped,s.k)))}
 draw();W.onEvent('chatDataChanged',draw);`,
-    labels(lang, ["w_done", "w_saving", "w_saved", "w_found", "w_skipped"]),
+    { ...labels(lang, ["w_done", "w_saved", "w_found"]), saving: t(lang, saving), skipped: t(lang, skipped) },
   );
 
 /** /stats card. State: {m: memes, z: storage, c: AI spend 30 d, d: saves per day (30, oldest first), g: [[tag, count]]}. */

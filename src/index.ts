@@ -21,7 +21,7 @@ import { billingNotices } from "./billing";
 import { handleBtcpay } from "./crypto";
 import { expireZipUploads, handleUpload, handleZipCallback } from "./zip";
 import { handleShare } from "./share";
-import { handleUploads, type UploadJob } from "./search/tgupload";
+import { handleUploads, queueUploads, type UploadJob } from "./search/tgupload";
 
 export { ZipImporter } from "./zip";
 export { DataExporter } from "./export";
@@ -80,6 +80,7 @@ export default {
     await queueHashBackfill(env);
     await queueRekey(env);
     await queueE621(env);
+    await queueUploads(env);
     await billingNotices(env);
     if (await env.DB.prepare("SELECT 1 FROM imports WHERE status = 'submitted' LIMIT 1").first()) await env.JOBS.send({ type: "batch_poll" });
   },

@@ -34,7 +34,7 @@ export const table = (head: string[], rows: (string | number)[][]) =>
 
 /** Builds the report Markdown in the order of the web page; `image(name, caption)` returns the media block of a
  * rendered chart or "". */
-export function reportMarkdown(lang: Lang, r: Result, image: (name: string, caption: Key) => string) {
+export function reportMarkdown(lang: Lang, r: Result, image: (name: string, caption: Key) => string, showPorn = false) {
   const a = r.analytics;
   const st = a.stats;
   const tr = (k: Key, p: Record<string, string | number> = {}) => t(lang, k, p);
@@ -100,6 +100,23 @@ export function reportMarkdown(lang: Lang, r: Result, image: (name: string, capt
     image("trend", "rep_tag_trend"),
     image("tags_per_meme", "rep_tags_per_meme"),
   );
+
+  if (showPorn && a.porn)
+    parts.push(
+      ...section("rep_porn", "rep_intro_porn"),
+      table(
+        [tr("rep_metric"), tr("rep_value")],
+        [
+          [tr("rep_porn_count"), a.porn.porn],
+          [tr("rep_porn_share"), `${Math.round((100 * a.porn.porn) / Math.max(1, a.porn.ready))}%`],
+          [tr("rep_porn_comics"), a.porn.comics],
+        ],
+      ),
+      image("porn_share", "rep_porn_share_chart"),
+      image("porn_heatmap", "rep_porn_heatmap"),
+      image("porn_tags", "rep_porn_tags"),
+      a.porn.tags.length > 0 && table([tr("rep_tag"), tr("rep_count")], a.porn.tags.slice(0, 10).map((x) => [md(`#${x.tag}`), x.count])),
+    );
 
   const c = a.spend.covered;
   parts.push(
@@ -178,7 +195,7 @@ export async function sendReport(env: Env, analysisId: string, msgId?: number) {
   ]);
 
   const img = charts(result.images);
-  const markdown = reportMarkdown(lang, result, (name, caption) => img.image(name, t(lang, caption)));
+  const markdown = reportMarkdown(lang, result, (name, caption) => img.image(name, t(lang, caption)), !user.hide_porn);
   const media = await img.media(env, a.id);
   const app = { text: t(lang, "app_button"), web_app: { url: `${env.PUBLIC_URL.replace(/\/$/, "")}/` } };
   const replyTo = msgId ?? a.status_msg_id;

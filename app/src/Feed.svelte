@@ -5,6 +5,7 @@
   import { api, ApiError, type FeedMode, type Owner, type PairFeedItem, type PairFeedMode } from "./api";
   import ComicReader from "./ComicReader.svelte";
   import MemeDetail from "./MemeDetail.svelte";
+  import { blurId, nsfw } from "./nsfw.svelte";
   import { fill, locale, s } from "./strings";
   import { shareFiles } from "./share";
   import { tg } from "./telegram";
@@ -14,7 +15,7 @@
     pair?: { id: string; name: string; partner: number }; // the pair feed: both collections (partner: their user id)
     onClose: () => void;
     onTag: (tag: string) => void;
-    onDeleted: (id: string) => void;
+    onDeleted: (ids: string[]) => void;
     onMode?: (mode: FeedMode | PairFeedMode) => void; // each mode it opens (for the URL)
     selected?: string | null; // the meme open in the detail
   }
@@ -367,8 +368,10 @@
         <div class="carousel" onscroll={onSwipe(it.id)}>
           {#each all as m, j (m.id)}
             {@const soon = Math.abs(i - active) <= 1 && Math.abs(j - cur) <= 1}
-            <div class="part">
-              {#if near && m.file && m.kind !== "photo"}
+            <div class="part" use:nsfw={blurId(m)}>
+              {#if Math.abs(j - cur) > NEAR}
+                <!-- a far album part: a placeholder -->
+              {:else if near && m.file && m.kind !== "photo" && !m.gif}
                 <!-- svelte-ignore a11y_media_has_caption -->
                 <video
                   use:player={[it.id, j]}
@@ -382,7 +385,7 @@
                 ></video>
               {:else}
                 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-                <img src={near && m.kind === "photo" && m.file ? m.file : m.thumb} alt={m.title ?? ""} loading="lazy" onclick={() => (comic ? (reading = it) : it.audio && (paused = !paused))} />
+                <img src={near && (m.kind === "photo" || m.gif) && m.file ? m.file : m.thumb} alt={m.title ?? ""} loading="lazy" onclick={() => (comic ? (reading = it) : it.audio && (paused = !paused))} />
               {/if}
             </div>
           {/each}
@@ -391,7 +394,11 @@
         {#if all.length > 1}
           <span class="nav prev"><IconButton label={s.feedPrev} variant="secondary" size="sm" disabled={cur === 0} onclick={() => i === active && swipe(-1)}><ChevronLeft size={18} /></IconButton></span>
           <span class="nav next"><IconButton label={s.feedNext} variant="secondary" size="sm" disabled={cur === all.length - 1} onclick={() => i === active && swipe(1)}><ChevronRight size={18} /></IconButton></span>
-          <span class="dots" aria-hidden="true">{#each all as m, j (m.id)}<i class:on={j === cur}></i>{/each}</span>
+          {#if all.length > 10}
+            <span class="dots count" aria-hidden="true">{cur + 1} / {all.length}</span>
+          {:else}
+            <span class="dots" aria-hidden="true">{#each all as m, j (m.id)}<i class:on={j === cur}></i>{/each}</span>
+          {/if}
         {/if}
 
         <div class="info">
@@ -485,9 +492,9 @@
       onTag(t);
     }}
     onRetried={closeDetail}
-    onDeleted={(id) => {
-      items = items.filter((m) => m.id !== id);
-      onDeleted(id);
+    onDeleted={(ids) => {
+      items = items.filter((m) => !ids.includes(m.id));
+      onDeleted(ids);
       closeDetail();
     }}
   />
@@ -580,6 +587,11 @@
     justify-content: center;
     gap: 4px;
     pointer-events: none;
+  }
+  .count {
+    color: var(--feed-fg);
+    font-size: var(--cf-font-size-sm, 0.875rem);
+    text-shadow: 0 1px 2px rgb(0 0 0 / 0.6);
   }
   .dots i {
     inline-size: 6px;

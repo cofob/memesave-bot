@@ -39,6 +39,28 @@ export async function keywordSearch(env: Env, userId: number, text: string, limi
   return loadMemes(env.DB, (await ftsList(env.DB, userId, text)).slice(0, limit));
 }
 
+const REGEX_FIELDS = ["title", "ocr_text", "speech_text", "tags", "search_phrases", "description", "caption"] as const;
+
+export function validRegex(pattern: string): boolean {
+  try {
+    return !!new RegExp(pattern, "iu");
+  } catch {
+    return false;
+  }
+}
+
+/** Case-insensitive JS regex over the text fields (D1 has no REGEXP), newest first. */
+export async function regexSearch(env: Env, userId: number, pattern: string, limit: number): Promise<Meme[]> {
+  const re = new RegExp(pattern, "iu");
+  const { results } = await env.DB.prepare(
+    `SELECT id, ${REGEX_FIELDS.join(", ")} FROM memes WHERE user_id = ? AND status != 'failed' ORDER BY created_at DESC`,
+  )
+    .bind(userId)
+    .all<Record<string, string | null>>();
+  const ids = results.filter((r) => REGEX_FIELDS.some((f) => r[f] && re.test(r[f]))).map((r) => r.id!);
+  return loadMemes(env.DB, ids.slice(0, limit));
+}
+
 const safe = (p: Promise<string[]>) =>
   p.catch((e) => {
     console.warn("search source failed", e);

@@ -17,11 +17,11 @@ afterEach(() => vi.restoreAllMocks());
 const enc = (s: string) => new TextEncoder().encode(s);
 const hmac = async (key: BufferSource, data: string) =>
   new Uint8Array(await crypto.subtle.sign("HMAC", await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]), enc(data)));
-async function api(userId: number, path: string, method = "GET") {
+async function api(userId: number, path: string, method = "GET", body?: object) {
   const params = new URLSearchParams({ auth_date: String(Math.floor(Date.now() / 1000)), user: JSON.stringify({ id: userId, first_name: "U" }) });
   const check = [...params.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join("\n");
   params.set("hash", [...(await hmac(await hmac(enc("WebAppData"), e.BOT_TOKEN), check))].map((b) => b.toString(16).padStart(2, "0")).join(""));
-  return (await handleApp(new Request(`https://m.example/app/api/${path}`, { method, headers: { Authorization: `tma ${params}` } }), e, {} as ExecutionContext))!;
+  return (await handleApp(new Request(`https://m.example/app/api/${path}`, { method, headers: { Authorization: `tma ${params}` }, body: body && JSON.stringify(body) }), e, {} as ExecutionContext))!;
 }
 const open = async (sid: string) => (await handleApp(new Request(`https://m.example/app/shared/analysis/${sid}`), e, {} as ExecutionContext))!;
 const analysis = async (id: string, userId: number, result: object, pairId: string | null = null) => {
@@ -42,6 +42,8 @@ const solo = {
     origins: { kinds: [], top: [{ name: "Secret channel", kind: "channel", n: 2, uses: 5 }], months: [] },
     uses: { favorites: [{ id: "m1", title: "Fav", n: 5, last: 1 }], forgotten: [{ id: "m2", title: null, created_at: 1 }], ready: 3, never: 2, since: 1 },
     stats: { total: 3, bytes: 10, spend: 3, spend30: 1, avg: 1 },
+    porn: { ready: 3, porn: 2, comics: 0, months: [], heatmap: [], tags: [{ tag: "cat", count: 2 }], sources: [{ name: "e621.net", kind: "link", n: 2, uses: 0 }] },
+    lang: "en",
   },
 };
 
@@ -69,6 +71,52 @@ describe("analysis share links", () => {
     expect((await open(link.id)).status).toBe(404);
     expect(await e.MEDIA.get(shareKey(link.id))).toBeNull();
     expect((await open("nope")).status).toBe(404);
+  });
+
+  it("shares the parts the user picks; other parts make a new link; hide_porn and both off are refused", async () => {
+    await db.prepare("INSERT INTO users (id, role) VALUES (831, 'user')").run();
+    await analysis("s831", 831, solo);
+    const share = async (body?: object) => (await api(831, "analysis/share", "POST", body)).json<any>();
+    const normal = await share();
+    expect((await (await open(normal.id)).json<any>()).result.analytics.porn).toBeNull();
+    expect((await (await open(normal.id)).json<any>()).parts).toEqual({ normal: true, porn: false });
+
+    const both = await share({ normal: true, porn: true });
+    expect(both.id).not.toBe(normal.id);
+    expect((await open(normal.id)).status).toBe(404); // replaced
+    expect((await share({ normal: true, porn: true })).id).toBe(both.id);
+    const b = (await (await open(both.id)).json<any>()).result;
+    expect(b.analytics.porn).toMatchObject({ porn: 2, tags: [{ tag: "cat", count: 2 }], sources: [] });
+    expect(b.clusters).toBeDefined();
+
+    const only = await share({ normal: false, porn: true });
+    const o = await (await open(only.id)).json<any>();
+    expect(o.parts).toEqual({ normal: false, porn: true });
+    expect(o.result).toEqual({ count: 3, analytics: { porn: expect.objectContaining({ porn: 2, sources: [] }), lang: "en" } });
+
+    expect((await api(831, "analysis/share", "POST", { normal: false, porn: false })).status).toBe(400);
+    await db.prepare("UPDATE users SET hide_porn = 1 WHERE id = 831").run();
+    expect((await api(831, "analysis/share", "POST", { normal: false, porn: true })).status).toBe(400);
+    const hidden = await share({ normal: true, porn: true }); // porn is dropped
+    expect((await (await open(hidden.id)).json<any>()).parts).toEqual({ normal: true, porn: false });
+  });
+
+  it("shares the porn of a pair only when neither side hides it", async () => {
+    await db.prepare("INSERT INTO users (id, role, lang) VALUES (841, 'user', 'en'), (842, 'user', 'en')").run();
+    await db.prepare("INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, status, tags, porn, source) VALUES ('q1', 841, 'photo', 'f', 'qu1', 'ready', 'cat', 1, 'https://e621.net/1'), ('q2', 842, 'photo', 'f', 'qu2', 'ready', 'cat', 1, NULL)").run();
+    const p = (await acceptPair(db, (await createInvite(db, 841, "Ann", 842, "Bob"))!.id, 842, "Bob"))!;
+    await analysis("p841", 841, { owners: [841, 842], count: [1, 1], clusters: [], analytics: { porn: { me: { ready: 1 } } } }, p.id);
+    const share = async (body: object) => (await (await open((await (await api(841, `pairs/${p.id}/analysis/share`, "POST", body)).json<any>()).id)).json<any>());
+    const both = await share({ porn: true, normal: true });
+    expect(both.stats.porn).toMatchObject({ me: { porn: 1, sources: [] }, partner: { porn: 1, sources: [] }, tags: [{ tag: "cat", me: 1, partner: 1 }] });
+    expect(both.result.analytics.porn).toBeUndefined();
+    const only = await share({ porn: true, normal: false });
+    expect(only.result).toEqual({ owners: [0, 1] });
+    expect(Object.keys(only.stats).sort()).toEqual(["me", "partner", "porn"]);
+    expect(only.stats.me).toEqual({ id: 0, name: "Ann" });
+    expect((await share({ normal: true })).stats.porn).toBeNull();
+    await db.prepare("UPDATE users SET hide_porn = 1 WHERE id = 842").run();
+    expect((await share({ porn: true, normal: true })).stats.porn).toBeNull();
   });
 
   it("shares a pair analysis for members, from the sharer's side, and drops it when the pair ends", async () => {

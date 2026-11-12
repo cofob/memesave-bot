@@ -12,7 +12,7 @@ import { filterSql, facets } from "./filters";
 import { memeMedia } from "./media";
 import { agentSearch } from "./search/agent";
 import { sendMeme } from "./search/deliver";
-import { keywordSearch } from "./search/hybrid";
+import { keywordSearch, regexSearch, validRegex } from "./search/hybrid";
 import { cachedFastSearch } from "./search/inline";
 import { userStats } from "./stats";
 import { toDescription } from "./ingest/describe";
@@ -26,7 +26,7 @@ export type McpProps = { userId: number };
 const VIEW_MAX = 5 << 20;
 
 const INSTRUCTIONS = `Meme library of one Telegram user (memesave bot).
-Search modes: "fts" keyword search (instant, free); "fast" hybrid vector + keyword search with an LLM query rewrite (small AI cost); "advanced" an LLM agent that also looks at images (slow, higher AI cost).
+Search modes: "fts" keyword search (instant, free); "fast" hybrid vector + keyword search with an LLM query rewrite (small AI cost); "advanced" an LLM agent that also looks at images (slow, higher AI cost); "regex" a case-insensitive JavaScript regular expression over the text fields (free).
 Thumbnail and file URLs are signed, need no auth and stay valid for at least 24 hours.
 Uploads are processed in the background: poll get_meme until status is "ready".`;
 
@@ -115,19 +115,26 @@ function buildServer(env: Env, user: User, scopes: string[]) {
       description: "Search the library by meaning, text on the meme, tags or title.",
       inputSchema: z.object({
         query: z.string().min(2).max(300),
-        mode: z.enum(["fts", "fast", "advanced"]).optional().describe("default: the user's search mode setting"),
+        mode: z.enum(["fts", "fast", "advanced", "regex"]).optional().describe("default: the user's search mode setting"),
         filters: filters.optional(),
         limit: z.number().int().min(1).max(60).default(20),
       }),
       annotations: readOnly,
     },
     async ({ query, mode = user.search_mode, filters: f, limit }) => {
-      if (mode !== "fts") {
+      if (mode === "regex" && !validRegex(query)) return fail("bad regex");
+      if (mode !== "fts" && mode !== "regex") {
         const denied = await gate();
         if (denied) return denied;
       }
       const memes =
-        mode === "fts" ? await keywordSearch(env, user.id, query, 60) : mode === "advanced" ? await agentSearch(env, user.id, query) : await cachedFastSearch(env, user.id, query);
+        mode === "regex"
+          ? await regexSearch(env, user.id, query, 60)
+          : mode === "fts"
+            ? await keywordSearch(env, user.id, query, 60)
+            : mode === "advanced"
+              ? await agentSearch(env, user.id, query)
+              : await cachedFastSearch(env, user.id, query);
       const found = (await applyFilters(env, user.id, visible(user, memes, f?.porn), f)).slice(0, limit);
       return ok({ items: await Promise.all(found.map((m) => brief(env, m))) });
     },

@@ -19,6 +19,7 @@
     "BTCPAY_STORE_ID": "9rM3R2iTYdrsnqHkWiu9co4U79tLVLjAvusCLsvxQgoi",
     "BTCPAY_USDT": "Ethereum,Polygon,Plasma",
     "COBALT_URL": "https://cobalt.cfb.wtf/",
+    "SCRAPER_URL": "https://memereserve-scraper.cfb.wtf/",
     "STORAGE_CHAT_ID": "-1004422246528" // system storage chat for silent uploads (src/search/tgupload.ts)
   },
   "workers_dev": true,

@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { ftsQuery, hybridSearch, rrf } from "../src/search/hybrid";
+import { ftsQuery, hybridSearch, regexSearch, rrf, validRegex } from "../src/search/hybrid";
 
 describe("rrf", () => {
   it("ranks ids found in several lists first", () => {
@@ -26,5 +26,16 @@ describe("hybridSearch", () => {
     const res = await hybridSearch(broken, 1, { vectors: [[0.1]], texts: ["понедельник"], limit: 10 });
     expect(res.map((m) => m.id)).toEqual(["m1"]);
     expect(await hybridSearch(broken, 2, { vectors: [], texts: ["понедельник"], limit: 10 })).toEqual([]);
+  });
+});
+
+describe("regexSearch", () => {
+  it("matches the text fields case-insensitively", async () => {
+    await env.DB.prepare(
+      "INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, status, title, ocr_text) VALUES ('r1', 1, 'photo', 'f', 'u1', 'ready', 'Кот', 'ПОНЕДЕЛЬНИК 2026'), ('r2', 1, 'photo', 'f', 'u2', 'ready', 'dog', 'friday')",
+    ).run();
+    expect((await regexSearch(env, 1, "понедельник\\s+\\d{4}", 10)).map((m) => m.id)).toEqual(["r1"]);
+    expect(await regexSearch(env, 2, "кот", 10)).toEqual([]);
+    expect(validRegex("(")).toBe(false);
   });
 });

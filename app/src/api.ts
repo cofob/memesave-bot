@@ -5,6 +5,7 @@ import { viewing } from "./viewing.svelte";
 export type Kind = "photo" | "video" | "animation";
 
 export interface MemeBrief {
+  gif?: boolean; // the file is a GIF image: shown with <img>, not <video>
   id: string;
   kind: Kind;
   title: string | null;
@@ -34,6 +35,7 @@ export interface MemeDetail extends Omit<MemeBrief, "album"> {
   file: string | null;
   audio: string | null; // sound of the photo, shared by its album
   album: FeedMedia[]; // the media group in order, empty for a single meme
+  zip?: string | null; // a signed link to a .zip of all files of the album
   layout?: Layout;
   source_meta?: { site: string; tags: string[] } | null; // import source (Telegraph, e621, …)
 }
@@ -107,6 +109,7 @@ export interface Me {
   search_mode: "advanced" | "fast";
   describe_tier: "max" | "medium";
   hide_porn: boolean;
+  blur_porn: boolean;
   key: boolean;
   models: Record<string, string>;
   billing: Billing;
@@ -119,7 +122,14 @@ export interface Channel {
   enabled: number;
   caption: string;
   storage: number;
+  porn: "all" | "only" | "none";
+  kinds: ("photo" | "video" | "animation")[]; // empty: all
+  tags_in: string[]; // only memes with one of them; empty: all
+  tags_out: string[];
+  comics: "off" | "media" | "link";
 }
+
+export type ChannelPatch = Partial<Pick<Channel, "caption" | "porn" | "kinds" | "tags_in" | "tags_out" | "comics">> & { enabled?: boolean; storage?: boolean };
 
 export interface Connection {
   id: string;
@@ -129,9 +139,12 @@ export interface Connection {
   created_at: number;
 }
 
+export type E621Lists = "fav" | "up" | "both";
 export interface E621Status {
   connected: boolean;
   username?: string;
+  lists?: E621Lists; // what is synced: favorites, upvoted or both
+  pools?: boolean; // a synced post of a series pool imports the whole pool as a comic
   backfill_done?: boolean; // false: the first full import (or the daily rescan) is running
   last_sync?: number;
   imported?: number; // posts handled so far
@@ -194,6 +207,17 @@ export interface AllStats {
 
 type Count = { k: string | null; n: number };
 
+/** Porn stats of one collection (the server leaves them out when there is no porn). */
+export interface PornSide {
+  ready: number;
+  porn: number;
+  months: { month: string; n: number; porn: number }[];
+  heatmap: { wd: number; h: number; n: number }[];
+  tags: { tag: string; count: number }[];
+  sources: { name: string; kind: string; n: number; uses: number }[];
+  comics: number;
+}
+
 export interface Analytics {
   timeline: { day: string; kind: Kind; n: number }[];
   saved: { day: string; n: number }[];
@@ -233,6 +257,7 @@ export interface Analytics {
     since: number | null; // the first counted use (counting started with this feature)
   };
   added: { month: string; via: AddedVia | "unknown"; n: number }[]; // how memes were saved
+  porn: PornSide | null; // null: no porn memes
 }
 
 export type AddedVia = "bot" | "web" | "miniapp" | "api" | "mcp" | "zip" | "pair";
@@ -288,6 +313,13 @@ export interface PairStats {
     monthSim: number;
   };
   compat: number;
+  porn: {
+    me: PornSide | null;
+    partner: PornSide | null;
+    tags: { tag: string; me: number; partner: number }[];
+    jaccard: number;
+    twins: { count: number; first: { me: number; partner: number } };
+  } | null; // null: a side hides porn or nobody has any
 }
 
 export interface AnalysisRun {
@@ -304,7 +336,10 @@ export interface AnalysisRun {
 }
 
 /** A public analysis link: a copy without AI spend, sources and meme previews; the sharer is owner 0 (pair: stats.me). */
-export type SharedAnalysis = { kind: "solo"; result: AnalysisResult } | { kind: "pair"; result: PairResult; stats: PairStats; names: [string | null, string | null] };
+export type SharedParts = { normal: boolean; porn: boolean };
+export type SharedAnalysis =
+  | { kind: "solo"; parts: SharedParts; result: AnalysisResult }
+  | { kind: "pair"; parts: SharedParts; result: PairResult; stats: PairStats; names: [string | null, string | null] };
 
 interface Histogram {
   edges: number[];
@@ -461,21 +496,24 @@ export const api = {
   analysis: () => call<{ current: AnalysisRun | null; ready: AnalysisRun | null }>("analysis"),
   analysisStart: (llm: boolean) => post<AnalysisRun>("analysis", { llm }),
   analysisResult: () => call<AnalysisResult>("analysis/result"),
-  analysisShare: (pair?: string) => post<{ id: string; url: string }>(pair ? `pairs/${pair}/analysis/share` : "analysis/share"),
+  analysisShare: (pair: string | undefined, parts: SharedParts) => post<{ id: string; url: string }>(pair ? `pairs/${pair}/analysis/share` : "analysis/share", parts),
   analysisUnshare: (pair?: string) => call(pair ? `pairs/${pair}/analysis/share` : "analysis/share", { method: "DELETE" }),
   sharedAnalysis: async (sid: string) => {
     const res = await fetch(`/app/shared/analysis/${encodeURIComponent(sid)}`);
     if (!res.ok) throw new ApiError(res.status, await res.text());
     return (await res.json()) as SharedAnalysis;
   },
-  setSettings: (settings: Partial<Pick<Me, "search_mode" | "describe_tier" | "hide_porn">>) => call("settings", { method: "PUT", body: JSON.stringify(settings) }),
+  setSettings: (settings: Partial<Pick<Me, "search_mode" | "describe_tier" | "hide_porn" | "blur_porn">>) => call("settings", { method: "PUT", body: JSON.stringify(settings) }),
   channels: () => call<{ channels: Channel[]; addUrl: string }>("channels"),
-  setChannel: (id: number, body: { enabled?: boolean; caption?: string; storage?: boolean }) => call(`channels/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  setChannel: (id: number, body: ChannelPatch) => call(`channels/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   removeChannel: (id: number) => call(`channels/${id}`, { method: "DELETE" }),
   connections: () => call<{ mcp_url: string; items: Connection[] }>("connections"),
   revokeConnection: (id: string) => call(`connections/${encodeURIComponent(id)}`, { method: "DELETE" }),
   e621: () => call<E621Status>("e621"),
   connectE621: (username: string, api_key: string) => call("e621", { method: "PUT", body: JSON.stringify({ username, api_key }) }),
+  setE621Lists: (lists: E621Lists) => call("e621", { method: "PUT", body: JSON.stringify({ lists }) }),
+  setE621Pools: (pools: boolean) => call("e621", { method: "PUT", body: JSON.stringify({ pools }) }),
+  syncE621: () => call<{ queued: boolean }>("e621/sync", { method: "POST" }),
   disconnectE621: () => call("e621", { method: "DELETE" }),
   tokens: () => call<ApiToken[]>("tokens"),
   createToken: (name: string, write: boolean) => post<{ id: string; token: string }>("tokens", { name, write }),
@@ -503,6 +541,7 @@ export const api = {
   revoke: (target: string) => post<{ result: string; target: string }>("admin/revoke", { target }),
   retry: (id: string) => post(`memes/${id}/retry`),
   upload,
+  importUrl: (url: string) => post("import", { url }),
   status: (ids: string[]) => call<{ id: string; status: string; title: string | null }[]>(`status?ids=${ids.join(",")}`),
   logout: () => fetch("/auth/logout", { method: "POST" }),
   list: (sort: Sort, tag: string | null, offset: number, filters: Record<string, string> = {}) =>
@@ -541,6 +580,8 @@ export const api = {
   },
   setLayout: (id: string, layout: Layout) => post<{ layout: Layout }>(`memes/${id}/layout`, { layout }),
   remove: (id: string) => call<{ ok: true }>(`memes/${id}`, { method: "DELETE" }),
+  /** Deletes the whole album (comic) of the meme. */
+  removeAlbum: (id: string) => post<{ deleted: string[] }>(`memes/${id}/delete_album`),
   /** Changes the given fields of a ready meme. */
   edit: (id: string, patch: Record<string, string | string[] | boolean>) => call<MemeDetail>(`memes/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   removeMany: (ids: string[]) => post<{ deleted: string[] }>("delete", { ids }),

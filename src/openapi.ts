@@ -108,7 +108,7 @@ const schemas = {
           cultural_meaning: nullable("string"),
           file: nullable("string", "Signed URL of the original file (null when Telegram cannot give it: videos over 20 MB without an R2 copy)."),
           album: { type: "array", items: ref("MemeBrief"), description: "All memes of its album in order, each with its file URL; empty for a single meme." },
-          layout: { type: "string", enum: ["carousel", "comic"], description: "How the album shows: a carousel, or a comic whose pages go top to bottom. A comic is not posted to channels." },
+          layout: { type: "string", enum: ["carousel", "comic"], description: "How the album shows: a carousel, or a comic whose pages go top to bottom. A comic is posted to a channel only when its comic mode is on." },
           source_meta: {
             type: ["object", "null"],
             description: "Metadata of the import source (Telegraph, …): `site`, `tags` (merged into the meme tags) and `data` (the full source object). Null for other memes.",
@@ -145,6 +145,7 @@ const schemas = {
       key: { type: "boolean", description: "Own OpenRouter key connected." },
       models: { type: "object", additionalProperties: { type: "string" } },
       describe_tier: { type: "string", enum: ["max", "medium"] },
+      blur_porn: { type: "boolean", description: "Porn memes are blurred in the app and sent with a spoiler by the bot." },
       billing: { type: "object", description: "Plan, balance and the AI allowance left (USD)." },
     },
   },
@@ -285,6 +286,11 @@ An album has a \`layout\`: \`carousel\` or \`comic\` (pages top to bottom). A co
       "/memes/{id}/send_album": {
         post: memeOps("Send an album", "Sends the whole album of the meme (or the meme alone) to the user's chat with the bot, in albums of 10, then its audio. Needs a write token."),
       },
+      "/memes/{id}/delete_album": {
+        post: memeOps("Delete an album", "Deletes every meme of the meme's album (or comic) with its files; the meme alone when it is not in an album. Cannot be undone. Needs a write token.", {
+          responses: { "200": ok("The ids of the deleted memes.", { type: "object", properties: { deleted: { type: "array", items: { type: "string" } } } }), ...COMMON, ...NOT_FOUND },
+        }),
+      },
       "/memes/{id}/send_clip": {
         post: memeOps("Send as video", "Sends the photos of the meme's album (or the photo alone) with its audio as one video: the photos slide in a loop for the audio length. Made once, then kept. 409 without audio. Needs a write token."),
       },
@@ -319,10 +325,10 @@ An album has a \`layout\`: \`carousel\` or \`comic\` (pages top to bottom). A co
       "/search": {
         get: {
           summary: "Search memes",
-          description: "Search by meaning, text on the meme, tags or title. fts: keyword search (instant, free); fast: hybrid vector + keyword search with an LLM query rewrite (small AI cost); advanced: an LLM agent that also looks at images (slow, higher cost). Filters are not applied: filter the results by their fields.",
+          description: "Search by meaning, text on the meme, tags or title. fts: keyword search (instant, free); fast: hybrid vector + keyword search with an LLM query rewrite (small AI cost); advanced: an LLM agent that also looks at images (slow, higher cost); regex: a case-insensitive JavaScript regular expression over the text fields (free, 400 on a bad pattern). Filters are not applied: filter the results by their fields.",
           parameters: [
             { name: "q", in: "query", required: true, schema: { type: "string", minLength: 2, maxLength: 300 } },
-            { name: "mode", in: "query", schema: { type: "string", enum: ["fts", "fast", "advanced"], default: "fast" } },
+            { name: "mode", in: "query", schema: { type: "string", enum: ["fts", "fast", "advanced", "regex"], default: "fast" } },
           ],
           responses: { "200": ok("Results, best first (up to 60; next_offset is always null).", ref("Page")), ...PAID, ...COMMON },
         },

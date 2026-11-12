@@ -35,11 +35,12 @@ export type PairFeed = NonNullable<Awaited<ReturnType<typeof pairFeed>>>;
 
 /**
  * One page of the pair feed in one of `f.modes`. seed: the random order of mix and guess; for theirs, the start of the
- * feed session (partner memes the viewer saw before it go last).
+ * feed session (partner memes the viewer saw before it go last). No porn when either member of the pair hides it.
  */
 export async function pairPage(env: Env, f: PairFeed, mode: PairMode, q: { seed: number; offset: number; limit: number; hidePorn?: boolean }) {
-  if (mode === "mix" || mode === "guess") return feedPage(env.DB, f.users, { ...q, mode: "random" });
-  const porn = q.hidePorn ? " AND porn = 0" : "";
+  const hidePorn = q.hidePorn || !!(await env.DB.prepare("SELECT MAX(hide_porn) FROM users WHERE id IN (?, ?)").bind(f.me, f.partner).first<number>("MAX(hide_porn)"));
+  if (mode === "mix" || mode === "guess") return feedPage(env.DB, f.users, { ...q, hidePorn, mode: "random" });
+  const porn = hidePorn ? " AND porn = 0" : "";
   const { results } =
     mode === "theirs"
       ? await env.DB.prepare(

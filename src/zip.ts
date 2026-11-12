@@ -3,7 +3,9 @@ import { EMBED_DIMS } from "./config";
 import { storageFull, userLang, type Kind } from "./db";
 import type { Env } from "./env";
 import { t, type Key, type Lang } from "./i18n";
+import type { SourceMeta } from "./ingest/describe";
 import { namespace, upsertVectors } from "./ingest/embed";
+import { gallerySource } from "./ingest/gallery";
 import { JobContainer } from "./job";
 import { insertMeme } from "./ingest/receive";
 import { fileKey, previewKey, sign, signedQuery, tmpKey, verify, verifyQuery } from "./media";
@@ -24,6 +26,7 @@ interface ZipImport {
   upload_id: string | null;
   total: number | null;
   imported: number;
+  linked: number; // memes with a source link so far
   skipped: number;
   status_msg_id: number | null;
   widget_msg_id: number | null;
@@ -48,6 +51,7 @@ interface ZipItem {
   caption?: string;
   source?: string;
   saved_at?: number; // tiktok-sync: when the user liked it
+  links?: string[]; // links of the Telegram message: the first gallery link is the source
   restore?: Restore; // from a memesave export: saved as ready, without AI processing
 }
 const KINDS: Kind[] = ["photo", "video", "animation"];
@@ -65,12 +69,13 @@ interface Restore {
   search_phrases?: string;
   porn?: boolean;
   source_meta?: string;
+  edits?: string;
   created_at?: number;
   image?: number[];
   text: number[];
 }
 const isVector = (v: unknown): v is number[] => Array.isArray(v) && v.length === EMBED_DIMS && v.every(Number.isFinite);
-const FIELDS = ["title", "description", "ocr_text", "speech_text", "meme_context", "cultural_meaning", "language", "tags", "search_phrases", "source_meta"] as const;
+const FIELDS = ["title", "description", "ocr_text", "speech_text", "meme_context", "cultural_meaning", "language", "tags", "search_phrases", "source_meta", "edits"] as const;
 
 /** Saves the exported description and vectors; false when they are incomplete (then the meme is processed normally). */
 async function restoreMeme(env: Env, userId: number, memeId: string, kind: Kind, r: Restore | undefined) {
@@ -279,10 +284,12 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
       return json({ error: "storage full" }, 403);
     }
     // Photos go to the archive's own batch; videos and GIFs use the normal pipeline; exported memes are restored.
-    const jobs: { body: Job }[] = [];
+    const jobs: { body: Job; delaySeconds?: number }[] = [];
     let restored = 0;
+    let linked = 0;
     for (const item of body.items as ZipItem[]) {
       if (!/^[0-9a-f]{64}$/.test(item.sha256) || !KINDS.includes(item.kind)) continue;
+      const link = item.links?.find((l) => typeof l === "string" && gallerySource(l));
       // Imported files live in R2; they get Telegram file ids on their first send ("r2:<sha256>" until then).
       const memeId = await insertMeme(db, zip.user_id, {
         kind: item.kind,
@@ -299,7 +306,7 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
         height: item.height ?? null,
         duration: item.duration ?? null,
         caption: item.caption || null,
-        source: item.source || null,
+        source: link || item.source || null,
         saved_at: Number(item.saved_at) || null,
         import_id: item.kind === "photo" && !item.restore ? zip.import_id : null,
         sha256: item.sha256,
@@ -307,12 +314,14 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
       });
       if (!memeId) continue;
       if (await restoreMeme(env, zip.user_id, memeId, item.kind, item.restore)) restored++;
+      // A source link: its metadata first, then the embed (about 1 listing per second over the linked memes of the import).
+      else if (link) jobs.push({ body: { type: "source_meta", memeId }, delaySeconds: Math.min(zip.linked + linked++, 43200) });
       else jobs.push({ body: { type: "embed", memeId } });
     }
     if (jobs.length) await env.JOBS.sendBatch(jobs);
     const done = await db
-      .prepare("UPDATE zip_imports SET imported = imported + ?, updated_at = unixepoch() WHERE id = ? RETURNING imported")
-      .bind(jobs.length + restored, id)
+      .prepare("UPDATE zip_imports SET imported = imported + ?, linked = linked + ?, updated_at = unixepoch() WHERE id = ? RETURNING imported")
+      .bind(jobs.length + restored, linked, id)
       .first<number>("imported");
     await progress(env, zip, { found: (zip.total ?? 0) + zip.skipped, total: zip.total ?? 0, skipped: zip.skipped, done: done ?? 0 });
     return json({ ok: true });
@@ -335,6 +344,26 @@ export async function handleZipCallback(req: Request, env: Env): Promise<Respons
     return json({ ok: true });
   }
   return json({ error: "not found" }, 404);
+}
+
+/**
+ * Job: the metadata of a zip meme's source link (tags, data, porn; the shape of the gallery import), then the embed.
+ * The meme stays "embedding" until then, so its description (also the archive's batch) gets the metadata. A failed listing only skips it.
+ */
+export async function sourceMetaStage(env: Env, memeId: string) {
+  const m = await env.DB.prepare("SELECT user_id, source FROM memes WHERE id = ? AND source_meta IS NULL").bind(memeId).first<{ user_id: number; source: string | null }>();
+  const src = m?.source && gallerySource(m.source);
+  if (m && src) {
+    try {
+      const l = await src.fetch(env, new URL(m.source!), undefined, m.user_id);
+      const item = l.items.length === 1 ? l.items[0] : undefined; // a single post: its own tags and data
+      const meta: SourceMeta = { site: l.site, tags: [...(l.tags ?? []), ...(item?.tags ?? [])], data: item?.data ?? l.data, porn: item?.porn };
+      await env.DB.prepare("UPDATE memes SET source_meta = ? WHERE id = ?").bind(JSON.stringify(meta), memeId).run();
+    } catch (e) {
+      console.warn("source meta:", m.source, e);
+    }
+  }
+  await env.JOBS.send({ type: "embed", memeId });
 }
 
 /** Cron: forget upload links that were never used. */

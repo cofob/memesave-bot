@@ -4,6 +4,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { handleLogin, verifyIdToken } from "../src/login";
 import { createSession } from "../src/session";
+import { linkJob } from "../src/ingest/link";
 import { handleApp } from "../src/webapp";
 
 const ctx = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
@@ -105,5 +106,38 @@ describe("web upload", () => {
     expect(await (await send()).json()).toEqual({ id: first.id, duplicate: true });
     const status = await handleApp(new Request(`https://m.example/app/api/status?ids=${first.id}`, { headers: { Cookie: cookie } }), e, ctx);
     expect(await status!.json()).toEqual([{ id: first.id, status: "embedding", title: null }]);
+  });
+});
+
+describe("web import by link", () => {
+  const post = async (cookie: string, url: string) =>
+    (await handleApp(new Request("https://m.example/app/api/import", { method: "POST", body: JSON.stringify({ url }), headers: { Cookie: cookie } }), e, ctx))!;
+
+  it("starts a gallery with the bot chat of the user, and queues cobalt links", async () => {
+    await e.DB.prepare("INSERT INTO users (id, role, lang) VALUES (63, 'user', 'en')").run();
+    const cookie = `session=${await createSession(e, 63)}`;
+    jobs.length = 0;
+    expect((await post(cookie, "not a link")).status).toBe(400);
+    expect((await post(cookie, "https://telegra.ph/My-Comic-01-01")).status).toBe(202);
+    const job = jobs.pop() as { type: string; importId: string };
+    expect(job.type).toBe("gallery");
+    expect(await (await e.MEDIA.get(`tmp/gallery/${job.importId}.json`))!.json()).toMatchObject({ userId: 63, chatId: 63, via: "web" });
+
+    expect((await post(cookie, "https://www.tiktok.com/@a/video/1")).status).toBe(202);
+    expect(jobs.pop()).toEqual({ type: "link", userId: 63, url: "https://www.tiktok.com/@a/video/1", via: "web" });
+  });
+
+  it("reports a failed cobalt download in the bot chat for the web, not for the API", async () => {
+    await e.DB.prepare("INSERT OR IGNORE INTO users (id, role, lang) VALUES (63, 'user', 'en')").run();
+    const sent: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (String(input).includes("api.telegram.org")) return sent.push(String(init?.body)), Response.json({ ok: true, result: { message_id: 1 } });
+      return Response.json({ status: "error", error: { code: "bad" } });
+    });
+    await linkJob(e, 63, "https://www.tiktok.com/@a/video/2", "web");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Could not download");
+    await expect(linkJob(e, 63, "https://www.tiktok.com/@a/video/2", "api")).rejects.toThrow("cobalt");
+    expect(sent).toHaveLength(1);
   });
 });

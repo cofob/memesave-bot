@@ -14,7 +14,9 @@ export const DURATION = `CASE WHEN duration < 5 THEN '<5s' WHEN duration < 15 TH
 export const ASPECT = `CASE WHEN width * 1.0 / height < 0.8 THEN 'portrait' WHEN width * 1.0 / height < 1.25 THEN 'square'
   WHEN width * 1.0 / height < 2 THEN 'landscape' ELSE 'wide' END`;
 /** Memes per weekday (0 = Sunday) and hour, UTC. */
-export const HEATMAP = `SELECT CAST(strftime('%w', ${SAVED}, 'unixepoch') AS INTEGER) AS wd, CAST(strftime('%H', ${SAVED}, 'unixepoch') AS INTEGER) AS h, COUNT(*) AS n FROM memes WHERE user_id = ? GROUP BY wd, h`;
+export const heatmapSql = (extra = "") =>
+  `SELECT CAST(strftime('%w', ${SAVED}, 'unixepoch') AS INTEGER) AS wd, CAST(strftime('%H', ${SAVED}, 'unixepoch') AS INTEGER) AS h, COUNT(*) AS n FROM memes WHERE user_id = ? ${extra} GROUP BY wd, h`;
+export const HEATMAP = heatmapSql();
 
 /** Tag counts, tags per meme, co-occurrence of the top tags and monthly trends of the top tags. */
 export function tagStats(rows: { tags: string; month: string }[]) {
@@ -85,6 +87,36 @@ function hostOf(url: string) {
   }
 }
 
+/** Queries of the porn stats of one user, in the order `pornStats` reads them. */
+export function pornQueries(db: D1Database, id: number) {
+  const q = (sql: string) => db.prepare(sql).bind(id);
+  return [
+    q("SELECT COUNT(*) AS ready, COALESCE(SUM(porn), 0) AS porn FROM memes WHERE user_id = ? AND status = 'ready'"),
+    q(`SELECT ${MONTH} AS month, COUNT(*) AS n, SUM(porn) AS porn FROM memes WHERE user_id = ? AND status = 'ready' GROUP BY month ORDER BY month`),
+    q(heatmapSql("AND porn = 1")),
+    q(`SELECT tags, ${MONTH} AS month FROM memes WHERE user_id = ? AND porn = 1 AND tags IS NOT NULL`),
+    q(`SELECT id, json_extract(tg_meta, '$.forward_origin.type') AS fwd, source, ${MONTH} AS month FROM memes WHERE user_id = ? AND porn = 1`),
+    q(`SELECT COUNT(DISTINCT p.id) AS n FROM posts p JOIN post_items i ON i.post_id = p.id JOIN memes m ON m.id = i.meme_id
+       WHERE p.user_id = ? AND p.layout = 'comic' AND m.porn = 1`),
+  ];
+}
+
+/** The porn section of the analytics from the `pornQueries` results; null: no porn memes. */
+export function pornStats([totals, months, heatmap, tags, origins, comics]: any[][]) {
+  const { ready, porn } = totals[0] as { ready: number; porn: number };
+  if (!porn) return null;
+  return {
+    ready,
+    porn,
+    months: months as { month: string; n: number; porn: number }[],
+    heatmap: heatmap as { wd: number; h: number; n: number }[],
+    tags: tagStats(tags).top.slice(0, 50),
+    sources: originStats(origins, new Map()).top,
+    comics: comics[0].n as number,
+  };
+}
+export type PornStats = NonNullable<ReturnType<typeof pornStats>>;
+
 /** Charts of one user's collection and AI spend (the app's analytics mode). */
 export async function userAnalytics(env: Env, user: User) {
   const q = (sql: string) => env.DB.prepare(sql).bind(user.id);
@@ -121,11 +153,13 @@ export async function userAnalytics(env: Env, user: User) {
        (SELECT MIN(created_at) FROM meme_uses WHERE user_id = ?1) AS since FROM memes m WHERE user_id = ?1 AND status = 'ready'`),
     // How memes were saved (bot, web, Mini App, API, MCP, zip); older ones from before the column are "unknown".
     q(`SELECT strftime('%Y-%m', created_at, 'unixepoch') AS month, COALESCE(added_via, 'unknown') AS via, COUNT(*) AS n FROM memes WHERE user_id = ? GROUP BY month, via ORDER BY month`),
+    ...pornQueries(env.DB, user.id),
   ]);
   const [
     timeline, saved, heatmap, kinds, statuses, languages, sizes, durations, aspect, tags, spendDays, models, keys, covered, perMeme, albums,
     origins, useCounts, useDays, favorites, forgotten, useTotals, addedVia,
   ] = res.map(rows);
+  const porn = pornStats(res.slice(-6).map(rows));
   return {
     timeline,
     saved,
@@ -147,6 +181,7 @@ export async function userAnalytics(env: Env, user: User) {
       ...(useTotals[0] as { ready: number; never: number; since: number | null }),
     },
     added: addedVia as { month: string; via: string; n: number }[],
+    porn,
   };
 }
 

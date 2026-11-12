@@ -6,15 +6,35 @@ import type { Env } from "../env";
 import { isBusy } from "../queue";
 import { sendMeme } from "./deliver";
 
-// Inline results need Telegram file ids: memes only in R2 are uploaded silently to a storage chat in the background.
-// One consumer (max_concurrency 1) and a gap between sends keep live traffic far from Telegram rate limits.
+// Inline results need Telegram file ids: memes only in R2 are uploaded silently to a storage chat in the background
+// (all of them, by cron; the ones of an inline answer at once). One consumer (max_concurrency 1) and a gap between
+// sends keep live traffic far from Telegram rate limits.
 
 export type UploadJob = { userId: number; memeIds: string[] };
 const MAX_UPLOAD = 50 * 2 ** 20; // Bot API upload limit
+const MAX_PHOTO = 10 * 2 ** 20; // sendPhoto limit
+const PER_CRON = Math.floor((15 * 60 * 1000) / UPLOAD_GAP_MS) - 40; // what the queue sends in 15 min, with a margin
+const JOB = 25; // memes per job
+const TRIES = 5; // a meme that fails this often is left to inline (it may be broken)
 
 /** Ids of memes that are not in Telegram yet and can be uploaded. */
 export const needUpload = (memes: Meme[]) =>
-  memes.filter((m) => !m.file_id && m.r2_file && (m.file_size ?? 0) <= MAX_UPLOAD).map((m) => m.id);
+  memes.filter((m) => !m.file_id && m.r2_file && (m.file_size ?? 0) <= (m.kind === "photo" ? MAX_PHOTO : MAX_UPLOAD)).map((m) => m.id);
+
+/** Cron: queues the newest memes that are not in Telegram yet, as many as the queue sends until the next run; a meme is queued again after 1 h at most TRIES times. */
+export async function queueUploads(env: Env) {
+  const { results } = await env.DB.prepare(
+    `UPDATE memes SET upload_at = unixepoch(), upload_tries = upload_tries + 1 WHERE id IN (
+       SELECT id FROM memes WHERE file_id = '' AND r2_file IS NOT NULL AND status != 'failed' AND upload_tries < ?1 AND (upload_at IS NULL OR upload_at < unixepoch() - 3600)
+         AND COALESCE(file_size, 0) <= IIF(kind = 'photo', ?2, ?3) ORDER BY created_at DESC LIMIT ?4)
+     RETURNING id, user_id`,
+  )
+    .bind(TRIES, MAX_PHOTO, MAX_UPLOAD, PER_CRON)
+    .all<{ id: string; user_id: number }>();
+  const byUser = new Map<number, string[]>();
+  for (const r of results) byUser.set(r.user_id, [...(byUser.get(r.user_id) ?? []), r.id]);
+  for (const [userId, ids] of byUser) for (let i = 0; i < ids.length; i += JOB) await env.UPLOADS.send({ userId, memeIds: ids.slice(i, i + JOB) });
+}
 
 /** Uploads the job's memes one by one; throws busy errors (the job retries later), stops when the chat is lost. */
 export async function uploadJob(env: Env, api: Api, { userId, memeIds }: UploadJob, gap = UPLOAD_GAP_MS) {

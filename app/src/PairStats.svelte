@@ -5,7 +5,7 @@
   import { ArrowLeft, ArrowRight, Clapperboard, Eye, Sparkles } from "@lucide/svelte";
   import type { EChartsCoreOption } from "echarts/core";
   import { onDestroy, untrack } from "svelte";
-  import { api, ApiError, type AnalysisRun, type MemeBrief, type PairFeedMode, type PairResult, type PairStats, type PairView } from "./api";
+  import { api, ApiError, type AnalysisRun, type MemeBrief, type PairFeedMode, type PairResult, type PairStats, type PairView, type PornSide, type SharedParts } from "./api";
   import Chart from "./Chart.svelte";
   import { autoHeight, bars, heatmap, line, stacked } from "./charts";
   import PairMap, { clusterName } from "./PairMap.svelte";
@@ -21,9 +21,11 @@
     onView: (who: { id: number; name: string }) => void;
     onFeed: (pair: PairView, mode?: PairFeedMode) => void; // mode: none resumes the last one
     shared?: { result: PairResult; stats: PairStats; names: (string | null)[] }; // a public link: read-only, the sharer is "me"
+    parts?: SharedParts; // what the link shares (an old one: regular stats only)
   }
-  let { id, onBack, onOpen, onView, onFeed, shared: sharedProp }: Props = $props();
+  let { id, onBack, onOpen, onView, onFeed, shared: sharedProp, parts: sharedParts }: Props = $props();
   const shared = untrack(() => sharedProp); // a fixed snapshot
+  const parts = shared ? (untrack(() => sharedParts) ?? { normal: true, porn: false }) : { normal: true, porn: true };
 
   let st = $state.raw<PairStats | null>(shared?.stats ?? null);
   let pair = $state<PairView | null>(null);
@@ -90,7 +92,7 @@
     return pairBars(rows.sort((x, y) => y.me + y.partner - x.me - x.partner).slice(0, 12));
   }
 
-  const heat = (side: Side) => heatmap(hours, weekdays, side.heatmap.map((c) => [c.h, (c.wd + 6) % 7, c.n] as [number, number, number]), side.name ?? "");
+  const heat = (rows: Side["heatmap"], name: string) => heatmap(hours, weekdays, rows.map((c) => [c.h, (c.wd + 6) % 7, c.n] as [number, number, number]), name);
   const byHour = (side: Side) => {
     const v = hours.map(() => 0);
     for (const c of side.heatmap) v[local(c.h)] += c.n;
@@ -99,7 +101,7 @@
   const part = (x: Side, pick: (c: Side["heatmap"][number]) => boolean) => pct(sum(x.heatmap.filter(pick)), sum(x.heatmap));
   // Client-side badges: who wins each, with both shares.
   const badges = $derived.by(() => {
-    if (!st) return [];
+    if (!st || !parts.normal) return [];
     const rules: [string, (x: Side) => number][] = [
       [s.pairNightOwl, (x) => part(x, (c) => local(c.h) < 6)],
       [s.pairWeekend, (x) => part(x, (c) => c.wd === 0 || c.wd === 6)],
@@ -112,13 +114,13 @@
   });
 
   const charts = $derived.by(() => {
-    if (!st) return null;
+    if (!st || !parts.normal) return null;
     const months = [...new Set([...st.me.months, ...st.partner.months].map((m) => m.month))].sort();
     const perMonth = (side: Side) => months.map((x) => side.months.find((m) => m.month === x)?.n ?? 0);
     const sh = st.shared;
     return {
-      heatMe: heat(st.me),
-      heatPartner: heat(st.partner),
+      heatMe: heat(st.me.heatmap, st.me.name ?? ""),
+      heatPartner: heat(st.partner.heatmap, st.partner.name ?? ""),
       hours: lines(hours, byHour(st.me), byHour(st.partner)),
       months: lines(months, perMonth(st.me), perMonth(st.partner)),
       tags: sh.tags.length ? pairBars(sh.tags.map((t) => ({ name: t.tag, me: t.me, partner: t.partner }))) : null,
@@ -127,6 +129,26 @@
       sources: sh.sources.length ? pairBars(sh.sources.map((x) => ({ name: x.name, me: x.me, partner: x.partner }))) : null,
       languages: shares(st.me.languages, st.partner.languages, (k) => k.toUpperCase()),
       kinds: shares(st.me.kinds, st.partner.kinds, kindName),
+    };
+  });
+  // The server leaves porn out when a side hides it or nobody has any.
+  const pornCharts = $derived.by(() => {
+    const p = parts.porn ? st?.porn : null;
+    if (!p) return null;
+    const months = [...new Set([p.me, p.partner].flatMap((x) => x?.months ?? []).map((m) => m.month))].sort();
+    const share = (x: PornSide | null) => months.map((mo) => { const m = x?.months.find((r) => r.month === mo); return m ? pct(m.porn, m.n) : 0; });
+    const unique = (x: PornSide | null, y: PornSide | null, name: string) => {
+      const top = (x?.tags ?? []).filter((t) => !y?.tags.some((u) => u.tag === t.tag)).slice(0, 10);
+      return top.length ? bars(top.map((t) => ({ name: t.tag, value: t.count })), name) : null;
+    };
+    return {
+      ...p,
+      share: lines(months, share(p.me), share(p.partner)),
+      heatMe: p.me && heat(p.me.heatmap, me),
+      heatPartner: p.partner && heat(p.partner.heatmap, partner),
+      tags: p.tags.length ? pairBars(p.tags.map((t) => ({ name: t.tag, me: t.me, partner: t.partner }))) : null,
+      uniqueMe: unique(p.me, p.partner, me),
+      uniquePartner: unique(p.partner, p.me, partner),
     };
   });
   const firstOf = (memeId: string) => {
@@ -257,7 +279,10 @@
   {#if error}<Alert tone="danger" title={s.error} />{/if}
 
   {#if !st || !charts}
-    {#if !error}<Spinner label="Loading" />{/if}
+    {#if st && !parts.normal}
+      <section class="hero"><span class="names">{me} & {partner}</span></section>
+      {@render pornSection()}
+    {:else if !error}<Spinner label="Loading" />{/if}
   {:else}
     {@const sh = st.shared}
     <section class="hero">
@@ -424,6 +449,8 @@
       {/if}
     {/if}
 
+    {@render pornSection()}
+
     {@render section(s.pairMore, s.pairMoreIntro)}
     <div class="grid">
       {@render card(s.anLanguages, charts.languages)}
@@ -437,6 +464,31 @@
     <Heading as="h3" size="md">{title}</Heading>
     <p class="hint">{intro}</p>
   </header>
+{/snippet}
+
+{#snippet pornSection()}
+  {#if pornCharts}
+    {@const p = pornCharts}
+    {@render section(s.pairPorn, s.pairPornIntro)}
+    <div class="tiles">
+      {@render tile(fill(s.pairPornShareOf, { name: me }), `${p.me ? pct(p.me.porn, p.me.ready) : 0}%`)}
+      {@render tile(fill(s.pairPornShareOf, { name: partner }), `${p.partner ? pct(p.partner.porn, p.partner.ready) : 0}%`)}
+      {@render tile(s.pairPornJaccard, `${Math.round(p.jaccard * 100)}%`)}
+      {@render tile(s.pairPornTwins, p.twins.count.toLocaleString())}
+      {#if p.twins.count}
+        {@render tile(fill(s.pairFirstOf, { name: me }), p.twins.first.me.toLocaleString())}
+        {@render tile(fill(s.pairFirstOf, { name: partner }), p.twins.first.partner.toLocaleString())}
+      {/if}
+    </div>
+    <div class="grid">
+      {@render card(s.anPornShareMonth, p.share)}
+      {#if p.heatMe}{@render card(fill(s.pairHeatOf, { name: me }), p.heatMe, "300px")}{/if}
+      {#if p.heatPartner}{@render card(fill(s.pairHeatOf, { name: partner }), p.heatPartner, "300px")}{/if}
+      {#if p.tags}{@render card(s.pairPornTags, p.tags)}{/if}
+      {#if p.uniqueMe}{@render card(fill(s.pairUniqueOf, { name: me }), p.uniqueMe)}{/if}
+      {#if p.uniquePartner}{@render card(fill(s.pairUniqueOf, { name: partner }), p.uniquePartner)}{/if}
+    </div>
+  {/if}
 {/snippet}
 
 {#snippet card(title: string, option: EChartsCoreOption, height?: string, hint?: string)}
@@ -468,7 +520,7 @@
     {#if tooSmall}<Alert tone="info" title={s.pairTooSmall} />{/if}
     {#if !result && !running}<EmptyState title={s.pairRun} description={s.pairRunHint} />{/if}
     {#if result && ready}
-      <ShareLink pair={id} bind:link={ready.share} />
+      <ShareLink pair={id} porn={!!st?.porn} bind:link={ready.share} />
       <span class="hint">{fill(s.anComputed, { date: date(ready.created_at), n: result.count[0] + result.count[1], next: date(ready.fresh_until) })}</span>
     {/if}
     {#if canStart}

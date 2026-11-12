@@ -22,7 +22,7 @@ import { sendAnalysisStatus, showAnalysis } from "./analysiswidget";
 import { sendStartWidget } from "./startwidget";
 
 const html = { parse_mode: "HTML" } as const;
-const utc = (t: number) => new Date(t * 1000).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+export const utc = (t: number) => new Date(t * 1000).toISOString().slice(0, 16).replace("T", " ") + " UTC";
 
 /** file_unique_ids of the media in a message (all photo sizes, so any of them matches). */
 export function mediaUniqueIds(msg: Message): string[] {
@@ -43,7 +43,8 @@ function settingsKeyboard(user: User, lang: Lang) {
     ...(user.describe_tier === tier ? { icon_custom_emoji_id: EMOJI.done[0] } : {}),
   });
   const porn = { text: t(lang, user.hide_porn ? "porn_hidden" : "porn_shown"), callback_data: `porn:${user.hide_porn ? 0 : 1}` };
-  return { inline_keyboard: [[button("advanced"), button("fast")], [tier("max"), tier("medium")], [porn]] };
+  const blur = { text: t(lang, user.blur_porn ? "blur_on" : "blur_off"), callback_data: `blur:${user.blur_porn ? 0 : 1}` };
+  return { inline_keyboard: [[button("advanced"), button("fast")], [tier("max"), tier("medium")], [porn], [blur]] };
 }
 
 async function statsText(env: Env, user: User, lang: Lang) {
@@ -265,5 +266,12 @@ export function registerCommands<C extends Ctx>(bot: Composer<C>, env: Env) {
     await env.DB.prepare("UPDATE users SET hide_porn = ? WHERE id = ?").bind(hide, ctx.user.id).run();
     await ctx.answerCallbackQuery(t(ctx.lang, "mode_saved"));
     await ctx.editMessageReplyMarkup({ reply_markup: settingsKeyboard({ ...ctx.user, hide_porn: hide }, ctx.lang) }).catch(() => {});
+  });
+
+  bot.callbackQuery(/^blur:([01])$/, async (ctx) => {
+    const blur = Number(ctx.match[1]);
+    await env.DB.prepare("UPDATE users SET blur_porn = ? WHERE id = ?").bind(blur, ctx.user.id).run();
+    await ctx.answerCallbackQuery(t(ctx.lang, "mode_saved"));
+    await ctx.editMessageReplyMarkup({ reply_markup: settingsKeyboard({ ...ctx.user, blur_porn: blur }, ctx.lang) }).catch(() => {});
   });
 }

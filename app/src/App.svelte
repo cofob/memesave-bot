@@ -16,15 +16,17 @@
     Tag,
     TextField,
   } from "@cofob2/design-system-svelte";
-  import { Bot, ChartNoAxesCombined, CircleCheck, Clapperboard, CircleUser, Download, Layers, ListChecks, LogOut, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Upload, Users, X } from "@lucide/svelte";
+  import { Bot, ChartNoAxesCombined, CircleCheck, Clapperboard, CircleUser, Download, Layers, Link, ListChecks, LogOut, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Upload, Users, X } from "@lucide/svelte";
   import { onMount, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { api, ApiError, type FeedMode, type Me, type MemeBrief, type PairFeedMode, type PairView, type Sort } from "./api";
   import Account from "./Account.svelte";
   import FilterDrawer from "./FilterDrawer.svelte";
   import { activeCount, emptyFilters, fromQuery, groups, matches, toQuery, type Filters } from "./filters";
+  import ImportLink from "./ImportLink.svelte";
   import Login from "./Login.svelte";
   import MemeDetail from "./MemeDetail.svelte";
+  import { blur, blurId, nsfw } from "./nsfw.svelte";
   import { fill, s } from "./strings";
   import { paywall } from "./paywall.svelte";
   import { confirm, saveFile, syncTheme, tg } from "./telegram";
@@ -37,6 +39,7 @@
   // "login": web without a session; "denied": the account has no access.
   let auth = $state<"checking" | "ok" | "login" | "denied">("checking");
   let me = $state<Me | null>(null);
+  $effect(() => void (me && (blur.on = me.blur_porn)));
   let accountOpen = $state(false);
   let view = $state<"grid" | "analytics" | "feed" | "pairs" | "pair">("grid"); // analytics: the charts mode (loaded on demand with ECharts)
   let feedMode = $state<FeedMode | PairFeedMode | null>(null); // the feed's mode, reported by it
@@ -60,6 +63,7 @@
   let notice = $state<{ tone: "success" | "danger"; text: string } | null>(null);
   let fileInput = $state<HTMLInputElement>();
   let dragging = $state(false);
+  let importOpen = $state(false);
 
   let query = $state("");
   let sort = $state<Sort>("new");
@@ -384,12 +388,14 @@
       (e) => (auth = e instanceof ApiError && e.status === 403 ? (tg ? "denied" : "login") : "denied"),
     );
     // New uploads: add to the search index and show at the top of the default view.
-    const offUpload = onUploadReady(() => {
-      loadIndex().catch(() => {});
-      if (sort === "new" && !tag) load(true);
-    });
+    const offUpload = onUploadReady(refreshNew);
     return () => (offRoute(), offUpload());
   });
+
+  function refreshNew() {
+    loadIndex().catch(() => {});
+    if (sort === "new" && !tag) load(true);
+  }
 
   // Infinite scroll: the sentinel exists only after login.
   $effect(() => {
@@ -485,7 +491,7 @@
         pairFeed = undefined;
         pickTag(t);
       }}
-      onDeleted={(id) => drop([id])}
+      onDeleted={drop}
     />
    {/key}
   {/await}
@@ -577,6 +583,10 @@
           {#snippet leading()}<Upload size={16} aria-hidden="true" />{/snippet}
           {s.upload}
         </Button>
+        <Button size="sm" variant="secondary" onclick={() => (importOpen = true)}>
+          {#snippet leading()}<Link size={16} aria-hidden="true" />{/snippet}
+          {s.importLink}
+        </Button>
         <IconButton label={s.feed} variant="ghost" size="sm" onclick={() => (view = "feed")}><Clapperboard size={18} /></IconButton>
         <IconButton label={s.analytics} variant="ghost" size="sm" onclick={() => (view = "analytics")}><ChartNoAxesCombined size={18} /></IconButton>
         <IconButton label={s.pairs} variant="ghost" size="sm" onclick={() => (view = "pairs")}><Users size={18} /></IconButton>
@@ -633,6 +643,7 @@
           <button
             class="tile"
             class:picked={picked.has(meme.id)}
+            use:nsfw={blurId(meme)}
             onclick={() => (!selecting ? (selected = meme.id) : picked.has(meme.id) ? picked.delete(meme.id) : picked.add(meme.id))}
             aria-label={meme.title ?? meme.id}
             aria-pressed={selecting ? picked.has(meme.id) : undefined}
@@ -698,6 +709,14 @@
 </Drawer>
 
 {#if !viewing.who}<UploadPanel />{/if}
+<ImportLink
+  open={importOpen}
+  onClose={() => (importOpen = false)}
+  onStarted={() => {
+    notice = { tone: "success", text: s.importStarted };
+    setTimeout(refreshNew, 20000); // a link import has no status to poll: look again after a while
+  }}
+/>
 <FilterDrawer open={filtersOpen} {filters} onChange={(f) => (filters = f)} onClose={() => (filtersOpen = false)} />
 {#if me}
   <Account {me} bind:tab={accountTab} open={accountOpen} onClose={() => (accountOpen = false)} onMeChange={(value) => (me = value)} />
@@ -714,8 +733,8 @@
       items = items.map((m) => (m.id === id ? { ...m, status: "embedding" } : m));
       selected = null;
     }}
-    onDeleted={(id) => {
-      drop([id]);
+    onDeleted={(ids) => {
+      drop(ids);
       selected = null;
     }}
   />

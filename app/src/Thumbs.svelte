@@ -1,6 +1,7 @@
 <script lang="ts">
   // A grid of meme previews from the loaded search index; a click opens the meme. `note` adds a line under each.
   import type { MemeBrief } from "./api";
+  import { blurId, nsfw } from "./nsfw.svelte";
   import { indexed, loadIndex, textIndex } from "./search.svelte";
 
   interface Props {
@@ -20,7 +21,7 @@
   {#each ids as id (id)}
     {@const m = items?.get(id) ?? (textIndex.version >= 0 ? indexed(id) : undefined)}
     <figure>
-      <button class="thumb" onclick={() => onOpen(id)} aria-label={m?.title ?? id}>
+      <button class="thumb" onclick={() => onOpen(id)} aria-label={m?.title ?? id} use:nsfw={m ? blurId(m) : false}>
         {#if m}<img src={m.thumb} alt={m.title ?? ""} loading="lazy" />{/if}
       </button>
       {#if note}<figcaption>{note(id)}</figcaption>{/if}

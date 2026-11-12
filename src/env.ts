@@ -36,5 +36,6 @@ export interface Env {
   BTCPAY_USDT?: string; // USDt plugin networks, e.g. "Ethereum,Polygon,Plasma" (payment methods USDT-ETHEREUM, …)
   COBALT_URL?: string; // cobalt API: media of links sent to the bot; https://api.cobalt.tools/ by default
   COBALT_API_KEY?: string; // secret
-  FETCH_PROXIES?: string; // secret: comma list of proxies for blocked sites, e.g. "http://user:pass@host:3128,socks5://host:1080"
+  SCRAPER_URL: string; // scraper service (scraper/): the gallery sites
+  SCRAPER_API_KEY: string; // secret
 }

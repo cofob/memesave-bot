@@ -132,6 +132,22 @@ describe("pair feed", () => {
     expect((await me(`pairs/${p.id}/guess`, { id: "stranger", owner: "me" })).status).toBe(404);
   });
 
+  it("no porn for either side when one member of the pair hides it", async () => {
+    await users(761, 762);
+    const p = await pair(761, 762);
+    await meme(761, "x1");
+    await meme(761, "x2");
+    await meme(762, "y1");
+    await db.prepare("UPDATE memes SET porn = 1 WHERE id IN ('x2', 'y1')").run();
+    const feed = async (u: number, mode: string) => ids(await (await api(u)(`pairs/${p.id}/feed?mode=${mode}&seed=5`)).json());
+    expect((await feed(761, "mix")).sort()).toEqual(["x1", "x2", "y1"]);
+    expect(await feed(762, "theirs")).toEqual(expect.arrayContaining(["x1", "x2"]));
+    await db.prepare("UPDATE users SET hide_porn = 1 WHERE id = 762").run();
+    for (const [u, mode] of [[761, "mix"], [762, "mix"], [761, "guess"], [762, "theirs"]] as const) expect(await feed(u, mode)).toEqual(expect.not.arrayContaining(["x2", "y1"]));
+    expect((await feed(761, "mix")).sort()).toEqual(["x1"]);
+    expect(await feed(762, "theirs")).toEqual(["x1"]);
+  });
+
   it("copy: a new own meme with R2 files and vectors, dedupe, no access without a pair", async () => {
     await users(741, 742, 743);
     await pair(741, 742);

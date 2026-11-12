@@ -186,6 +186,12 @@
               checked={me.hide_porn}
               onCheckedChange={(hide) => act(() => api.setSettings({ hide_porn: hide }), s.stateReady).then(() => onMeChange({ ...me, hide_porn: hide }))}
             />
+            <Switch
+              label={s.blurPorn}
+              description={s.blurPornHint}
+              checked={me.blur_porn}
+              onCheckedChange={(on) => act(() => api.setSettings({ blur_porn: on }), s.stateReady).then(() => onMeChange({ ...me, blur_porn: on }))}
+            />
             <Channels />
             <Connections />
             <Heading as="h3" size="sm">{s.keyTitle}</Heading>

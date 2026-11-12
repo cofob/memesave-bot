@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { sign } from "../src/media";
-import { createZipImport, handleUpload, handleZipCallback } from "../src/zip";
+import { createZipImport, handleUpload, handleZipCallback, sourceMetaStage } from "../src/zip";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -106,5 +106,31 @@ describe("zip import", () => {
     expect(telegram).toEqual(["sendWidget", "editMessageWidgetData", "sendMessage"]);
     expect(await e.DB.prepare("SELECT widget_msg_id FROM zip_imports WHERE id = ?").bind(zip.id).first("widget_msg_id")).toBe(1);
     expect((await call(e, zip.id, "items", { items: [] })).status).toBe(403);
+  });
+
+  it("keeps the first gallery link as the source and loads its metadata before the embed", async () => {
+    const { e, jobs } = setup();
+    const zip = await createZipImport(e, 34, "en");
+    await e.DB.prepare("UPDATE zip_imports SET status = 'running' WHERE id = ?").bind(zip.id).run();
+    const links = ["https://example.com/x", "https://e621.net/posts/7", "https://telegra.ph/a"];
+    await call(e, zip.id, "items", { items: [{ ...item(sha("c"), "photo"), source: "Art Channel", links }, { ...item(sha("d"), "photo"), source: "Art Channel", links: ["https://example.com/y"] }] });
+    const rows = await e.DB.prepare("SELECT id, source, caption FROM memes WHERE user_id = 34 ORDER BY sha256").all<{ id: string; source: string; caption: string }>();
+    expect(rows.results.map((r) => [r.source, r.caption])).toEqual([["https://e621.net/posts/7", "hi"], ["Art Channel", "hi"]]);
+    const [a, b] = rows.results.map((r) => r.id);
+    expect(jobs).toEqual([{ type: "source_meta", memeId: a }, { type: "embed", memeId: b }]);
+
+    const listing = { site: "e621", source: "https://e621.net/posts/7", title: null, items: [{ url: "https://static1.e621.net/7.png", tags: ["wolf"], data: { id: 7 }, porn: true }] };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(listing));
+    jobs.length = 0;
+    await sourceMetaStage(e, a);
+    expect(JSON.parse((await e.DB.prepare("SELECT source_meta FROM memes WHERE id = ?").bind(a).first<string>("source_meta"))!)).toEqual({ site: "e621", tags: ["wolf"], data: { id: 7 }, porn: true });
+    expect(jobs).toEqual([{ type: "embed", memeId: a }]);
+
+    // A scraper error keeps the source and goes on without metadata.
+    await e.DB.prepare("UPDATE memes SET source_meta = NULL WHERE id = ?").bind(a).run();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ error: { code: "upstream", status: 404 } }, { status: 502 }));
+    await sourceMetaStage(e, a);
+    expect(await e.DB.prepare("SELECT source, source_meta FROM memes WHERE id = ?").bind(a).first()).toEqual({ source: "https://e621.net/posts/7", source_meta: null });
+    expect(jobs).toHaveLength(2);
   });
 });

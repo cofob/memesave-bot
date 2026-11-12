@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { Alert, Button, Heading, Inline, Stack, Switch, Text, TextField } from "@cofob2/design-system-svelte";
-  import { api, ApiError, type ApiToken, type Connection, type E621Status } from "./api";
+  import { Alert, Button, Heading, Inline, Select, Stack, Switch, Text, TextField } from "@cofob2/design-system-svelte";
+  import { api, ApiError, type ApiToken, type Connection, type E621Lists, type E621Status } from "./api";
   import { fill, s } from "./strings";
 
   let items = $state<Connection[]>([]);
@@ -44,6 +44,7 @@
       if (!(e instanceof ApiError && e.status === 402)) e621Msg = e instanceof ApiError && e.status === 400 ? s.e621Invalid : s.e621Failed;
     }
   };
+  const e621Act = (call: () => Promise<unknown>) => call().then(loadE621).catch(() => {});
   const e621Error: Record<string, string> = { unauthorized: s.e621Err_unauthorized, "payment required": s.e621Err_payment_required, "storage full": s.e621Err_storage_full };
 </script>
 
@@ -93,7 +94,22 @@
 {#if e621.connected}
   <Text size="sm">{fill(e621.backfill_done ? s.e621Synced : s.e621Importing, { user: e621.username ?? "", n: String(e621.imported ?? 0) })}</Text>
   {#if e621.error}<Alert tone="danger" title={e621Error[e621.error] ?? e621.error} />{/if}
-  <Inline gap="sm"><Button size="sm" variant="ghost" onclick={() => api.disconnectE621().then(loadE621)}>{s.e621Disconnect}</Button></Inline>
+  {#if e621.last_sync}<Text tone="muted" size="sm">{fill(s.e621Last, { date: new Date(e621.last_sync * 1000).toLocaleString() })}</Text>{/if}
+  <Select
+    label={s.e621Lists}
+    value={e621.lists}
+    options={[
+      { value: "fav", label: s.e621ListFav },
+      { value: "up", label: s.e621ListUp },
+      { value: "both", label: s.e621ListBoth },
+    ]}
+    onchange={(e: Event) => e621Act(() => api.setE621Lists((e.currentTarget as HTMLSelectElement).value as E621Lists))}
+  />
+  <Switch label={s.e621Pools} description={s.e621PoolsHint} checked={!!e621.pools} onCheckedChange={(on) => e621Act(() => api.setE621Pools(on))} />
+  <Inline gap="sm">
+    <Button size="sm" variant="secondary" disabled={!e621.backfill_done} onclick={() => e621Act(api.syncE621)}>{s.e621Sync}</Button>
+    <Button size="sm" variant="ghost" onclick={() => e621Act(api.disconnectE621)}>{s.e621Disconnect}</Button>
+  </Inline>
 {/if}
 {#if !e621.connected || e621.error === "unauthorized"}
   <Inline gap="sm" wrap>

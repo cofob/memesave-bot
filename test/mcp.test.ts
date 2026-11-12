@@ -175,6 +175,9 @@ describe("MCP OAuth", () => {
     expect(found.structuredContent.items.map((m: { id: string }) => m.id).sort()).toEqual(["m1", "m2"]);
     const videos = await tool(token, "search_memes", { query: "cat", mode: "fts", filters: { kind: ["video"] } });
     expect(videos.structuredContent.items.map((m: { id: string }) => m.id)).toEqual(["m2"]);
+    const regex = await tool(token, "search_memes", { query: "^danc", mode: "regex" });
+    expect(regex.structuredContent.items.map((m: { id: string }) => m.id)).toEqual(["m1"]);
+    expect((await tool(token, "search_memes", { query: "((", mode: "regex" })).isError).toBe(true);
 
     expect((await tool(token, "get_meme", { id: "m3" })).isError).toBe(true);
     expect((await tool(token, "get_meme", { id: "m1" })).structuredContent.title).toBe("dancing cat");

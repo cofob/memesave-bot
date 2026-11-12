@@ -1,4 +1,4 @@
-import { ASPECT, DURATION, HEATMAP, MONTH, originStats, SAVED, tagStats } from "./analytics";
+import { ASPECT, DURATION, HEATMAP, MONTH, originStats, pornQueries, pornStats, SAVED, tagStats } from "./analytics";
 import type { Env } from "./env";
 
 /** Queries of one side, in the order `side` reads them. */
@@ -38,6 +38,17 @@ const cosine = (x: number[], y: number[]) => {
   const d = Math.sqrt(dot(x, x) * dot(y, y));
   return d ? dot(x, y) / d : 0;
 };
+/** Weighted Jaccard of two tag counts: sum of minimums over sum of maximums. */
+const jaccardOf = (a: Map<string, number>, b: Map<string, number>) => {
+  let min = 0;
+  let max = 0;
+  for (const tag of new Set([...a.keys(), ...b.keys()])) {
+    const [x, y] = [a.get(tag) ?? 0, b.get(tag) ?? 0];
+    min += Math.min(x, y);
+    max += Math.max(x, y);
+  }
+  return max ? min / max : 0;
+};
 const center = (v: number[]) => v.map((x) => x - v.reduce((s, y) => s + y, 0) / v.length);
 
 /** SQL stats of two collections side by side (no spend): activity, tags, sources and exact twins. */
@@ -49,36 +60,36 @@ export async function pairStats(env: Env, me: number, partner: number) {
     // The same file in both collections: by Telegram file id or by content hash (two index joins), once per own meme.
     db
       .prepare(
-        `SELECT x, y, xd, MIN(yd) AS yd FROM (
-           SELECT x.id AS x, y.id AS y, COALESCE(x.saved_at, x.created_at) AS xd, COALESCE(y.saved_at, y.created_at) AS yd FROM memes x
+        `SELECT x, y, xd, MIN(yd) AS yd, MAX(p) AS p FROM (
+           SELECT x.id AS x, y.id AS y, COALESCE(x.saved_at, x.created_at) AS xd, COALESCE(y.saved_at, y.created_at) AS yd, x.porn AS p FROM memes x
            JOIN memes y ON y.user_id = ?2 AND y.file_unique_id = x.file_unique_id WHERE x.user_id = ?1 AND x.status != 'failed' AND y.status != 'failed'
            UNION
-           SELECT x.id, y.id, COALESCE(x.saved_at, x.created_at), COALESCE(y.saved_at, y.created_at) FROM memes x
+           SELECT x.id, y.id, COALESCE(x.saved_at, x.created_at), COALESCE(y.saved_at, y.created_at), x.porn FROM memes x
            JOIN memes y ON y.user_id = ?2 AND y.sha256 = x.sha256 WHERE x.user_id = ?1 AND x.status != 'failed' AND y.status != 'failed'
          ) GROUP BY x ORDER BY xd DESC`,
       )
       .bind(me, partner),
     db.prepare("SELECT IIF(a = ?1, a_name, b_name) AS me, IIF(a = ?1, b_name, a_name) AS partner FROM pairs WHERE (a = ?1 AND b = ?2) OR (a = ?2 AND b = ?1)").bind(me, partner),
+    ...pornQueries(db, me),
+    ...pornQueries(db, partner),
+    db.prepare("SELECT COALESCE(MAX(hide_porn), 0) AS hidden FROM users WHERE id IN (?1, ?2)").bind(me, partner),
   ]);
   const r = res.map((x) => x.results);
+  const extra = r.splice(-13); // porn stats of both sides and the hide flag
   const n = r.length / 2 - 1;
   const names = r.at(-1)![0] ?? {};
   const [a, b] = [side(me, names.me ?? null, r.slice(0, n)), side(partner, names.partner ?? null, r.slice(n, 2 * n))];
-  const twins = r.at(-2) as { x: string; y: string; xd: number; yd: number }[];
+  const twins = r.at(-2) as { x: string; y: string; xd: number; yd: number; p: number }[];
 
-  let min = 0;
-  let max = 0;
-  for (const tag of new Set([...a.tags.keys(), ...b.tags.keys()])) {
-    const [x, y] = [a.tags.get(tag) ?? 0, b.tags.get(tag) ?? 0];
-    min += Math.min(x, y);
-    max += Math.max(x, y);
-  }
-  const jaccard = max ? min / max : 0;
+  const jaccard = jaccardOf(a.tags, b.tags);
   const unique = (x: typeof a, y: typeof a) => x.top.filter((t) => !y.tags.has(t.tag)).slice(0, 10);
   const theirSources = new Map(b.sources.map((s) => [`${s.kind}:${s.name}`, s.n]));
   const months = [...new Set([...a.view.months, ...b.view.months].map((m) => m.month))].sort();
   const monthly = (s: typeof a) => months.map((m) => s.view.months.find((x) => x.month === m)?.n ?? 0);
   const hourSim = cosine(cell(a.view.heatmap), cell(b.view.heatmap));
+  const [pa, pb] = [pornStats(extra.slice(0, 6)), pornStats(extra.slice(6, 12))];
+  const [ta, tb] = [pa, pb].map((x) => new Map(x?.tags.map((t) => [t.tag, t.count])));
+  const pornTwins = twins.filter((t) => t.p);
   const twinShare = twins.length / Math.max(1, Math.min(a.view.ready, b.view.ready));
   return {
     me: a.view,
@@ -103,6 +114,20 @@ export async function pairStats(env: Env, me: number, partner: number) {
       hourSim,
       monthSim: cosine(center(monthly(a)), center(monthly(b))), // Pearson correlation
     },
+    // Porn memes of both sides; null when someone hides porn (the other's data stays on the server) or nobody has any.
+    porn: extra[12][0].hidden || (!pa && !pb)
+      ? null
+      : {
+          me: pa && { ...pa, sources: [] }, // source names stay private, as in the normal stats
+          partner: pb && { ...pb, sources: [] },
+          tags: (pa?.tags ?? [])
+            .filter((t) => tb.has(t.tag))
+            .map((t) => ({ tag: t.tag, me: t.count, partner: tb.get(t.tag)! }))
+            .sort((x, y) => Math.min(y.me, y.partner) - Math.min(x.me, x.partner))
+            .slice(0, 20),
+          jaccard: jaccardOf(ta, tb),
+          twins: { count: pornTwins.length, first: { me: pornTwins.filter((t) => t.xd < t.yd).length, partner: pornTwins.filter((t) => t.yd < t.xd).length } },
+        },
     // Preliminary (stage 1): tags, hours and twins (10% twins counts in full).
     compat: Math.round(100 * (0.5 * Math.sqrt(jaccard) + 0.3 * hourSim + 0.2 * Math.min(1, 10 * twinShare))),
   };

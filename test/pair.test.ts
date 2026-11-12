@@ -4,6 +4,7 @@ import { createBot } from "../src/bot";
 import type { User } from "../src/db";
 import type { Env } from "../src/env";
 import { acceptPair, canView, createInvite, declinePair, endPair, expireInvites, listPairs, setShares } from "../src/pairs";
+import { pairMarkdown } from "../src/pairreport";
 import { pairStats } from "../src/pairstats";
 import { createToken } from "../src/tokens";
 import { deleteAccount } from "../src/purge";
@@ -281,6 +282,40 @@ describe("pair stats twins", () => {
     expect(t.count).toBe(2);
     expect(t.items.map((i) => i[0]).sort()).toEqual(["tx1", "tx2"]);
     expect(t.first).toEqual({ me: 0, partner: 2 });
+  });
+});
+
+describe("pair porn stats", () => {
+  const porn = (id: string) => db.prepare("UPDATE memes SET porn = 1 WHERE id = ?").bind(id).run();
+  it("compares porn tags and twins; hidden by either side or when nobody has porn", async () => {
+    await users(391, 392);
+    await meme(391, "px1", { fu: "pp", tags: "cat\nfur", ago: 100 });
+    await meme(392, "py1", { fu: "pp", tags: "cat", ago: 50 });
+    await meme(391, "px2", { tags: "dog" });
+    await meme(392, "py2", { tags: "fur" });
+    await pair(391, 392);
+    expect((await pairStats(e, 391, 392)).porn).toBeNull(); // both sides 0
+    await Promise.all(["px1", "py1", "py2"].map(porn));
+    const p = (await pairStats(e, 391, 392)).porn!;
+    expect(p.me).toMatchObject({ ready: 2, porn: 1 });
+    expect(p.partner).toMatchObject({ ready: 2, porn: 2 });
+    expect(p.tags).toEqual([{ tag: "cat", me: 1, partner: 1 }, { tag: "fur", me: 1, partner: 1 }]);
+    expect(p.jaccard).toBeCloseTo(2 / 2); // min: cat 1, fur 1; max: the same
+    expect(p.twins).toEqual({ count: 1, first: { me: 1, partner: 0 } });
+    await db.prepare("UPDATE users SET hide_porn = 1 WHERE id = 392").run();
+    expect((await pairStats(e, 391, 392)).porn).toBeNull();
+    expect((await pairStats(e, 392, 391)).porn).toBeNull();
+  });
+
+  it("shows the porn part of the pair report only when asked", () => {
+    const side = { ready: 10, porn: 5 };
+    const r = { analytics: { me: { name: "Ann" }, partner: { name: "Bob" }, porn: { me: side, partner: null, tags: [], jaccard: 0.25, twins: { count: 3, first: { me: 2, partner: 1 } } } }, clusters: [], twins: [], influence: { twins: [0, 0] }, scores: { compat: 50 } } as any;
+    const img = (name: string) => `![](${name})`;
+    const on = pairMarkdown("en", r, img, true);
+    expect(on).toContain("## Porn");
+    expect(on).toContain("Ann 50%, Bob 0%");
+    expect(on).toContain("![](pair_porn_tags)");
+    expect(pairMarkdown("en", r, img)).not.toContain("## Porn");
   });
 });
 

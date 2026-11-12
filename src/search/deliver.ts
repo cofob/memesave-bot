@@ -1,6 +1,9 @@
-import { InputFile, InputMediaBuilder, type Api } from "grammy";
+import { Api, GrammyError, InputFile, InputMediaBuilder } from "grammy";
 import type { InlineKeyboardMarkup, InlineQueryResult, Message } from "grammy/types";
-import type { Meme } from "../db";
+import { sendPostAudio } from "../audio";
+import { albumMemes } from "../channels";
+import { blursPorn, type Meme } from "../db";
+import { botApi } from "../botapi";
 import type { Env } from "../env";
 import { t, type Lang } from "../i18n";
 import { extractMedia } from "../ingest/receive";
@@ -57,7 +60,8 @@ async function adopt(env: Env, m: Meme, msg: Message) {
       .bind(sent.file_id, sent.file_unique_id, sent.preview_file_id, sent.preview_unique_id, m.id)
       .run();
   } catch (e) {
-    console.warn("file ids not saved", m.id, e); // e.g. the user already has this Telegram file
+    console.warn("file ids not saved", m.id, e); // the user already has this Telegram file: keep the file id at least, so it is not uploaded again
+    await env.DB.prepare("UPDATE memes SET file_id = ?, preview_file_id = ? WHERE id = ?").bind(sent.file_id, sent.preview_file_id, m.id).run().catch(console.warn);
   }
 }
 
@@ -77,18 +81,22 @@ async function withUploadFallback<T>(env: Env, memes: Meme[], send: (upload: boo
   }
 }
 
-/** Sends one meme to a chat. */
-export async function sendMeme(env: Env, api: Api, chatId: number, m: Meme, other: object = {}) {
+/** Telegram spoiler on a porn meme when the user blurs porn. */
+const spoiler = (m: Meme, blur: boolean) => (blur && m.porn ? { has_spoiler: true } : {});
+
+/** Sends one meme to a chat; `blur` (else looked up by the chat) puts a spoiler on porn. */
+export async function sendMeme(env: Env, api: Api, chatId: number, m: Meme, other: object = {}, blur?: boolean) {
+  const s = spoiler(m, blur ?? (await blursPorn(env.DB, chatId, [m])));
   return withUploadFallback(
     env,
     [m],
     async (upload) => {
       const { file, meta } = await input(env, m, upload);
       return m.kind === "photo"
-        ? api.sendPhoto(chatId, file, other)
+        ? api.sendPhoto(chatId, file, { ...other, ...s })
         : m.kind === "video"
-          ? api.sendVideo(chatId, file, { ...other, ...meta, supports_streaming: true })
-          : api.sendAnimation(chatId, file, { ...other, ...meta });
+          ? api.sendVideo(chatId, file, { ...other, ...meta, ...s, supports_streaming: true })
+          : api.sendAnimation(chatId, file, { ...other, ...meta, ...s });
     },
     (msg) => [msg],
   );
@@ -96,7 +104,8 @@ export async function sendMeme(env: Env, api: Api, chatId: number, m: Meme, othe
 
 /** Replaces the media of a message with a meme (the feed). `other` has caption, parse_mode and reply_markup. */
 export async function editMeme(env: Env, api: Api, chatId: number, messageId: number, m: Meme, other: { reply_markup?: InlineKeyboardMarkup; caption?: string; parse_mode?: "HTML" } = {}) {
-  const { reply_markup, ...text } = other;
+  const { reply_markup, ...rest } = other;
+  const text = { ...rest, ...spoiler(m, await blursPorn(env.DB, chatId, [m])) };
   return withUploadFallback(
     env,
     [m],
@@ -120,6 +129,22 @@ export async function sendResults(env: Env, api: Api, chatId: number, replyTo: n
   if (!memes.length) return api.sendMessage(chatId, t(lang, "nothing_found"), { ...reply, parse_mode: "HTML" });
 
   await sendAlbum(env, api, chatId, memes, reply);
+  await sendAlbumLinks(env, api, chatId, memes, lang, reply);
+}
+
+/** Albums and comics among the results: buttons that open them in the web app (a chat shows only the found pages). */
+async function sendAlbumLinks(env: Env, api: Api, chatId: number, memes: Meme[], lang: Lang, other: object) {
+  const seen = new Set<string>();
+  const rows = [];
+  for (const m of memes) {
+    const album = await albumMemes(env.DB, m.id);
+    if (album.length < 2 || seen.has(album[0].id)) continue;
+    seen.add(album[0].id);
+    const comic = album[0].album_layout === "comic";
+    const text = t(lang, comic ? "open_comic" : "open_album", { title: (album[0].title ?? m.title ?? "").slice(0, 40), n: album.length });
+    rows.push([{ text, web_app: { url: `${env.PUBLIC_URL.replace(/\/$/, "")}/?meme=${m.id}` } }]);
+  }
+  if (rows.length) await api.sendMessage(chatId, t(lang, "open_albums"), { ...other, reply_markup: { inline_keyboard: rows } });
 }
 
 /**
@@ -128,13 +153,14 @@ export async function sendResults(env: Env, api: Api, chatId: number, replyTo: n
  */
 export async function sendAlbum(env: Env, api: Api, chatId: number, memes: Meme[], other: object = {}, caption?: string) {
   const album = memes.filter((m) => m.kind !== "animation");
+  const blur = await blursPorn(env.DB, chatId, memes);
   let first = caption ? { caption } : {};
   for (let i = 0; i < album.length; i += 10) {
     const chunk = album.slice(i, i + 10);
     const extra = first;
     first = {};
     if (chunk.length === 1) {
-      await sendMeme(env, api, chatId, chunk[0], { ...other, ...extra });
+      await sendMeme(env, api, chatId, chunk[0], { ...other, ...extra }, blur);
       continue;
     }
     await withUploadFallback(
@@ -144,7 +170,7 @@ export async function sendAlbum(env: Env, api: Api, chatId: number, memes: Meme[
         const media = await Promise.all(
           chunk.map(async (m, j) => {
             const { file, meta } = await input(env, m, upload && !!m.r2_file);
-            return { type: m.kind === "photo" ? "photo" : "video", media: file, ...meta, ...(j ? {} : extra) } as const;
+            return { type: m.kind === "photo" ? "photo" : "video", media: file, ...meta, ...spoiler(m, blur), ...(j ? {} : extra) } as const;
           }),
         );
         return api.sendMediaGroup(chatId, media, other);
@@ -153,7 +179,27 @@ export async function sendAlbum(env: Env, api: Api, chatId: number, memes: Meme[
     );
   }
   for (const m of memes.filter((m) => m.kind === "animation")) {
-    await sendMeme(env, api, chatId, m, { ...other, ...first });
+    await sendMeme(env, api, chatId, m, { ...other, ...first }, blur);
     first = {};
   }
+}
+
+/** The order of sendAlbum: photos and videos, then GIFs. */
+const sendOrder = (memes: Meme[]) => [...memes.filter((m) => m.kind !== "animation"), ...memes.filter((m) => m.kind === "animation")];
+
+/**
+ * Job for a big album: sends 10 memes from `from`, then queues the next 10 later (Telegram allows about 20 messages a minute per chat).
+ * No auto-retry on this Api: on 429 the same part waits for retry_after.
+ */
+export async function sendAlbumJob(env: Env, userId: number, memeId: string, from: number) {
+  const memes = sendOrder(await albumMemes(env.DB, memeId));
+  const next = (from: number, delaySeconds: number) => env.JOBS.send({ type: "send_album", userId, memeId, from }, { delaySeconds });
+  try {
+    await sendAlbum(env, new Api(env.BOT_TOKEN), userId, memes.slice(from, from + 10));
+  } catch (e) {
+    if (e instanceof GrammyError && e.parameters.retry_after) return next(from, e.parameters.retry_after + 1);
+    throw e;
+  }
+  if (from + 10 < memes.length) return next(from + 10, 30);
+  await sendPostAudio(env, botApi(env.BOT_TOKEN), userId, memeId);
 }
