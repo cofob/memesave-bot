@@ -263,9 +263,9 @@ export async function handleAnalysis(req: Request, env: Env): Promise<Response> 
   const owners = p ? [p.a, p.b!] : [a.user_id];
 
   if (action === "memes" && m === "GET") {
-    // Ready memes: [id, kind, created_at, language, tags(, owner: 0 = pair.a, 1 = pair.b)], ordered by rowid.
+    // Ready memes: [id, kind, date (saved_at, else created_at), language, tags(, owner: 0 = pair.a, 1 = pair.b)], ordered by rowid.
     const rows = await env.DB.prepare(
-      `SELECT rowid, id, kind, created_at, language, COALESCE(tags, '')${p ? ", IIF(user_id = ?1, 0, 1)" : ""} FROM memes WHERE user_id IN (?1, ?2) AND status = 'ready' AND rowid > ?3 ORDER BY rowid LIMIT ?4`,
+      `SELECT rowid, id, kind, COALESCE(saved_at, created_at), language, COALESCE(tags, '')${p ? ", IIF(user_id = ?1, 0, 1)" : ""} FROM memes WHERE user_id IN (?1, ?2) AND status = 'ready' AND rowid > ?3 ORDER BY rowid LIMIT ?4`,
     )
       .bind(owners[0], owners.at(-1), Number(url.searchParams.get("after")) || 0, PAGE)
       .raw();
