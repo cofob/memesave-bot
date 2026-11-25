@@ -152,6 +152,9 @@ export interface E621Status {
   error?: string | null; // unauthorized | payment required | storage full
 }
 
+export type CookieSite = "pixiv" | "furaffinity";
+export type CookiesStatus = Partial<Record<CookieSite, { error: string | null; created_at: number }>>; // the linked sites; error: expired
+
 export interface ApiToken {
   id: string;
   name: string;
@@ -516,6 +519,9 @@ export const api = {
   setE621Pools: (pools: boolean) => call("e621", { method: "PUT", body: JSON.stringify({ pools }) }),
   syncE621: () => call<{ queued: boolean }>("e621/sync", { method: "POST" }),
   disconnectE621: () => call("e621", { method: "DELETE" }),
+  cookies: () => call<CookiesStatus>("cookies"),
+  linkCookies: (site: CookieSite, values: Record<string, string>) => call(`cookies/${site}`, { method: "PUT", body: JSON.stringify(values) }),
+  unlinkCookies: (site: CookieSite) => call(`cookies/${site}`, { method: "DELETE" }),
   tokens: () => call<ApiToken[]>("tokens"),
   createToken: (name: string, write: boolean) => post<{ id: string; token: string }>("tokens", { name, write }),
   deleteToken: (id: string) => call(`tokens/${id}`, { method: "DELETE" }),

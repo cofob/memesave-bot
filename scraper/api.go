@@ -52,6 +52,8 @@ func fail(w http.ResponseWriter, code int, name string, status int) {
 func failErr(w http.ResponseWriter, err error) {
 	var se *StatusError
 	switch {
+	case errors.As(err, &se) && se.Login:
+		fail(w, http.StatusBadGateway, "login", se.Status)
 	case errors.As(err, &se) && se.Blocked:
 		fail(w, http.StatusBadGateway, "blocked", se.Status)
 	case errors.As(err, &se):

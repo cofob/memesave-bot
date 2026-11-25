@@ -81,6 +81,7 @@ const TABLES: Record<string, { from: string; where: string; cols: string; key?: 
   },
   e621_posts: { from: "e621_posts", where: "user_id = ?", cols: "post_id, pool_id" },
   e621_pools: { from: "e621_pools", where: "user_id = ?", cols: "pool_id" },
+  site_cookies: { from: "site_cookies", where: "user_id = ?", cols: "site, error, created_at" }, // without the cookies
 };
 
 /** Job container (same image as the importer, MODE=export): builds one export. */

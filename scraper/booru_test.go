@@ -245,9 +245,16 @@ func TestFuraffinity(t *testing.T) {
 	// A guest gets no image of a mature or adult submission
 	c, _ = site(map[string]any{"https://www.furaffinity.net/view/7/": `<body class="c-bodyColor" id="pageid-mature-content-error">`})
 	_, err := listErr(c, furaffinity, "https://www.furaffinity.net/view/7/", "")
-	if se, ok := err.(*StatusError); !ok || se.Status != 403 {
+	if se, ok := err.(*StatusError); !ok || se.Status != 403 || se.Login {
 		t.Fatal(err)
 	}
+	// The user's cookies go to the page only, not to the file
+	c, calls = site(map[string]any{"https://www.furaffinity.net/view/7/": faHTML("Adult", ""), full: func(Req) any { return &Resp{Status: 200, Size: 1 << 20} }})
+	u, _ := url.Parse("https://www.furaffinity.net/view/7/")
+	if _, err := furaffinity.Fetch(t.Context(), c, u, ListReq{Cookie: "a=1; b=2", Limits: defaultLimits}); err != nil {
+		t.Fatal(err)
+	}
+	eq(t, [2]string{(*calls)[0].Headers["Cookie"], (*calls)[1].Headers["Cookie"]}, [2]string{"a=1; b=2", ""})
 	c, _ = site(map[string]any{"https://www.furaffinity.net/view/7/": "<html>"})
 	if _, err := listErr(c, furaffinity, "https://www.furaffinity.net/view/7/", ""); err == nil {
 		t.Fatal("no image")
@@ -281,9 +288,23 @@ func TestPixiv(t *testing.T) {
 	c, _ = site(map[string]any{"https://www.pixiv.net/ajax/illust/1": work(0, 2, 5)}) // ugoira
 	eq(t, len(listing(t, c, pixiv, "https://www.pixiv.net/artworks/1", "").Items), 0)
 
-	c, _ = site(map[string]any{"https://www.pixiv.net/ajax/illust/1": work(1, 1, 1)}) // R-18: the pages answer 404 to a guest
+	c, calls = site(map[string]any{"https://www.pixiv.net/ajax/illust/1": work(1, 1, 1)}) // R-18: the pages answer 404 to a guest
 	_, err := listErr(c, pixiv, "https://www.pixiv.net/artworks/1", "")
-	if se, ok := err.(*StatusError); !ok || se.Status != 403 {
+	if se, ok := err.(*StatusError); !ok || se.Status != 403 || se.Login {
 		t.Fatal(err)
 	}
+	eq(t, (*calls)[0].Headers["Cookie"], "")
+	// With the user's session: sent to the ajax API, not to i.pximg.net; no pages means it is expired
+	u, _ := url.Parse("https://www.pixiv.net/artworks/1")
+	_, err = pixiv.Fetch(t.Context(), c, u, ListReq{Cookie: "PHPSESSID=s", Limits: defaultLimits})
+	if se, ok := err.(*StatusError); !ok || !se.Login {
+		t.Fatal(err)
+	}
+	c, calls = site(map[string]any{"https://www.pixiv.net/ajax/illust/1": work(1, 1, 1), "https://www.pixiv.net/ajax/illust/1/pages": pages})
+	l, err = pixiv.Fetch(t.Context(), c, u, ListReq{Cookie: "PHPSESSID=s", Limits: defaultLimits})
+	if err != nil || !l.Items[0].Porn {
+		t.Fatal(err)
+	}
+	eq(t, [3]string{(*calls)[0].Headers["Cookie"], (*calls)[1].Headers["Cookie"], (*calls)[2].Headers["Cookie"]}, [3]string{"PHPSESSID=s", "PHPSESSID=s", ""})
+	eq(t, (*calls)[0].Headers["Referer"], "https://www.pixiv.net/")
 }

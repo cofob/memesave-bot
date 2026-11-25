@@ -3,8 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"net/url"
+	"slices"
 	"testing"
 	"time"
+
+	http "github.com/bogdanfinn/fhttp"
+	tls_client "github.com/bogdanfinn/tls-client"
 )
 
 // fakeRoute answers with the responses in order (the last one again), and counts its requests.
@@ -99,4 +104,23 @@ func TestGap(t *testing.T) {
 	if d := time.Since(start); d < 100*time.Millisecond || d > 140*time.Millisecond {
 		t.Fatal(d)
 	}
+}
+
+func TestJarKeepsNoSessions(t *testing.T) {
+	j := jar{tls_client.NewCookieJar()}
+	for _, raw := range []string{"https://www.pixiv.net/", "https://www.furaffinity.net/", "https://e-hentai.org/"} {
+		u, _ := url.Parse(raw)
+		j.SetCookies(u, []*http.Cookie{{Name: "PHPSESSID", Value: "s"}, {Name: "a", Value: "1"}, {Name: "b", Value: "2"}, {Name: "cf_clearance", Value: "c"}})
+	}
+	names := func(raw string) (out []string) {
+		u, _ := url.Parse(raw)
+		for _, c := range j.Cookies(u) {
+			out = append(out, c.Name)
+		}
+		slices.Sort(out)
+		return out
+	}
+	eq(t, names("https://www.pixiv.net/"), []string{"a", "b", "cf_clearance"})
+	eq(t, names("https://www.furaffinity.net/"), []string{"PHPSESSID", "cf_clearance"})
+	eq(t, names("https://e-hentai.org/"), []string{"PHPSESSID", "a", "b", "cf_clearance"})
 }

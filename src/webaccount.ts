@@ -17,6 +17,7 @@ import { accountSummary, CONFIRM, deleteAccount } from "./purge";
 import { oauthApi } from "./oauth";
 import { connectE621, disconnectE621, e621Status, LISTS, setE621Lists, setE621Pools, syncE621, type Lists } from "./e621";
 import { E621Error } from "./ingest/sources/e621";
+import { cookiesStatus, isSite, linkCookies, SITES, unlinkCookies } from "./cookies";
 import { createToken, deleteToken, listTokens } from "./tokens";
 import { billingStatus, ownKey, starsInvoiceLink, type ProductKind } from "./billing";
 import { addChannelUrl, channelView, listChannels, removeChannel, updateChannel, type ChannelPatch } from "./channels";
@@ -163,6 +164,13 @@ export async function handleAccount(req: Request, env: Env, user: User, parts: s
       if (pools !== undefined) await setE621Pools(env.DB, user.id, !!pools);
       return json({ ok: true });
     }
+  }
+
+  if (resource === "cookies") {
+    if (m === "GET" && !id) return json(await cookiesStatus(env.DB, user.id));
+    if (!isSite(id)) return json({ error: "site: pixiv or furaffinity" }, 400);
+    if (m === "DELETE") return (await unlinkCookies(env.DB, user.id, id), json({ ok: true }));
+    if (m === "PUT") return (await linkCookies(env, user.id, id, await req.json())) ? json({ ok: true }) : json({ error: `cookies required: ${SITES[id].join(", ")}` }, 400);
   }
 
   if (resource === "tokens") {

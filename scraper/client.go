@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +51,7 @@ type StatusError struct {
 	Status  int
 	URL     string
 	Blocked bool // a challenge that was not solved
+	Login   bool // the login wall with the user's cookies: they are expired (or the account hides the work)
 }
 
 func (e *StatusError) Error() string { return fmt.Sprintf("%d %s", e.Status, e.URL) }
@@ -71,7 +73,7 @@ func newRoute(proxy string) (*route, error) {
 	opts := []tls_client.HttpClientOption{
 		tls_client.WithClientProfile(profiles.Chrome_154),
 		tls_client.WithTimeoutSeconds(60),
-		tls_client.WithCookieJar(tls_client.NewCookieJar()),
+		tls_client.WithCookieJar(jar{tls_client.NewCookieJar()}),
 		tls_client.WithDisableHttp3(),
 		// The NAT of the host drops idle connections: no reuse of old ones, and a PING finds dead HTTP/2 ones
 		tls_client.WithTransportOptions(&tls_client.TransportOptions{IdleConnTimeout: &idle, ReadIdleTimeout: 15 * time.Second, PingTimeout: 5 * time.Second, ResponseHeaderTimeout: 30 * time.Second}),
@@ -90,6 +92,16 @@ func newRoute(proxy string) (*route, error) {
 	hc, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), opts...)
 	r.hc = hc
 	return r, err
+}
+
+// sessions are the login cookies of the sites with user sessions (ListReq.Cookie): the jar of a route is shared, it never keeps them
+var sessions = map[string][]string{"pixiv.net": {"PHPSESSID"}, "furaffinity.net": {"a", "b"}}
+
+type jar struct{ http.CookieJar }
+
+func (j jar) SetCookies(u *url.URL, cs []*http.Cookie) {
+	names := sessions[strings.TrimPrefix(u.Hostname(), "www.")]
+	j.CookieJar.SetCookies(u, slices.DeleteFunc(slices.Clone(cs), func(c *http.Cookie) bool { return slices.Contains(names, c.Name) }))
 }
 
 func (r *route) userAgent() string {

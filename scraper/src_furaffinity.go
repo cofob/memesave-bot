@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Fur Affinity submissions (one meme): the full file of the page. Mature and adult ones need a login:
+// Fur Affinity submissions (one meme): the full file of the page. Mature and adult ones need a login (the user's cookies a and b):
 // the page of a guest has no image, so they fail with 403.
 
 var (
@@ -25,7 +25,7 @@ var furaffinity = &Source{
 	Fetch: func(ctx context.Context, c *Client, u *url.URL, q ListReq) (*Listing, error) {
 		id := faPath.FindStringSubmatch(u.Path)[2]
 		source := "https://www.furaffinity.net/view/" + id + "/"
-		page, err := c.Text(ctx, source, nil)
+		page, err := c.Text(ctx, source, withCookie(nil, q.Cookie))
 		if err != nil {
 			return nil, err
 		}
@@ -33,7 +33,7 @@ var furaffinity = &Source{
 		img := only(hits, "img#submissionImg")
 		if len(img) == 0 {
 			if len(only(hits, "body#pageid-mature-content-error")) > 0 {
-				return nil, &StatusError{Status: 403, URL: source} // needs a login
+				return nil, &StatusError{Status: 403, URL: source, Login: q.Cookie != ""} // needs a login
 			}
 			return nil, errors.New("furaffinity: no image")
 		}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"maps"
 	"net/url"
 )
 
@@ -38,7 +39,8 @@ type Limits struct {
 type ListReq struct {
 	URL    string `json:"url"`
 	Cursor string `json:"cursor,omitempty"`
-	Auth   string `json:"auth,omitempty"` // Authorization header of the user's account on the site (e621)
+	Auth   string `json:"auth,omitempty"`   // Authorization header of the user's account on the site (e621)
+	Cookie string `json:"cookie,omitempty"` // Cookie header of the user's session on the site (pixiv, Fur Affinity); never logged
 	Limits Limits `json:"limits"`
 }
 
@@ -53,6 +55,16 @@ type Source struct {
 
 // sources are all gallery sources: a new source adds its line here.
 var sources = []*Source{telegraph, e621, nhentai, ehentai, hitomi, imhentai, hentaifox, asmhentai, muses, multporn, allporncomic, kemono, xlecx, tailspace, rule34, gelbooru, danbooru, furaffinity, pixiv}
+
+// withCookie is h with the user's Cookie header, if any (a copy: h is shared).
+func withCookie(h map[string]string, cookie string) map[string]string {
+	if cookie == "" {
+		return h
+	}
+	out := map[string]string{"Cookie": cookie}
+	maps.Copy(out, h)
+	return out
+}
 
 func sourceOf(u *url.URL) *Source {
 	for _, s := range sources {

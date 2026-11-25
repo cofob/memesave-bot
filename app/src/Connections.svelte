@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Alert, Button, Heading, Inline, Progress, Select, Stack, Switch, Text, TextField } from "@cofob2/design-system-svelte";
   import { onDestroy } from "svelte";
-  import { api, ApiError, type ApiToken, type Connection, type E621Lists, type E621Status } from "./api";
+  import { api, ApiError, type ApiToken, type Connection, type CookieSite, type CookiesStatus, type E621Lists, type E621Status } from "./api";
   import { fill, s } from "./strings";
   import { onLive } from "./live";
 
@@ -49,6 +49,27 @@
   };
   const e621Act = (call: () => Promise<unknown>) => call().then(loadE621).catch(() => {});
   const e621Error: Record<string, string> = { unauthorized: s.e621Err_unauthorized, "payment required": s.e621Err_payment_required, "storage full": s.e621Err_storage_full };
+
+  // Session cookies of pixiv and Fur Affinity: the inputs by site and cookie name
+  const cookieSites = [
+    { site: "pixiv", name: "pixiv", hint: s.pixivHint },
+    { site: "furaffinity", name: "Fur Affinity", hint: s.faHint },
+  ] as const;
+  let cookies = $state<CookiesStatus>({});
+  let cookieIn = $state<Record<CookieSite, Record<string, string>>>({ pixiv: { PHPSESSID: "" }, furaffinity: { a: "", b: "" } });
+  let cookieMsg = $state<Partial<Record<CookieSite, string>>>({});
+  const loadCookies = async () => (cookies = await api.cookies());
+  loadCookies().catch(() => {});
+  const linkCookies = async (site: CookieSite) => {
+    cookieMsg[site] = "";
+    try {
+      await api.linkCookies(site, cookieIn[site]);
+      for (const n in cookieIn[site]) cookieIn[site][n] = "";
+      await loadCookies();
+    } catch (e) {
+      cookieMsg[site] = e instanceof ApiError && e.status === 400 ? s.cookiesInvalid : s.cookiesFailed;
+    }
+  };
 </script>
 
 <Heading as="h3" size="sm">{s.connTitle}</Heading>
@@ -125,3 +146,22 @@
   </Inline>
   {#if e621Msg}<Alert tone="danger" title={e621Msg} />{/if}
 {/if}
+
+{#each cookieSites as c (c.site)}
+  <Heading as="h3" size="sm">{c.name}</Heading>
+  <Text tone="muted" size="sm">{c.hint}</Text>
+  {#if cookies[c.site]}
+    <Text size="sm">{s.cookiesLinked}</Text>
+    {#if cookies[c.site]?.error}<Alert tone="danger" title={s.cookiesExpired} />{/if}
+    <Inline gap="sm"><Button size="sm" variant="ghost" onclick={() => api.unlinkCookies(c.site).then(loadCookies).catch(() => {})}>{s.e621Disconnect}</Button></Inline>
+  {/if}
+  {#if !cookies[c.site] || cookies[c.site]?.error}
+    <Inline gap="sm" wrap>
+      {#each Object.keys(cookieIn[c.site]) as n (n)}
+        <TextField label={n} bind:value={cookieIn[c.site][n]} type="password" size="sm" />
+      {/each}
+      <Button size="sm" variant="secondary" onclick={() => linkCookies(c.site)}>{s.cookiesLink}</Button>
+    </Inline>
+    {#if cookieMsg[c.site]}<Alert tone="danger" title={cookieMsg[c.site] ?? ""} />{/if}
+  {/if}
+{/each}

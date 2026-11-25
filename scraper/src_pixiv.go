@@ -8,7 +8,7 @@ import (
 )
 
 // Pixiv artworks: one image is a meme, several are a comic (pages in order). Ugoira (animations) are not importable.
-// R-18 works need a login: a guest gets no image URLs, so they fail with 403.
+// R-18 works need a login (the user's PHPSESSID cookie): a guest gets no image URLs, so they fail with 403.
 
 var (
 	pixivHost = regexp.MustCompile(`^(www\.)?pixiv\.net$`)
@@ -57,7 +57,8 @@ var pixiv = &Source{
 				}
 			}
 		}
-		if _, err := c.JSON(ctx, "https://www.pixiv.net/ajax/illust/"+id, pixivRef, &work); err != nil {
+		h := withCookie(pixivRef, q.Cookie) // the ajax API only: i.pximg.net needs the Referer alone
+		if _, err := c.JSON(ctx, "https://www.pixiv.net/ajax/illust/"+id, h, &work); err != nil {
 			return nil, err
 		}
 		w := work.Body
@@ -70,10 +71,10 @@ var pixiv = &Source{
 		if w.Type == 2 { // ugoira: a zip of frames
 			return l, nil
 		}
-		if _, err := c.JSON(ctx, "https://www.pixiv.net/ajax/illust/"+id+"/pages", pixivRef, &pages); err != nil {
+		if _, err := c.JSON(ctx, "https://www.pixiv.net/ajax/illust/"+id+"/pages", h, &pages); err != nil {
 			var se *StatusError
 			if w.XRestrict > 0 && errors.As(err, &se) && se.Status == 404 { // guests get no pages of R-18 works
-				return nil, &StatusError{Status: 403, URL: source}
+				return nil, &StatusError{Status: 403, URL: source, Login: q.Cookie != ""}
 			}
 			return nil, err
 		}

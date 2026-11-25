@@ -38,6 +38,7 @@ func TestAPI(t *testing.T) {
 		"https://e-hentai.org/s/a/1-1":             `<img id="img" src="https://h.test/1.webp">`,
 		"https://h.test/1.webp":                    &Resp{Status: 200, Type: "image/webp", Body: []byte("WEBP")},
 		"https://e621.net/favorites.json":          &Resp{Status: 401, Type: "application/json", Body: []byte(`{"success":false}`)},
+		"https://www.furaffinity.net/view/7/":      `<body id="pageid-mature-content-error">`,
 	})
 	s := &server{c: c, keys: []string{"k1", "k2"}}
 
@@ -61,6 +62,11 @@ func TestAPI(t *testing.T) {
 	eq(t, rec.Code, 502)
 	code, status := errorOf(t, rec)
 	eq(t, [2]any{code, status}, [2]any{"upstream", 404})
+
+	rec = call(s, "/", "k1", `{"url":"https://www.furaffinity.net/view/7/","cookie":"a=1; b=2"}`) // the login wall with the user's cookies
+	code, status = errorOf(t, rec)
+	eq(t, [3]any{rec.Code, code, status}, [3]any{502, "login", 403})
+	eq(t, (*calls)[len(*calls)-1].Headers["Cookie"], "a=1; b=2")
 
 	rec = call(s, "/media", "k1", `{"site":"nhentai","url":"https://i1.nhentai.net/galleries/9/1.jpg"}`)
 	eq(t, [3]any{rec.Code, rec.Header().Get("Content-Type"), rec.Body.String()}, [3]any{200, "image/jpeg", "JPEG"})

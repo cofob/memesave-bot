@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { LIMITS } from "../webapp";
 import type { GallerySource, Item, Listing } from "./gallery";
 import { e621Auth } from "./sources/e621";
+import { cookieSite, cookiesExpired, siteCookie } from "../cookies";
 
 // The gallery sites (Telegraph, e621, Hentoid sites) are in the scraper service (scraper/, SCRAPER_URL): the site
 // logic, proxies and Cloudflare challenges. POST / lists a gallery, POST /media downloads an item, POST /fetch a request.
@@ -37,8 +38,14 @@ export const scraper: GallerySource = {
   match: (url) => HOSTS.test(url.hostname),
   async fetch(env, url, cursor, userId) {
     const auth = url.hostname.endsWith("e621.net") ? await e621Auth(env, userId) : undefined;
-    const res = await scraperCall(env, "", { url: url.href, cursor, auth, limits: LIMITS });
-    if (!res.ok) throw await failure(res);
+    const site = cookieSite(url.hostname);
+    const cookie = site && userId ? await siteCookie(env, userId, site) : undefined; // the user's session (pixiv, Fur Affinity)
+    const res = await scraperCall(env, "", { url: url.href, cursor, auth, cookie, limits: LIMITS });
+    if (!res.ok) {
+      const e = await failure(res);
+      if (e.code === "login" && site && userId) await cookiesExpired(env.DB, userId, site);
+      throw e;
+    }
     return res.json<Listing>();
   },
   async download(env, item: Item, site, headers) {
