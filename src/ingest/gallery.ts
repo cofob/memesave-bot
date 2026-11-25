@@ -3,6 +3,7 @@ import { sha256hex } from "../cache";
 import { getUser, userLang, type User } from "../db";
 import type { Env } from "../env";
 import { esc, t, type Lang } from "../i18n";
+import { toMp4 } from "../thumb";
 import { saveUpload } from "../webapp";
 import { editWidget, progressApi, sendWidget } from "../widget";
 import { progressPage } from "../widgetpages";
@@ -75,10 +76,12 @@ export async function saveItem(env: Env, user: User, item: Item, o: SaveOpts): P
   const url = "url" in item ? item.url : item.page;
   const res = await o.src.download(env, item, o.site, o.headers);
   if (!res.ok) throw new (transient(res.status) ? Error : Permanent)(`download ${res.status} ${url}`);
-  const type = mimeOf(url, res.headers.get("Content-Type")?.split(";")[0] ?? "");
+  let type = mimeOf(url, res.headers.get("Content-Type")?.split(";")[0] ?? "");
   if (o.post && !/^(image|video)\//.test(type)) return console.warn("gallery: not media, skipped", url, type), "photo";
   const sourceMeta = { site: o.site, tags: [...(o.tags ?? []), ...(item.tags ?? [])], data: item.data ?? o.data, porn: item.porn };
-  const saved = await saveUpload(env, user, new File([await res.arrayBuffer()], "page", { type }), { via: o.via, source: o.source, caption: o.caption, post: o.post, sourceMeta });
+  let body = await res.arrayBuffer();
+  if (type === "video/webm") [body, type] = await toMp4(env, user.id, body).then((b) => [b, "video/mp4"], (e) => (console.error("gallery: webm to mp4 failed", url, e), [body, type])); // fallback: the WebM as is
+  const saved = await saveUpload(env, user, new File([body], "page", { type }), { via: o.via, source: o.source, caption: o.caption, post: o.post, sourceMeta });
   if (!("error" in saved)) return "saved";
   console.warn("gallery: not saved", url, saved.error);
   return saved.status === 507 ? "full" : "rejected";

@@ -24,6 +24,13 @@ export async function thumbnail(env: Env, userId: number, video: Uint8Array): Pr
   return { jpeg: await res.arrayBuffer(), width: num("X-Width"), height: num("X-Height"), duration: num("X-Duration") };
 }
 
+/** The video as MP4 (H.264 + AAC, +faststart): Telegram plays WebM badly. */
+export async function toMp4(env: Env, userId: number, video: ArrayBuffer): Promise<ArrayBuffer> {
+  const res = await env.THUMB.get(env.THUMB.idFromName(`u${userId}`)).fetch("http://thumb/mp4", { method: "POST", body: video });
+  if (!res.ok) throw new Error(`mp4 ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return res.arrayBuffer();
+}
+
 /**
  * Queue job of a link import without a preview (all instances were busy): makes it from the R2 copy, then
  * starts stage 1. The queue retries a failure; after the last attempt the meme goes on without a preview.

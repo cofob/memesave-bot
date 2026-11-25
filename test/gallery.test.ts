@@ -145,6 +145,24 @@ describe("gallery import", () => {
   });
 });
 
+describe("gallery webm", () => {
+  it("saves a WebM as MP4 from the thumb container, or as is when it fails", async () => {
+    const ok = [true, false];
+    const THUMB = { idFromName: (n: string) => n, get: () => ({ fetch: async (u: string) => (expect(u).toBe("http://thumb/mp4"), ok.shift() ? new Response("MP4") : new Response("bad", { status: 422 })) }) };
+    const e = { ...c, THUMB } as unknown as Env;
+    for (const id of [88, 89]) {
+      await user(id);
+      const site = mockSite(1).getMockImplementation()!;
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => (String(input).endsWith("/p0.jpg") ? new Response("WEBM", { headers: { "Content-Type": "video/webm" } }) : site(input, init)));
+      await startGallery(e, id, "https://telegra.ph/My-Comic-01-01", "web");
+      for (let j = jobs.shift(); j; j = jobs.shift()) if (j.type === "gallery") await galleryJob(e, j.importId, j.from);
+    }
+    const files = await c.DB.prepare("SELECT kind, r2_file FROM memes WHERE user_id IN (88, 89) ORDER BY user_id").all<{ kind: string; r2_file: string }>();
+    expect(files.results.map((f) => [f.kind, f.r2_file.split(".").pop()])).toEqual([["video", "mp4"], ["video", "webm"]]);
+    expect(await (await c.MEDIA.get(files.results[0].r2_file))!.text()).toBe("MP4");
+  });
+});
+
 describe("gallery retries and the report of missing pages", () => {
   /** Telegraph site (3 pages) where `fail` answers the requests of a page; returns the bot messages. */
   function setup(fail: (url: string) => Response | Promise<Response> | undefined) {
