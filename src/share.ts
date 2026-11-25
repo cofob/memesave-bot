@@ -36,7 +36,7 @@ export async function handleShare(req: Request, env: Env, ctx: ExecutionContext)
     const pages = await comicPages(env, meme);
     return pages.length ? albumZip(env, pages.filter(fileFits), titleOf(meme, "en"), meme.porn ? { "X-Robots-Tag": "noindex" } : {}) : new Response("Not found", { status: 404 });
   }
-  if (!meme || !kind || (kind === "file" && !fileFits(meme))) return new Response("Not found", { status: 404 });
+  if (!meme || !kind || (kind === "file" && !fileFits(meme)) || (kind === "og" && meme.porn)) return new Response("Not found", { status: 404 });
   if (kind === "page") return page(env, meme, langOf({ language_code: req.headers.get("Accept-Language") ?? undefined }), await comicPages(env, meme));
   return cachedMedia(req, ctx, async () => {
     if (kind === "og") return ogImage(env, meme);

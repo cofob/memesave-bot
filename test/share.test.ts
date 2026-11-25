@@ -70,6 +70,7 @@ describe("public share links", () => {
     expect(porn).toContain('id="show"');
     expect(porn).toMatch(/<template id="media"><img src="https:\/\/m\.example\/d\/psid0001\.png"/);
     expect(porn).not.toContain("og:image");
+    expect((await get("/s/psid0001/og.png")).status).toBe(404);
     expect((await get("/d/psid0001.png")).headers.get("X-Robots-Tag")).toBe("noindex");
     const safe = await (await get("/s/psid0002")).text();
     expect(safe).not.toContain('id="show"');
