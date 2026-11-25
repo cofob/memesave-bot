@@ -1,7 +1,7 @@
 import { botApi } from "../botapi";
 import { DEFAULT_TIER, DESCRIBE_FALLBACKS, DESCRIBE_MODELS, DESCRIBE_UNCENSORED, DESCRIBE_VIDEO_FALLBACKS, MODELS, VIDEO_INLINE_MAX_BYTES } from "../config";
 import { getMeme, getUser, setStatus, userLang, type Meme } from "../db";
-import { ALBUM_WAIT, albumMemes, albumPhotos, queuePosts } from "../channels";
+import { ALBUM_WAIT, albumMemes, queuePosts } from "../channels";
 import type { Env } from "../env";
 import { push } from "../live";
 import { esc, t, type Lang } from "../i18n";
@@ -281,7 +281,8 @@ export async function describeStage(env: Env, memeId: string, from = 0, single =
   if (m.title === null && DESCRIPTION.every((k) => k in edits)) await saveDescription(env.DB, m, fromRow({ ...m, ...edits })).run();
   else if (m.title === null) {
     // Photos of a media group are described in one request: wait until the album is complete and embedded.
-    const album = m.kind === "photo" && !single ? await albumPhotos(env.DB, memeId) : [];
+    const pagesAll = m.kind === "photo" && !single ? await albumMemes(env.DB, memeId) : [];
+    const album = pagesAll.filter((a) => a.kind === "photo");
     const comic = album[0]?.album_layout === "comic";
     const wait = comic ? COMIC_WAIT : ALBUM_WAIT;
     if (album.some((a) => a.status === "embedding") || (album.length && Date.now() / 1000 - album[0].album_updated < wait)) {
@@ -292,7 +293,8 @@ export async function describeStage(env: Env, memeId: string, from = 0, single =
     const pending = head.filter((a) => a.status === "describing" && a.title === null);
     if (pending.length > 1 && pending[0].id !== memeId) return; // the first pending photo describes the album
     const group = pending.length > 1 ? pending : [m];
-    const pages = comic ? ` They are pages ${album.indexOf(pending[0]) + 1}-${album.indexOf(pending.at(-1)!) + 1} of a comic of ${album.length} pages${album[0].caption ? ` (${JSON.stringify(album[0].caption)})` : ""}.` : "";
+    const page = (a: { id: string }) => pagesAll.findIndex((p) => p.id === a.id) + 1; // real position, GIF and video pages count
+    const pages = comic ? ` They are pages ${page(group[0])}-${page(group.at(-1)!)} of a comic of ${pagesAll.length} pages${album[0].caption ? ` (${JSON.stringify(album[0].caption)})` : ""}.` : "";
     try {
       await describeGroup(env, m, group, from, pages);
     } catch (e) {

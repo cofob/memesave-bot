@@ -55,7 +55,6 @@ export async function addToPost(db: D1Database, userId: number, p: { memeId: str
   return postId!;
 }
 
-/** Photos of the meme's media group in album order (with the album's last change); empty without a group. */
 /** All memes of the media group of `memeId` in album order (its newest one, when a saved file came again in another album); empty when it did not come in an album. */
 export async function albumMemes(db: D1Database, memeId: string) {
   const { results } = await db
@@ -70,8 +69,6 @@ export async function albumMemes(db: D1Database, memeId: string) {
     .all<Meme & { album_updated: number; album_layout: string; album_post: string }>();
   return results;
 }
-
-export const albumPhotos = async (db: D1Database, memeId: string) => (await albumMemes(db, memeId)).filter((m) => m.kind === "photo");
 
 /** After a meme is processed (ready or failed): check its pending posts. */
 export async function queuePosts(env: Env, memeId: string) {

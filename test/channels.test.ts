@@ -193,6 +193,23 @@ describe("channel filters", () => {
     expect(html.match(/<img /g)).toHaveLength(25); // the public page shows the whole comic
   });
 
+  it("keeps the page order when a comic has GIF pages", async () => {
+    await channel(-1023, 83);
+    await filters(-1023, { comics: "media" });
+    for (const [i, kind] of ["photo", "photo", "animation", "video", "photo"].entries()) {
+      await meme(`g${i}`, 83, kind, "ready");
+      await addToPost(e.DB, 83, { memeId: `g${i}`, mediaGroupId: "mg12", position: i, layout: "comic" });
+    }
+    const post = await postOf("g0");
+    await age(post.id);
+    await postJob(e, post.id);
+    expect(calls.filter((c) => c.method.startsWith("send")).map((c) => [c.method, (c.body.media ?? [c.body.animation]).map((x: any) => x.media ?? x)])).toEqual([
+      ["sendMediaGroup", ["f_g0", "f_g1"]],
+      ["sendAnimation", ["f_g2"]],
+      ["sendMediaGroup", ["f_g3", "f_g4"]],
+    ]);
+  });
+
   it("checks filter values on update", async () => {
     await channel(-1030, 82);
     await updateChannel(e.DB, 82, -1030, { porn: "bad", comics: "link", kinds: ["video", "x"], tags_in: [" Cat ", "cat", ""] });

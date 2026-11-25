@@ -89,6 +89,21 @@ describe("album describe", () => {
     await describeStage(e, "al_a");
     expect(jobs.map((j) => j.body)).toEqual(["al_a", "al_b"].map((memeId) => ({ type: "describe", memeId, gen: 0, single: true })));
   });
+  it("numbers comic pages by their real position, GIF and video pages count", async () => {
+    for (const [i, kind] of ["photo", "animation", "video", "photo", "photo"].entries()) {
+      await env.MEDIA.put(`u/80/cp${i}`, "DATA", { httpMetadata: { contentType: "image/jpeg" } });
+      await env.DB.prepare("INSERT INTO memes (id, user_id, kind, file_id, file_unique_id, r2_file, file_size, status) VALUES (?, 80, ?, 'f', ?, ?, 100, 'describing')").bind(`cp${i}`, kind, `cp${i}`, `u/80/cp${i}`).run();
+      await addToPost(env.DB, 80, { memeId: `cp${i}`, mediaGroupId: "cm1", position: i, layout: "comic" });
+    }
+    await env.DB.prepare("UPDATE posts SET updated_at = updated_at - 120 WHERE media_group_id = 'cm1'").run();
+    let prompt = "";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_, init) => {
+      prompt = String(init!.body);
+      return new Response("down", { status: 500 });
+    });
+    await describeStage(e, "cp0").catch(() => {});
+    expect(prompt).toContain("pages 1-5 of a comic of 5 pages");
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     jobs.length = 0;

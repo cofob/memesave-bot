@@ -148,15 +148,19 @@ async function sendAlbumLinks(env: Env, api: Api, chatId: number, memes: Meme[],
 }
 
 /**
- * Sends memes in order: photos and videos as albums of up to 10, then GIFs one by one (albums cannot hold GIFs).
+ * Sends memes in order: runs of photos and videos as albums of up to 10, a GIF alone at its place (albums cannot hold GIFs).
  * `caption` goes on the first message.
  */
 export async function sendAlbum(env: Env, api: Api, chatId: number, memes: Meme[], other: object = {}, caption?: string) {
-  const album = memes.filter((m) => m.kind !== "animation");
+  const runs: Meme[][] = [];
+  for (const m of memes) {
+    const run = runs.at(-1);
+    if (m.kind !== "animation" && run && run[0].kind !== "animation" && run.length < 10) run.push(m);
+    else runs.push([m]);
+  }
   const blur = await blursPorn(env.DB, chatId, memes);
   let first = caption ? { caption } : {};
-  for (let i = 0; i < album.length; i += 10) {
-    const chunk = album.slice(i, i + 10);
+  for (const chunk of runs) {
     const extra = first;
     first = {};
     if (chunk.length === 1) {
@@ -178,21 +182,14 @@ export async function sendAlbum(env: Env, api: Api, chatId: number, memes: Meme[
       (msgs) => msgs,
     );
   }
-  for (const m of memes.filter((m) => m.kind === "animation")) {
-    await sendMeme(env, api, chatId, m, { ...other, ...first }, blur);
-    first = {};
-  }
 }
-
-/** The order of sendAlbum: photos and videos, then GIFs. */
-const sendOrder = (memes: Meme[]) => [...memes.filter((m) => m.kind !== "animation"), ...memes.filter((m) => m.kind === "animation")];
 
 /**
  * Job for a big album: sends 10 memes from `from`, then queues the next 10 later (Telegram allows about 20 messages a minute per chat).
  * No auto-retry on this Api: on 429 the same part waits for retry_after.
  */
 export async function sendAlbumJob(env: Env, userId: number, memeId: string, from: number) {
-  const memes = sendOrder(await albumMemes(env.DB, memeId));
+  const memes = await albumMemes(env.DB, memeId);
   const next = (from: number, delaySeconds: number) => env.JOBS.send({ type: "send_album", userId, memeId, from }, { delaySeconds });
   try {
     await sendAlbum(env, new Api(env.BOT_TOKEN), userId, memes.slice(from, from + 10));
