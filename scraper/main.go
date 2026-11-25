@@ -7,6 +7,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -36,7 +37,15 @@ func main() {
 		log.Fatal(err)
 	}
 	browsers, _ := strconv.Atoi(cmp.Or(os.Getenv("MAX_BROWSERS"), "2"))
-	c.solve = newSolver(cmp.Or(os.Getenv("CHROME_PATH"), "chromium"), os.Getenv("NOCAPTCHA_KEY"), browsers).solve
+	// SOLVER_PROXY: our own IP as a proxy for CapSolver (cf_clearance is bound to the IP), served on PROXY_LISTEN.
+	own, err := url.Parse(os.Getenv("SOLVER_PROXY"))
+	if err != nil || own.Host == "" {
+		own = nil
+	} else if addr := os.Getenv("PROXY_LISTEN"); addr != "" {
+		pass, _ := own.User.Password()
+		go ownProxy(addr, own.User.Username()+":"+pass)
+	}
+	c.solve = newSolver(cmp.Or(os.Getenv("CHROME_PATH"), "chromium"), os.Getenv("NOCAPTCHA_KEY"), os.Getenv("CAPSOLVER_KEY"), own, browsers).solve
 	srv := &http.Server{Addr: ":" + cmp.Or(os.Getenv("PORT"), "8080"), Handler: (&server{c: c, keys: keys}).routes(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {

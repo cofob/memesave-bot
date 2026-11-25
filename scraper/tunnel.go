@@ -3,13 +3,16 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -84,7 +87,20 @@ func tunnel(u *url.URL) (string, func(), error) {
 	if err != nil {
 		return "", nil, err
 	}
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := &http.Server{Handler: proxyHandler(dial, "")}
+	go func() { _ = srv.Serve(ln) }()
+	return ln.Addr().String(), func() { _ = srv.Close() }, nil
+}
+
+// proxyHandler is a CONNECT proxy that dials with dial; auth is the user:pass it requires ("" = none).
+func proxyHandler(dial dialFunc, auth string) http.Handler {
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte(auth))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if auth != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Proxy-Authorization")), []byte(want)) != 1 {
+			w.Header().Set("Proxy-Authenticate", "Basic")
+			http.Error(w, "proxy auth", http.StatusProxyAuthRequired)
+			return
+		}
 		if r.Method != http.MethodConnect {
 			http.Error(w, "CONNECT only", http.StatusMethodNotAllowed)
 			return
@@ -105,7 +121,21 @@ func tunnel(u *url.URL) (string, func(), error) {
 		go func() { _, _ = io.Copy(dst, buf); dst.Close() }()
 		_, _ = io.Copy(src, dst)
 		src.Close()
-	})}
-	go func() { _ = srv.Serve(ln) }()
-	return ln.Addr().String(), func() { _ = srv.Close() }, nil
+	})
+}
+
+// ownProxy serves on addr the proxy that leaves from our IP, for CapSolver (SOLVER_PROXY): ports 80 and 443 only.
+func ownProxy(addr, auth string) {
+	d := &net.Dialer{Timeout: 30 * time.Second, Control: func(_, address string, _ syscall.RawConn) error { return public(address) }}
+	log.Fatal((&http.Server{Addr: addr, Handler: proxyHandler(d.DialContext, auth), ReadHeaderTimeout: 10 * time.Second}).ListenAndServe())
+}
+
+// public: a public IP and the port 80 or 443 (the own proxy reaches no local services).
+func public(address string) error {
+	host, port, _ := net.SplitHostPort(address)
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || (port != "443" && port != "80") {
+		return fmt.Errorf("address %q", address)
+	}
+	return nil
 }

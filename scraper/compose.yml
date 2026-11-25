@@ -1,9 +1,10 @@
 # Deploy like cobalt: TLS and the domain (memereserve-scraper.cfb.wtf) on the host's reverse proxy.
-# .env: API_KEYS, PROXIES, NOCAPTCHA_KEY (see README); HOST_PORT: the local port of the host (8080).
+# .env: API_KEYS, PROXIES, NOCAPTCHA_KEY, CAPSOLVER_KEY (see README); HOST_PORT: the local port of the host (8080);
+# SOLVER_PROXY=http://u:p@<public ip>:3129 with PROXY_LISTEN=:3129 and PROXY_BIND=0.0.0.0: our IP as a proxy for CapSolver.
 services:
   scraper:
     build: .
     restart: unless-stopped
     env_file: .env
-    ports: ["127.0.0.1:${HOST_PORT:-8080}:8080"]
+    ports: ["127.0.0.1:${HOST_PORT:-8080}:8080", "${PROXY_BIND:-127.0.0.1}:3129:3129"]
     shm_size: 1gb # Chromium

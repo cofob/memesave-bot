@@ -58,3 +58,11 @@ func TestTunnel(t *testing.T) {
 	eq(t, string(body), "hello")
 	eq(t, auth, "Basic YW5uOnNlY3JldA==")
 }
+
+func TestPublic(t *testing.T) {
+	for addr, ok := range map[string]bool{"1.1.1.1:443": true, "1.1.1.1:80": true, "1.1.1.1:22": false, "127.0.0.1:443": false, "10.1.28.2:443": false, "[::1]:443": false, "169.254.1.1:80": false} {
+		if (public(addr) == nil) != ok {
+			t.Error(addr)
+		}
+	}
+}

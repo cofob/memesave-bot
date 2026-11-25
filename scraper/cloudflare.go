@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -43,14 +44,16 @@ const hook = `(() => {
 })();`
 
 type solver struct {
-	chrome string // Chromium binary
-	key    string // NoCaptchaAI key; "" = no token
+	chrome string   // Chromium binary
+	key    string   // NoCaptchaAI key; "" = no token
+	cap    string   // CapSolver key; "" = the browser only
+	own    *url.URL // proxy that leaves from our IP: CapSolver solves the direct route through it; nil = the browser only
 	slots  chan struct{}
 	group  singleflight.Group
 }
 
-func newSolver(chrome, key string, browsers int) *solver {
-	return &solver{chrome: chrome, key: key, slots: make(chan struct{}, max(browsers, 1))}
+func newSolver(chrome, key, capKey string, own *url.URL, browsers int) *solver {
+	return &solver{chrome: chrome, key: key, cap: capKey, own: own, slots: make(chan struct{}, max(browsers, 1))}
 }
 
 // solve passes the challenge of page for the route; concurrent calls of one route and host wait for one browser.
@@ -67,7 +70,16 @@ func (s *solver) solve(ctx context.Context, r *route, pageURL string) error {
 		}
 		defer func() { <-s.slots }()
 		start := time.Now()
-		err := s.run(context.WithoutCancel(ctx), r, u) // shared by the waiting requests: not stopped by the first one
+		ctx := context.WithoutCancel(ctx) // shared by the waiting requests: not stopped by the first one
+		if p := cmp.Or(r.proxy, s.own); s.cap != "" && p != nil {
+			cs, ua, err := capsolve(ctx, s.cap, pageURL, p, r.userAgent())
+			log.Printf("capsolver %s via %s: %v in %s", u.Host, r.name, errOr(err), time.Since(start).Round(time.Second))
+			if err == nil {
+				r.clear(u, cs, cmp.Or(ua, r.userAgent()))
+				return nil, nil
+			}
+		}
+		err := s.run(ctx, r, u)
 		log.Printf("challenge %s via %s: %v in %s", u.Host, r.name, errOr(err), time.Since(start).Round(time.Second))
 		return nil, err
 	})
